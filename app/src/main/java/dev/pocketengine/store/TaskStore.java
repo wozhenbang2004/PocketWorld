@@ -1410,13 +1410,16 @@ public final class TaskStore {
     }
 
     /** Only the original live native service can obtain/consume this first-screen state. No port or runner is opened here. */
-    public record FirstMainPreparation(long policy,boolean inspection,boolean localModelFree) {}
+    public record FirstMainPreparation(long policy,boolean inspection,boolean localModelFree,boolean beforeAnyClaim) {}
     public synchronized FirstMainPreparation firstMainPreparation(RunControl original)throws Exception {
         db.beginTransaction();try{
             JSONObject task=firstMainTask(original,"waiting");
             // The original conversation source proof requires this TaskStore and its transaction.
             boolean local=ConversationPhoneHandoff.localMainInspection(task.getJSONObject("conversationPhoneHandoff").getJSONObject("reviewFacts"));
-            FirstMainPreparation result=new FirstMainPreparation(task.getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision"),firstMainInspectionMarked(task),local);
+            JSONObject mark=task.getJSONObject(FIRST_MAIN_SCREEN);
+            Object attempt=mark.opt("attempt");
+            FirstMainPreparation result=new FirstMainPreparation(mark.getLong("appPolicyRevision"),firstMainInspectionMarked(task),local,
+                    Integer.valueOf(0).equals(attempt)||Long.valueOf(0L).equals(attempt));
             db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }
@@ -3567,6 +3570,35 @@ public final class TaskStore {
                 &&"classic".equals(definition.opt("discussionFormat"))
                 &&dev.pocketengine.features.teams.TeamCoordinator.ordinaryLocalReportRoster(definition.optJSONArray("members"));
     }
+    private static final String ORIGINAL_ONE_OFF_TEAM_REVIEW="originalOneOffTeamReview";
+    /** The journaled reciprocal start is durable even if the child mirror is
+     * unavailable or changes phase. It does not prove a synthesis exists. */
+    private String originalOneOffTeamForResultReview(JSONObject work)throws Exception {
+        if(!ordinaryTeamResultWork(work)||!"owner".equals(work.opt("actorId"))||!"private".equals(work.opt("spaceId")))return null;
+        JSONObject link=work.getJSONArray("relatedTasks").getJSONObject(0);
+        String teamRun=link.optString("runId"),run=work.optString("runId");
+        if(!teamRun.matches("[a-f0-9-]{36}")||!teamRun.equals(link.opt("taskId"))||run.isEmpty())return null;
+        JSONArray approvals=work.optJSONArray("approvals");JSONObject approved=null;int matches=0;
+        for(int i=0;approvals!=null&&i<approvals.length();i++){
+            JSONObject row=approvals.optJSONObject(i);
+            if(row==null||!run.equals(row.opt("runId"))||!teamRun.equals(row.opt("researchStartOperationId")))continue;
+            matches++;
+            if("consumed".equals(row.opt("state"))&&"teams_start".equals(row.opt("tool"))&&ordinaryTemporaryTeamReportStart(row))approved=row;
+        }
+        if(approved==null)return null;
+        OwnerWorkTask.require(work);
+        String id=work.getString("id"),conversation=work.getString("conversationId");int epoch=work.optInt("coordinatorEpoch");
+        JSONObject args=approved.getJSONObject("arguments"),capability=approved.getJSONObject("capability"),definition=capability.getJSONObject("teamDefinition");
+        String argsHash=capabilityFingerprint(args);
+        if(matches!=1||conversation.isEmpty()||epoch<1||epoch!=originalRunEpoch(id,run)
+                ||!argsHash.equals(approved.opt("argumentsHash"))||!canonical(capability).equals(approved.opt("capabilityKey"))
+                ||!canonical(dev.pocketengine.features.teams.TeamDraftDefinition.forOwnerWork(id,args)).equals(canonical(definition)))
+            throw new SecurityException("原一次性团队的启动记录待核对，不能确认达到目标。");
+        JSONObject receipt=ownerTeamReportStartReceipt(id,run,teamRun,definition.getString("id"),argsHash);
+        if(!"one_time".equals(receipt.opt("definitionKind"))||!conversation.equals(receipt.opt("conversationId")))
+            throw new SecurityException("原一次性团队的启动回执待核对，不能确认达到目标。");
+        return teamRun;
+    }
     /** Already-held metadata only. Explicit review checks the exact definition and original start receipt. */
     private static JSONObject ownerTeamReportCandidate(JSONObject team,JSONObject evidence,JSONObject approvedStart)throws Exception{
         JSONObject scope=team.optJSONObject("teamResearchParentScope"),refs=team.optJSONObject("externalRefs");
@@ -3664,6 +3696,13 @@ public final class TaskStore {
         if(temporary&&(!argsHash.equals(selected.opt("argumentsHash"))||!canonical(capability).equals(selected.opt("capabilityKey"))
                 ||!canonical(dev.pocketengine.features.teams.TeamDraftDefinition.forOwnerWork(id,args)).equals(canonical(definition))))
             throw new SecurityException("原一次性分工与已批准的定义不一致");
+        ownerTeamReportStartReceipt(id,run,teamRun,definitionId,argsHash);
+        String text=evidence.getString("summary");int bytes=text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if(bytes<1||bytes>dev.pocketengine.features.teams.TeamCoordinator.OWNER_WORK_REPORT_MAX_BYTES)throw new SecurityException("原汇总超过本次完整读取范围，请在原团队查看");
+        return new OriginalOwnerTeamSummary(definitionId,selected.getString("id"),temporary,candidate.getInt("generation"),candidate.getLong("revision"),
+                dev.pocketengine.features.teams.TeamWorkFiles.hash(text),bytes);
+    }
+    private JSONObject ownerTeamReportStartReceipt(String id,String run,String teamRun,String definitionId,String argsHash)throws Exception {
         try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(arguments AS BLOB))<=65536 THEN arguments END,CASE WHEN length(CAST(receipt AS BLOB))<=131072 THEN receipt END FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool='teams_start' AND state='receipt'",new String[]{id,run,teamRun})){
             if(!row.moveToFirst()||row.isNull(0)||row.isNull(1)||!argsHash.equals(capabilityFingerprint(new JSONObject(row.getString(0)))))throw new SecurityException("原启动没有可核对的同一回执");
             JSONObject receipt=new JSONObject(row.getString(1));
@@ -3671,11 +3710,8 @@ public final class TaskStore {
                     ||!run.equals(receipt.opt("parentRunId"))||!definitionId.equals(receipt.opt("teamId"))
                     ||!dev.pocketengine.features.teams.TeamCoordinator.RESEARCH_FORMAT.equals(receipt.opt("researchExecutionFormat")))
                 throw new SecurityException("原启动回执不是所选团队");
+            return receipt;
         }
-        String text=evidence.getString("summary");int bytes=text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-        if(bytes<1||bytes>dev.pocketengine.features.teams.TeamCoordinator.OWNER_WORK_REPORT_MAX_BYTES)throw new SecurityException("原汇总超过本次完整读取范围，请在原团队查看");
-        return new OriginalOwnerTeamSummary(definitionId,selected.getString("id"),temporary,candidate.getInt("generation"),candidate.getLong("revision"),
-                dev.pocketengine.features.teams.TeamWorkFiles.hash(text),bytes);
     }
 
     private static JSONObject frozenChatTeamSource(JSONObject task,JSONObject entry){
@@ -3787,12 +3823,20 @@ public final class TaskStore {
     /** The current work's own teams, read from TaskStore receipts. Historical
      * parent runs stay reachable from their original team record, never retargeted. */
     private void projectOwnerWorkTeams(JSONObject work,JSONObject view,JSONObject controlState,JSONObject chatDelivery)throws Exception {
-        JSONArray teams=new JSONArray();view.put("ownerWorkTeams",teams);view.remove("ownerWorkTeamsUnavailable");
+        JSONArray teams=new JSONArray();view.put("ownerWorkTeams",teams);view.remove("ownerWorkTeamsUnavailable");view.remove(ORIGINAL_ONE_OFF_TEAM_REVIEW);
         try{
             if(!ownerWorkTeamSourcesCurrent(work)){view.put("ownerWorkTeamsUnavailable",true);return;}String parentRun=work.optString("runId");
             if(parentRun.isEmpty())return;
             JSONArray links=work.optJSONArray("relatedTasks");if(links==null)return;
             if(links.length()>100)throw new SecurityException("原工作关联超过读取范围");
+            String oneOff=null;
+            if(controlState!=null)try{
+                oneOff=originalOneOffTeamForResultReview(work);
+                if(oneOff!=null)view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,"unavailable");
+            }catch(SecurityException|org.json.JSONException|IllegalArgumentException unavailable){
+                // A known original start with incomplete custody is not a result, and does not justify a bare verdict.
+                view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,"unavailable");
+            }
             Set<String> seen=new java.util.HashSet<>();
             for(int i=0;i<links.length();i++){
                 JSONObject relation=links.getJSONObject(i);if(!"teams".equals(relation.optString("feature")))continue;
@@ -3827,6 +3871,15 @@ public final class TaskStore {
                     }
                     if(chatDelivery!=null)row.putOpt("originalChatTeamReportDeliveryId",chatTeamReportMarker(work,team,evidence,chatDelivery));
                 }
+                if(run.equals(oneOff)&&!unresolved&&!stopped&&evidence!=null&&execution.equals(evidence.opt("executorStatus"))){
+                    String phase=evidence.optString("phase");
+                    if(row.optJSONObject("reportForReview")!=null)view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,"report");
+                    else if(!settled){
+                        if(row.optInt("pendingQuestionCount")>0)view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,"question");
+                        else if("paused".equals(execution))view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,"waiting_member".equals(phase)?"waiting_member":"paused");
+                        else if("queued".equals(execution)||"running".equals(execution))view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,execution);
+                    }
+                }
                 if(!stopped&&!unresolved){int proposals=progress==null?0:progress.optInt("pendingParentRevisionCount",0);
                     if(proposals>0&&proposals<=16&&!work.optString("status").matches("completed|stopping|cancelled|paused|pausing|interrupted")&&team.optJSONObject("teamWorkPlan")!=null&&team.getJSONObject("teamWorkPlan").optLong("expiresAt")>System.currentTimeMillis())row.put("pendingParentRevisionCount",proposals).put("needsAttention",true);
                     JSONObject marker=ownerWorkFileReviewMark(work,team);if(marker!=null){
@@ -3842,6 +3895,7 @@ public final class TaskStore {
         }catch(SecurityException|dev.pocketengine.features.memory.TaskStoreMemoryReader.RawMessageUnavailable unavailable){
             if(Thread.currentThread().isInterrupted())throw unavailable;
             view.put("ownerWorkTeams",new JSONArray()).put("ownerWorkTeamsUnavailable",true);
+            if(view.has(ORIGINAL_ONE_OFF_TEAM_REVIEW))view.put(ORIGINAL_ONE_OFF_TEAM_REVIEW,"unavailable");
         }
     }
     private void projectOwnerWorkHeader(JSONObject task,JSONObject header)throws Exception {
@@ -20623,6 +20677,8 @@ public final class TaskStore {
                 db.setTransactionSuccessful();return proof==null?copy(task,false).put("alreadyConfirmed",true):confirmedOwnerTeamReport(task,true);
             }
             if(!"needs_confirmation".equals(task.optString("status"))||!digest.equals(resultReviewDigest(task)))throw new SecurityException("成果版本已变化，请重新打开当前成果后再确认");
+            if(completed&&proof==null&&originalOneOffTeamForResultReview(task)!=null)
+                throw new SecurityException("确认达到目标须在原工作核对本轮团队汇总。仍可记录“目标尚未达到”。");
             JSONObject outcome=task.optJSONObject("evidence");
             if(completed&&standaloneOwnerTeam(task)&&"partial".equals(task.opt("executionStatus"))&&outcome!=null&&
                     PAIRED_TEAM_RECEIPTS_ONLY.equals(outcome.opt("teamResultAvailability")))

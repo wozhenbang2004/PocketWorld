@@ -51,20 +51,21 @@ export function workCollectionPresentation(task: WorkCollectionTask) {
     approval && ['pending', 'waiting'].includes(String(approval.state || approval.status || '')));
   const attention = nativeGroup === 'attention' || reconciliation || handling?.needsAttention === true || resumableFailure
     || pendingApproval || (!nativeGroup && taskNeedsAttention(task)) || task.status === 'awaiting_permission' || !active && !ended;
+  const exactTeamProgress = handling?.oneOffTeamInProgress && !reconciliation && !pendingApproval && !handling.needsAttention;
   // Re-evaluate current handling/controls even for a paged row. Only the exact
   // native operation distinction is borrowed; a stale group cannot hide a new decision.
-  const group: WorkCollectionGroup = attention ? 'attention' : active || handling?.waitingForButler || handling?.waitingForChildren ? 'running' : 'ended';
+  const group: WorkCollectionGroup = exactTeamProgress ? 'running' : attention ? 'attention' : active || handling?.waitingForButler || handling?.waitingForChildren ? 'running' : 'ended';
   const waitingForInput = ['awaiting_user', 'waiting_user'].includes(task.status);
   const label = reconciliation ? '结果待核对'
     : raw.contextAvailable === false ? '原工作来源不可用'
-    : handling?.needsAttention || handling?.waitingForChildren ? handling.handlingLabel
+    : handling?.originalOneOffTeamReview || handling?.needsAttention || handling?.waitingForChildren ? handling.handlingLabel
     : resumableFailure ? '本次未完成，可继续处理'
     : handling?.waitingForButler && ended ? handling.handlingLabel
     : task.status === 'completed' && handling?.delivered ? handling.handlingLabel
     : group === 'attention' && active ? '需要你处理'
     : labels[task.status] || '状态待核对';
   const completed = group === 'ended' && task.status === 'completed' && raw.contextAvailable !== false;
-  const actionLabel = reconciliation ? '核对操作' : handling?.needsAttention || handling?.waitingForChildren ? handling.actionLabel
+  const actionLabel = reconciliation ? '核对操作' : handling?.originalOneOffTeamReview || handling?.needsAttention || handling?.waitingForChildren ? handling.actionLabel
     : task.status === 'needs_confirmation' ? '核对结果'
     : ['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission'].includes(task.status) ? '处理授权'
     : waitingForInput ? '查看待处理事项'

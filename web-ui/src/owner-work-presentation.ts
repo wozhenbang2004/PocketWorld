@@ -5,6 +5,11 @@ type Data = Record<string, unknown>;
 const object = (value: unknown): Data => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Data : {};
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 const states = ['none', 'pending', 'running', 'reported', 'needs_review', 'unavailable'] as const;
+const oneOffTeamLabels = {
+  queued: '等待本轮团队开始', running: '本轮团队正在推进', waiting_member: '等待本轮团队成员',
+  paused: '本轮团队已暂停', question: '本轮团队有问题等你回答', report: '本轮团队汇总待核对',
+  unavailable: '原团队状态待核对',
+} as const;
 export type ButlerHandlingState = typeof states[number] | 'unread';
 export type ReportReconciliationTarget = { taskId: string; runId: string; epoch: number };
 export type OwnerWorkTeam = {
@@ -54,10 +59,18 @@ export function ownerWorkPresentation(value: unknown) {
   const delivery = entries.find(row => row.deliveryId === handling.deliveryId);
   const reportMessageId = available && state === 'reported' ? text(handling.reportMessageId) : '';
   const taskStatus = text(task.status);
+  const oneOff = raw.originalOneOffTeamReview;
+  const originalOneOffTeamReview = available && !nativeResult && taskStatus === 'needs_confirmation' && raw.status === taskStatus &&
+    work.workTaskId === task.id && !!text(raw.conversationId) && work.conversationId === raw.conversationId &&
+    !!text(raw.runId) && Number.isSafeInteger(raw.coordinatorEpoch) && Number(raw.coordinatorEpoch) > 0 &&
+    typeof oneOff === 'string' && Object.hasOwn(oneOffTeamLabels, oneOff) ? oneOff as keyof typeof oneOffTeamLabels : null;
+  const oneOffTeamInProgress = originalOneOffTeamReview === 'queued' || originalOneOffTeamReview === 'running' ||
+    originalOneOffTeamReview === 'waiting_member';
   const ownerDecision = ['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission'].includes(taskStatus)
     ? { label: '等待你的授权', action: '处理授权' }
     : ['awaiting_user', 'waiting_user'].includes(taskStatus) ? { label: '需要你处理', action: '查看待处理事项' }
-    : taskStatus === 'needs_confirmation' ? { label: '结果等你核对', action: '核对结果' } : null;
+    : originalOneOffTeamReview === 'report' ? { label: oneOffTeamLabels.report, action: '核对本轮团队汇总' }
+    : taskStatus === 'needs_confirmation' && !originalOneOffTeamReview ? { label: '结果等你核对', action: '核对结果' } : null;
   const labels: Record<ButlerHandlingState, string> = {
     none: '尚无执行结果', pending: '结果已到，等待管家整理', running: '管家正在核对结果',
     reported: '管家已汇报', needs_review: '汇报结果待核对', unavailable: '管家接手已停止', unread: '管家处理状态待读取',
@@ -83,10 +96,11 @@ export function ownerWorkPresentation(value: unknown) {
     : teams.some(team => team.status === 'awaiting_approval') ? '团队等待授权'
     : teams.some(team => team.status === 'awaiting_review') ? '团队成果等你核对' : '团队需要你处理';
   const childLabel = stopped ? '关联任务的停止状态待核对' : childNeedsAttention ? '关联任务需要处理' : '等待关联任务完成';
-  const handlingLabel = !available ? '原工作来源不可用' : ownerDecision ? ownerDecision.label : teamNeedsAttention ? teamLabel
+  const handlingLabel = !available ? '原工作来源不可用' : originalOneOffTeamReview ? oneOffTeamLabels[originalOneOffTeamReview] : ownerDecision ? ownerDecision.label : teamNeedsAttention ? teamLabel
     : teamActive ? stopped ? '团队停止状态待核对' : onlyReturnedTeam ? '完整项目包可查看' : teams.filter(team => team.active).every(team => team.status === 'paused') ? '团队协作已暂停' : '团队正在推进'
     : waitingForChildren ? childLabel : labels[state];
   const reason = !available ? '原来源已删除、停用或暂不可核对。保留工作身份与允许的控制。'
+    : originalOneOffTeamReview === 'unavailable' ? '尚未核对到可用于验收的本轮团队汇总。'
     : ownerDecision ? text(task.summary) || text(handling.reason)
     : teamNeedsAttention ? '打开原协作处理当前问题，已有结果仍保留在原工作。'
     : onlyReturnedTeam&&!stopped ? '原团队已保存固定版本，可在协作进展打开。这不是当前主项目或业务结果的验收。'
@@ -101,14 +115,16 @@ export function ownerWorkPresentation(value: unknown) {
     ? { taskId: text(reconciliation.taskId), runId: text(reconciliation.runId), epoch: Number(reconciliation.epoch) } : null;
   const needsAttention = available && (!!ownerDecision || teamNeedsAttention || childNeedsAttention || state === 'needs_review'
     || state === 'unavailable' && resultAvailable && !stopped);
-  const actionLabel = ownerDecision ? ownerDecision.action : teamNeedsAttention ? '处理团队问题' : teamActive ? stopped ? '查看停止进展' : onlyReturnedTeam ? '查看协作成果' : '查看团队进展'
+  const actionLabel = ownerDecision ? ownerDecision.action
+    : originalOneOffTeamReview === 'question' ? '查看团队问题' : originalOneOffTeamReview === 'unavailable' ? '查看原工作' : originalOneOffTeamReview ? '查看团队进展'
+    : teamNeedsAttention ? '处理团队问题' : teamActive ? stopped ? '查看停止进展' : onlyReturnedTeam ? '查看协作成果' : '查看团队进展'
     : waitingForChildren ? childNeedsAttention ? '处理关联任务' : '查看关联进展'
     : needsAttention ? '核对管家汇报' : resultAvailable || reportMessageId ? '查看结果' : '查看详情';
   return {
     state, handlingLabel, actionLabel, reason, reportMessageId, resultAvailable, receiptReconciliation,
     // A paused/unknown outcome or child recovery is not an explicit request to the owner.
     ownerDecision: available ? ownerDecision : null,
-    teams, teamActive, teamNeedsAttention, teamsUnavailable, waitingForChildren,
+    teams, teamActive, teamNeedsAttention, teamsUnavailable, waitingForChildren, originalOneOffTeamReview, oneOffTeamInProgress,
     conversationId: text(work.conversationId) || text(raw.conversationId),
     waitingForButler: available && !ownerDecision && !waitingForChildren && ['pending', 'running'].includes(state),
     needsAttention,

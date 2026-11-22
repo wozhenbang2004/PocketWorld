@@ -80,7 +80,7 @@ public final class PhoneRunService extends Service {
     private volatile DeferredPhoneSession phoneSession;
     private volatile long ownerWaitGeneration;
     private record FirstMainWait(String task,String run,int epoch,RunControl owner,ModelConfig config,
-                                 String goal,int start,long policy,boolean inspection,AtomicBoolean checking){}
+                                 String goal,int start,long policy,boolean inspection,AtomicBoolean checking,AtomicBoolean beforeAnyClaim){}
     private volatile FirstMainWait firstMainWait;
     /** Set only from a positive owner-private Main row at this native Service's original START. */
     private volatile RunControl mainProgressOwner;
@@ -104,9 +104,9 @@ public final class PhoneRunService extends Service {
                 (wait.config()!=null||wait.inspection()&&app.ownsLocalMainInspectionStart(wait.task(),wait.run(),wait.epoch(),wait.owner()))&&
                 app.retainsShownPhoneControl(wait.task(),wait.owner());
     }
-    private boolean confirmFirstMain(FirstMainWait wait,FirstMainScreenWindow page){
+    private boolean confirmFirstMain(FirstMainWait wait,FirstMainScreenWindow page,Runnable beforeReadUnavailable){
         if(!ownsFirstMain(wait)||!page.stillCurrent(wait.owner())||!wait.checking().compareAndSet(false,true))return false;
-        try{worker.execute(()->readFirstMain(wait,page));return true;}
+        try{worker.execute(()->readFirstMain(wait,page,beforeReadUnavailable));return true;}
         catch(java.util.concurrent.RejectedExecutionException closed){wait.checking().set(false);return false;}
     }
     private void finishFirstMainInspectionUnavailable(FirstMainWait wait,String message){
@@ -117,7 +117,7 @@ public final class PhoneRunService extends Service {
         }
         finishAttempt(wait.task(),wait.run(),original,new RunOutcome("failed",message,new JSONObject()),wait.start());
     }
-    private void readFirstMain(FirstMainWait wait,FirstMainScreenWindow page){
+    private void readFirstMain(FirstMainWait wait,FirstMainScreenWindow page,Runnable beforeReadUnavailable){
         TaskStore.FirstMainClaim claim=null;boolean recorded=false;
         RunControl original=wait.owner();
         java.util.function.BooleanSupplier current=()->ownsFirstMain(wait)&&page.stillCurrent(original);
@@ -128,6 +128,8 @@ public final class PhoneRunService extends Service {
                     !AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").getBoolean("ready"))
                 throw new SecurityException("原主屏准备已变化");
             page.checkWindow(original);
+            // A claimed or uncertain read never qualifies for the pre-read presentation.
+            wait.beforeAnyClaim().set(false);
             claim=app.tasks.claimFirstMainScreen(original,current);
             JSONObject structure;
             AndroidPhonePort reader=new AndroidPhonePort(this);
@@ -169,6 +171,9 @@ public final class PhoneRunService extends Service {
             if(service!=null)try{service.showControls(wait.task(),wait.goal(),original);}catch(RuntimeException ignored){/* Existing exact notification remains the stop surface. */}
             run(wait.task(),wait.run(),wait.epoch(),wait.goal(),wait.config(),original,wait.start(),false,null,null,structure);
         }catch(Exception unavailable){
+            if(!wait.inspection()&&wait.beforeAnyClaim().get()&&mainProgressOwner==original&&ownsFirstMain(wait)){
+                try{beforeReadUnavailable.run();}catch(RuntimeException ignored){/* Presentation must not affect the original hold. */}
+            }
             if(wait.inspection()){
                 if(claim!=null&&!recorded&&ownsFirstMain(wait))try{app.tasks.finishFirstMainScreen(claim,null,()->ownsFirstMain(wait));}
                 catch(Exception unknown){/* The spent original claim cannot authorize a second read. */}
@@ -337,14 +342,18 @@ public final class PhoneRunService extends Service {
             boolean first=localInspection||TaskStore.firstMainScreenPending(task)||inspection||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
             if(first){
                 long policy=-1;
+                boolean beforeAnyClaim=false;
                 if(START.equals(intent.getAction())&&epoch==1&&runId.equals(intent.getStringExtra("phoneRunId"))&&epoch==intent.getIntExtra("phoneEpoch",-1))
                     try{
                         TaskStore.FirstMainPreparation preparation=app.tasks.firstMainPreparation(control);
-                        if(preparation.inspection()==inspection&&preparation.localModelFree()==localInspection&&(!localInspection||inspection))
+                        if(preparation.inspection()==inspection&&preparation.localModelFree()==localInspection&&(!localInspection||inspection)){
                             policy=preparation.policy();
+                            beforeAnyClaim=preparation.beforeAnyClaim();
+                        }
                     }catch(Exception unavailable){/* A durable first start never falls through on unknown. */}
                 waitingForUser=true;
-                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,inspection||localInspection,new AtomicBoolean());firstMainWait=hold;
+                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,inspection||localInspection,
+                        new AtomicBoolean(),new AtomicBoolean(beforeAnyClaim));firstMainWait=hold;
                 startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
                 // The ordinary Service already created its task channel. Queue this once before
                 // presenting the owner's first-screen control, without blocking that control on success.
@@ -362,7 +371,8 @@ public final class PhoneRunService extends Service {
                             "没有取得本次主屏确认，未确认读数。原记录保留，不会恢复或重读。");
                     return START_NOT_STICKY;
                 }
-                if(overlay!=null&&policy>=0)overlay.showFirstMainControls(id,runningGoal,control,()->ownsFirstMain(hold),page->confirmFirstMain(hold,page));
+                if(overlay!=null&&policy>=0)overlay.showFirstMainControls(id,runningGoal,control,()->ownsFirstMain(hold),
+                        (page,beforeReadUnavailable)->confirmFirstMain(hold,page,beforeReadUnavailable));
                 return START_NOT_STICKY;
             }
             startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);

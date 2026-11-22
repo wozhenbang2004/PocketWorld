@@ -41,7 +41,7 @@ export type ButlerHomeProps = {
   hasPreparations?: boolean;
   tasks: ButlerHomeTask[];
   canOpen: boolean;
-  onOpen: (task: ButlerHomeTask, nativeAlreadyOpen?: boolean, report?:VerifiedHomeReport, stillOriginal?:()=>boolean, returnWorkFocus?:()=>boolean) => void;
+  onOpen: (task: ButlerHomeTask, nativeAlreadyOpen?: boolean, report?:VerifiedHomeReport, stillOriginal?:()=>boolean, returnWorkFocus?:(confirmedResultRevision?:number)=>boolean) => void;
   canReadReports?:boolean;
   onAllWork: (filter?: WorkCollectionFilter) => void;
   onOpenSchedule?: (trigger: HTMLButtonElement) => void;
@@ -52,13 +52,35 @@ export type ButlerHomeProps = {
 const updatedAt = (task: ButlerHomeTask) => typeof task.updatedAt === 'number' && Number.isFinite(task.updatedAt) ? task.updatedAt : 0;
 const resumeRevision = () => Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0);
 export function needsOwnerOnHome(task: ButlerHomeTask, view = workCollectionPresentation(task), exact = homeWorkIdentity(task)) {
+  // The parent can be waiting for its one-off team, not waiting for an owner verdict.
+  if (view.handling?.originalOneOffTeamReview)
+    return !view.reconciliation && (view.pendingApproval || ['question', 'report'].includes(view.handling.originalOneOffTeamReview));
   return !view.reconciliation && (view.pendingApproval || view.handling?.needsAttention === true ||
     !!exact && ['awaiting_user','waiting_user','waiting_permission','awaiting_permission','waiting_approval','awaiting_approval','needs_confirmation'].includes(task.status));
+}
+/** A native pending result in the already-loaded private Work collection, not
+ * a report, child decision or an executable review handle. */
+export function homePendingResultReview(task:ButlerHomeTask|undefined) {
+  const raw=task?.raw, source=raw?.ownerWork;
+  if(!task||!raw||task.status!=='needs_confirmation'||raw.status!==task.status||
+     raw.kind!=='assistant'||raw.executionMode!=='capabilities'||raw.executionRole!=='owner_work'||
+     raw.contextAvailable!==true||raw.contextWithdrawn===true||raw.taskCoreReadLimited===true||
+     raw.cancelRequested!==false||raw.hasUnresolvedOperations!==false||raw.historyHasUnconfirmedOperations===true||
+     raw.teamRunId!=null||raw.teamAssignment!=null||raw.memberId!=null||raw.ownerPhoneControl!=null||
+     !Array.isArray(raw.ownerWorkTeams)||raw.ownerWorkTeams.length||raw.ownerWorkTeamsUnavailable===true||
+     source?.format!=='pocketworld.owner-work.v1'||source.workTaskId!==task.id||source.phase!=='ended'||
+     !raw.conversationId||source.conversationId!==raw.conversationId) return;
+  const exact=homeWorkIdentity(task), view=workCollectionPresentation(task), digest=raw.resultReviewDigest, revision=raw.resultRevision;
+  if(exact?.domain!=='butler'||view.reconciliation||view.pendingApproval||!view.handling?.ownerDecision||
+     view.handling.waitingForChildren||typeof digest!=='string'||!/^[a-f0-9]{64}$/.test(digest)||
+     !Number.isSafeInteger(revision)||revision<1)return;
+  const {runId,epoch}=exact;
+  return {taskId:task.id,runId,epoch,digest,revision,key:JSON.stringify([task.id,runId,epoch,digest,revision])};
 }
 type WorkReturn = {
   target:Pick<VerifiedHomeReport['target'],'taskId'|'runId'|'epoch'>;
   report?:VerifiedHomeReport['target']; domain?:HomeDomain; intent:'row'|'report'; offset?:number;
-  documentEpoch:number; resume:number;
+  documentEpoch:number; resume:number; confirmedResultRevision?:number;
 };
 
 /** A private original may have a saved result without a butler message.
@@ -94,7 +116,7 @@ function partialFailureReport(task: ButlerHomeTask, view = workCollectionPresent
  * the native private-work projection; only the original task owns decisions. */
 export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onReadPairedWindowsFile, onOpenDeviceInbox, onImportProject, stagingLocal=false, modelSetup, firstDraftConnect=false, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
-  const allWorkButton = useRef<HTMLButtonElement>(null);
+  const allWorkButton = useRef<HTMLButtonElement>(null), decisionHeading=useRef<HTMLHeadingElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
   const savedScroll = useRef(Number.isFinite(initialScrollTop) ? Math.max(0, initialScrollTop) : 0);
   const restored = useRef(false), homeScroll = useRef(onScrollTop);
@@ -203,7 +225,8 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     // a later user focus should be treated as the control that opened the work.
     if(document.hidden||document.activeElement!==document.body)return;
     const view=scroller.current;
-    const row=returned&&Array.from(workRoot.current?.querySelectorAll<HTMLElement>('[data-task-id]')||[]).find(node=>node.dataset.taskId===returned.task.id);
+    const rows=Array.from(workRoot.current?.querySelectorAll<HTMLElement>('[data-task-id]')||[]);
+    const row=returned&&rows.find(node=>node.dataset.taskId===returned.task.id);
     const originalReport=!!retained.report&&!!returned?.report&&sameHomeReport(returned.report,retained.report);
     const reportButton=row&&originalReport&&retained.intent==='report'&&row.querySelector<HTMLButtonElement>('.pw-butler-decision-report:not(:disabled)');
     const rowButton=reportButton||(row&&row.querySelector<HTMLButtonElement>('.pw-butler-work-row:not(:disabled)'));
@@ -211,9 +234,37 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
     if(!view||!target||target.closest('[inert],[hidden]'))return;
     const frame=view.getBoundingClientRect(), bounds=target.getBoundingClientRect(), style=getComputedStyle(view);
     const min=parseFloat(style.scrollPaddingBlockStart)||0;
-    const max=Math.max(min,frame.height-bounds.height-(parseFloat(style.scrollPaddingBlockEnd)||0));
+    const bottom=frame.height-(parseFloat(style.scrollPaddingBlockEnd)||0), max=Math.max(min,bottom-bounds.height);
     const currentOffset=bounds.top-frame.top, offset=rowButton?retained.offset??currentOffset:currentOffset;
-    view.scrollTop+=currentOffset-Math.min(max,Math.max(min,offset));
+    const originalDelta=currentOffset-Math.min(max,Math.max(min,offset)), heading=decisionHeading.current;
+    if(rowButton&&heading&&!heading.closest('[inert],[hidden],[aria-hidden="true"]')&&!retained.report&&
+       retained.confirmedResultRevision!==undefined&&returned?.task.status==='completed'&&
+       returned.task.raw?.resultRevision===retained.confirmedResultRevision){
+      const native=bridge.getState(), place=native.view as {taskId?:string|null;section?:string|null}|undefined;
+      if(place?.taskId===null&&place.section===null&&['tasks.open','tasks.review','tasks.confirm'].every(action=>native.capabilities.commands.includes(action))){
+        const group=heading.closest('.pw-butler-work-inbox'), loaded=native.state.ownerWork;
+        const waiting=shownDecisions.flatMap(({task})=>{
+          if(task.id===retained.target.taskId||task.id===native.state.activeTaskId||!Array.isArray(loaded))return [];
+          const proof=homePendingResultReview(task), exact=loaded.filter(value=>value?.id===task.id);
+          if(!proof||exact.length!==1||homePendingResultReview(exact[0])?.key!==proof.key)return [];
+          const next=rows.find(node=>node.dataset.taskId===task.id&&group?.contains(node))
+            ?.querySelector<HTMLButtonElement>('.pw-butler-work-row:not(:disabled):not([aria-disabled="true"])');
+          return next&&!next.closest('[inert],[hidden],[aria-hidden="true"]')?[next.getBoundingClientRect()]:[];
+        });
+        const headingBounds=heading.getBoundingClientRect(), top=view.scrollTop, limit=Math.max(0,view.scrollHeight-view.clientHeight);
+        const clamp=(value:number)=>Math.min(limit,Math.max(0,value));
+        const original=clamp(top+originalDelta), section=clamp(top+headingBounds.top-frame.top-min);
+        const startAt=(rect:DOMRect,scroll:number)=>rect.top-frame.top+top-scroll;
+        const visibleAt=(rect:DOMRect,scroll:number)=>rect.height>0&&startAt(rect,scroll)>=min-1&&startAt(rect,scroll)+rect.height<=bottom+1;
+        const alreadyVisible=waiting.some(rect=>rect.height>0&&startAt(rect,original)<bottom&&startAt(rect,original)+rect.height>min);
+        // Keep A's usual focus if any part of a real waiting row would already be visible.
+        // Otherwise place the existing heading only when it really reveals a decision.
+        if(!alreadyVisible&&visibleAt(headingBounds,section)&&waiting.some(rect=>visibleAt(rect,section))){
+          view.scrollTop=section;heading.focus({preventScroll:true});return;
+        }
+      }
+    }
+    view.scrollTop+=originalDelta;
     target.focus({preventScroll:true});
   },[active,ready,retained,returned]);
 
@@ -255,11 +306,11 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       if(!latest)throw new Error('原工作或汇报已变化，没有改读其他轮次。');
       if(verified&&unavailable)setUnavailableReport(null);
       focused.current=null;setWorkReturn(null);
-      onOpen(latest,true,verified,()=>originalDocument()&&same(),()=>{
+      onOpen(latest,true,verified,()=>originalDocument()&&same(),confirmedResultRevision=>{
         if(!live.current||!originalDocument())return false;
         // The same work can move groups after the owner acts. Keep its current
         // projection in view, not the approval or progress label that opened it.
-        setWorkReturn({target:{taskId:id,runId,epoch},report:verified?.target,domain:item.exact?.domain,intent,offset,documentEpoch,resume:startResume});return true;
+        setWorkReturn({target:{taskId:id,runId,epoch},report:verified?.target,domain:item.exact?.domain,intent,offset,documentEpoch,resume:startResume,confirmedResultRevision});return true;
       });handedOff=true;
     }catch(error){
       if(current()){
@@ -361,7 +412,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
             {homeNotice&&<p className="pw-butler-work-note" role="status">{homeNotice}</p>}
             {decisionCount>0&&<section className="pw-butler-work-group pw-butler-work-inbox" aria-label="等你处理">
-              <header className="pw-butler-group-heading"><h3>等你处理</h3><span className="pw-butler-group-count" aria-label={`眼前的 ${decisionCount} 项待处理工作`}>{decisionCount}</span></header>
+              <header className="pw-butler-group-heading"><h3 ref={decisionHeading} tabIndex={-1}>等你处理</h3><span className="pw-butler-group-count" aria-label={`眼前的 ${decisionCount} 项待处理工作`}>{decisionCount}</span></header>
               {phoneAttention.map(item=>item.row)}
               {shownDecisions.length>0&&<ol id={decisionList} className="pw-butler-work-list">{shownDecisions.map(renderTask)}</ol>}
               {decisions.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-controls={decisionList} aria-expanded={decisionsExpanded} onClick={()=>{setWorkReturn(null);setShowDecisions(!decisionsExpanded)}}>{decisionsExpanded?'收起待处理工作':`再看 ${decisions.length-shownDecisions.length} 项`}</Button>}

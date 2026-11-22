@@ -94,8 +94,11 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private volatile RenderedOwnerAction renderedOwnerAction;
     private volatile RenderedOwnerAction submittingOwnerAction;
     private volatile long ownerVisibilityVersion;
-    private record FirstMainControl(RunControl control,java.util.function.BooleanSupplier current,
-                                    java.util.function.Predicate<FirstMainScreenWindow> confirm){}
+    @FunctionalInterface public interface FirstMainConfirmation {
+        boolean confirm(FirstMainScreenWindow page,Runnable beforeReadUnavailable);
+    }
+    private record FirstMainControl(RunControl control,java.util.function.BooleanSupplier current,FirstMainConfirmation confirmation){}
+    private long firstMainGesture;
     private volatile FirstMainControl firstMainControl;
     // Separate from Pause/Stop/Resume: this worker only registers the same local readback reminder.
     private static final java.util.concurrent.ThreadPoolExecutor OWNER_RESULT_WATCH=new java.util.concurrent.ThreadPoolExecutor(0,1,20,java.util.concurrent.TimeUnit.SECONDS,
@@ -400,8 +403,8 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     }
     /** Only the exact waiting native Service holds this one start action. It is not a notification/Web command. */
     public void showFirstMainControls(String taskId,String goal,RunControl runControl,java.util.function.BooleanSupplier current,
-                                      java.util.function.Predicate<FirstMainScreenWindow> confirm){
-        showControls(taskId,goal,runControl,new FirstMainControl(runControl,current,confirm));
+                                      FirstMainConfirmation confirmation){
+        showControls(taskId,goal,runControl,new FirstMainControl(runControl,current,confirmation));
     }
     private void showControls(String taskId, String goal, RunControl runControl,FirstMainControl firstMain) {
         runOnMain(() -> {
@@ -647,11 +650,16 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             case FIRST_MAIN_START->{
                 var offer=firstMainControl;
                 if(offer==null||offer.control()!=control||!source.isShown()||!source.isEnabled()||!offer.current().getAsBoolean())return;
-                long visibleAt=ownerVisibilityVersion;
+                long visibleAt=ownerVisibilityVersion,gesture=++firstMainGesture;
                 java.util.function.BooleanSupplier current=()->instance==this&&visible&&ownerVisibilityVersion==visibleAt&&firstMainControl==offer&&offer.current().getAsBoolean();
                 try{
                     var page=FirstMainScreenWindow.fromOverlay(this,offer.control(),controls,current);
-                    if(offer.confirm().test(page))source.setEnabled(false);
+                    Runnable beforeReadUnavailable=()->main.post(()->{
+                        if(firstMainGesture!=gesture||!current.getAsBoolean()||control!=offer.control()||
+                                ownerControls!=bound||renderedOwnerAction!=shown||pause!=source||!source.isShown())return;
+                        android.widget.Toast.makeText(this,"刚才未能核对主屏，原任务尚未开始执行。",android.widget.Toast.LENGTH_SHORT).show();
+                    });
+                    if(offer.confirmation().confirm(page,beforeReadUnavailable))source.setEnabled(false);
                 }catch(Exception unavailable){android.widget.Toast.makeText(this,"还没核对到眼前应用页面。关闭弹窗后可再确认，原任务没有开始。",android.widget.Toast.LENGTH_SHORT).show();}
                 return;
             }
