@@ -28,7 +28,7 @@ internal class PocketWebPhoneComposer(
         val conversation: String, val draftEpoch: Int, val draftRevision: Long, val reviewGeneration: Long, val originRevision: Long,
         val modelRevision: Long, val privateOwner: Boolean, val linked: EngineApplication.ConversationPhoneStartReview? = null,
         val draft: EngineApplication.DraftPhoneStartReview? = null, val conditions: JSONObject? = null,
-        val firstMainPolicyRevision: Long = -1)
+        val firstMainPolicyRevision: Long = -1, val readCurrentOnce: Boolean = false)
     private val main = Handler(Looper.getMainLooper())
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
     // Main-thread invalidation also revokes a review already captured by a queued worker.
@@ -287,10 +287,11 @@ internal class PocketWebPhoneComposer(
                 }.let { review ->
                     if (channel) review else {
                         val conditions = readConditions(mode)
+                        val readCurrentOnce = review.linked?.view()?.opt("readCurrentOnce") == true
                         val firstMainPolicy = if (review.linked != null && mode == "main_screen" &&
                             conditions.optJSONObject("screen")?.optString("state") == "ready" &&
-                            dev.pocketengine.runtime.policy.OwnerIntent(goal).deviceReadAllowed()) controller.firstMainScreenPolicyRevision() else -1L
-                        review.copy(conditions = conditions, firstMainPolicyRevision = firstMainPolicy)
+                            (readCurrentOnce || dev.pocketengine.runtime.policy.OwnerIntent(goal).deviceReadAllowed())) controller.firstMainScreenPolicyRevision() else -1L
+                        review.copy(conditions = conditions, firstMainPolicyRevision = firstMainPolicy, readCurrentOnce = readCurrentOnce)
                     }
                 }.also { review ->
                     val native = review.linked?.view() ?: review.draft?.view()
@@ -336,12 +337,14 @@ internal class PocketWebPhoneComposer(
         return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
             .putOpt("manualFirstMainAvailable", true.takeIf { review.firstMainPolicyRevision >= 0 })
             .putOpt("firstBackgroundResultWatchAvailable", true.takeIf { firstBackgroundResultWatchAvailable(review) })
-            .put("toolLimit", review.tools).put("modelCallLimit", review.models).put("scopeMinutes", review.minutes)
+            .put("toolLimit", if (review.readCurrentOnce) 0 else review.tools)
+            .put("modelCallLimit", if (review.readCurrentOnce) 0 else review.models).put("scopeMinutes", review.minutes)
             .put("originalDraft", review.conditions?.let { JSONObject().put("composer", review.composerKey).put("conversation", review.conversation)
                 .put("ownerEpoch", review.viewEpoch).put("revision", review.draftRevision).put("origin", review.originRevision) })
             .put("conditions", review.conditions).put("expiresInMs", (review.expires - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
             .put("screenDisclosure", shown?.optString("screenDisclosure")?.takeIf { it.isNotBlank() } ?: "本次未取得分项读取设置。执行时允许的屏幕内容可能提供给对应模型；当前没有据此读取或发送画面。")
             .put("message", when {
+                review.readCurrentOnce -> "仅在你确认的眼前页面读取一次可核对的数字，原结果回到同一私聊。"
                 review.conditions != null -> if (review.mode == "background") "任务需要用屏时，只使用后台独立屏，不切换到手机主屏。" else "任务需要用屏时，才会使用手机主屏。"
                 review.mode == "background" -> "在后台独立屏处理这个目标；连接不可用时等待，不切换到手机主屏。"
                 else -> "在手机主屏处理这个目标，会使用当前屏幕。"
@@ -585,10 +588,17 @@ internal class PocketWebPhoneComposer(
         (next==null || !knownBlankSystemResult(next) || listOf("draftRequestId","taskId","runId","admissionState").any { saved.optString(it)!=next.optString(it) })
 
     fun start(id: String, args: JSONObject) {
-        checkedPayload(args, setOf("reviewHandle", "manualFirstMain", "watchFirstMainResult", "watchFirstBackgroundResult"))
+        checkedPayload(args, setOf("reviewHandle", "manualFirstMain", "watchFirstMainResult", "watchFirstBackgroundResult", "readCurrentOnce"))
         val handle = requiredString(args, "reviewHandle")
         val review = phoneReviews[handle] ?: error("原手机目标审阅已关闭或已使用")
         require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
+        val readCurrentOnce = args.has("readCurrentOnce")
+        require(readCurrentOnce == review.readCurrentOnce && (!readCurrentOnce ||
+            requiredBoolean(args, "readCurrentOnce") && args.has("manualFirstMain") &&
+            !args.has("watchFirstMainResult") && !args.has("watchFirstBackgroundResult") &&
+            review.conditions?.optJSONObject("notification")?.opt("state") == "ready")) {
+            "这次只读需单独确认，不能将主屏或其他任务切换为一次读取"
+        }
         val firstMainPolicy = if (args.has("manualFirstMain")) {
             require(requiredBoolean(args,"manualFirstMain") && review.linked != null && review.privateOwner && review.mode == "main_screen" &&
                 review.firstMainPolicyRevision >= 0 && controller.firstMainScreenPolicyRevision() == review.firstMainPolicyRevision) {

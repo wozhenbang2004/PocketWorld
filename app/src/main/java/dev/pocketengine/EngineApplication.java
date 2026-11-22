@@ -1663,6 +1663,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     boolean releaseVerifiedFirstMainHold(String id,RunControl original){
         return retainsShownPhoneControl(id,original)&&!original.isCancelled()&&firstMainDispatchBlocked.compareAndSet(original,null);
     }
+    boolean keepsFirstMainInspectionHold(String id,RunControl original){
+        return retainsShownPhoneControl(id,original)&&!original.isCancelled()&&blocksOrdinaryFirstMainControl(original);
+    }
     boolean takeFirstMainResultWatch(String id,String run,int epoch,RunControl original){
         return epoch==1&&blocksOrdinaryFirstMainControl(original)&&retainsShownPhoneControl(id,original)&&
                 original.matchesHostRun(id,run,epoch)&&!original.isCancelled()&&firstMainResultWatch.compareAndSet(original,null);
@@ -1732,10 +1735,12 @@ public final class EngineApplication extends Application implements dev.pocketen
         private final long modelRevision,preferenceRevision,expiresElapsed;
         private final int minutes,tools,models;
         private final String requestId,conversationId,goal,mode,publicView;
+        private final boolean inspection;
         private boolean attempted;
         private ConversationPhoneStartReview(EngineApplication issuer,TaskStore store,TaskStore.ConversationPhoneReview creation,
-                                             ModelConfig config,long modelRevision,long preferenceRevision,JSONObject view)throws Exception {
+                                             ModelConfig config,long modelRevision,long preferenceRevision,boolean inspection,JSONObject view)throws Exception {
             this.issuer=issuer;this.store=store;this.creation=creation;this.config=config;this.modelRevision=modelRevision;this.preferenceRevision=preferenceRevision;
+            this.inspection=inspection;
             expiresElapsed=android.os.SystemClock.elapsedRealtime()+120_000L;minutes=view.getInt("scopeMinutes");tools=view.getInt("toolLimit");models=view.getInt("modelCallLimit");
             requestId=view.getString("requestId");conversationId=view.getString("conversationId");goal=view.getString("goal");mode=view.getString("mode");publicView=view.toString();
         }
@@ -1863,7 +1868,15 @@ public final class EngineApplication extends Application implements dev.pocketen
         var status=settings.modelSelection().status();if(status.pending())throw new IllegalStateException("请等待原模型设置回执");
         String preferenceScope=dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(conversationId);
         long preferenceRevision=conversationModels().snapshot(preferenceScope).getLong("revision");
-        ModelConfig config=captureConversationModel(conversationId,"");
+        boolean inspection=originalLocator!=null&&preparation==null&&"main_screen".equals(mode)&&
+                dev.pocketengine.phone.reading.CurrentMainInspection.matchesGoal(goal);
+        // This exact review preserves the existing configured-model gate, but reads its local
+        // metadata only. Never prepare/renew an account or use the provider for a one-number read.
+        ModelConfig config;
+        if(inspection){
+            JSONObject target=conversationModels().targetForAdmission(conversationId,"");
+            config=target==null?settings.get():captureConversationTarget(target,false);
+        }else config=captureConversationModel(conversationId,"");
         if(!status.equals(settings.modelSelection().status())||conversationModels().snapshot(preferenceScope).getLong("revision")!=preferenceRevision)throw new IllegalStateException("模型设置已变化，请重新核对手机任务");
         var selected=new dev.pocketengine.runtime.models.ModelSelectionCoordinator.Projection<ModelConfig>(status.revision(),config);
         SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
@@ -1875,7 +1888,9 @@ public final class EngineApplication extends Application implements dev.pocketen
                 .put("goal",goal).put("mode",mode).put("expiresAt",System.currentTimeMillis()+120_000L)
                 .put("screenDisclosure",dev.pocketengine.phone.observation.PhoneScreenDisclosure.review(config.localCaptureAllowed,config.localOcrAllowed,config.sendScreenshots));
         if(originalLocator!=null)view.put("ownerPickedMessage",true);
-        return new ConversationPhoneStartReview(this,tasks,creation,config,selected.revision(),preferenceRevision,view);
+        if(inspection)view.put("readCurrentOnce",true)
+                .put("screenDisclosure","只从你确认时眼前的页面读取一次界面结构。不截图、不操作应用，不发给模型。");
+        return new ConversationPhoneStartReview(this,tasks,creation,config,selected.revision(),preferenceRevision,inspection,view);
     }
     private void requireConversationPhoneReviewCurrent(ConversationPhoneStartReview review,java.util.function.BooleanSupplier ownerCurrent)throws Exception {
         if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("这份手机任务审阅不属于当前原对话宿主");
@@ -1917,6 +1932,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             SettingsStore.validate(review.config);dev.pocketengine.runtime.ModelGateway.validate(review.config);
             if(firstMainPolicyRevision>=0&&(!"main_screen".equals(review.mode)||firstMainScreenPolicyRevision()!=firstMainPolicyRevision))
                 throw new SecurityException("原主屏或本机应用规则已变化，原目标仍保留，请重新核对");
+            if(review.inspection&&firstMainPolicyRevision<0)
+                throw new SecurityException("本次只读必须在眼前主屏由你确认，没有改作普通任务");
             if(watchFirstMainResult&&firstMainPolicyRevision<0)throw new SecurityException("只能为这次手动开始的主屏任务选择提醒");
             if(watchFirstBackgroundResult&&(!"background".equals(review.mode)||firstMainPolicyRevision>=0||watchFirstMainResult))
                 throw new SecurityException("只能为这次原私聊的独立屏任务选择提醒");
@@ -1932,7 +1949,7 @@ public final class EngineApplication extends Application implements dev.pocketen
             long confirmedAt=System.currentTimeMillis();
             java.util.concurrent.Callable<Boolean> current=()->{requireConversationPhoneReviewCurrent(review,ownerCurrent);return true;};
             admit(id,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
-                control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,firstMainPolicyRevision,
+                control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,firstMainPolicyRevision,review.inspection,
                         assigned->{writeEntered[0]=true;allocated.accept(assigned);},()->{control.check();return current.call();});
             },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state),
                     watchFirstMainResult,watchFirstBackgroundResult));
@@ -2091,7 +2108,9 @@ public final class EngineApplication extends Application implements dev.pocketen
                 firstDraft.noteRefusal("component_unconfirmed",failure);throw failure;
             }
         }catch(Exception ex){
-            nextControl.cancel();try{tasks.endAttempt(taskId,t.getString("runId"),"failed","无法启动前台任务，请回到应用重试",new JSONObject());}
+            nextControl.cancel();try{tasks.endAttempt(taskId,t.getString("runId"),"failed",TaskStore.firstMainInspectionMarked(t)
+                    ?"未能确认这次只读已接入本机任务控制。未确认读数，原记录保留，不会恢复或重读。"
+                    :"无法启动前台任务，请回到应用重试",new JSONObject());}
             finally{released(taskId,nextControl);resources.releasePhone(token);if(display!=null)display.unpinOwner(nextControl);}throw ex;
         }
         pushTask(t.getString("id"));if(channelTaskHost!=null)channelTaskHost.publishTaskState(taskId);return t.getString("id");
@@ -2408,6 +2427,7 @@ public final class EngineApplication extends Application implements dev.pocketen
     }
     private synchronized String continuePhoneTask(String id,String feedback,boolean consent,String mode,String expectedRun,int expectedEpoch)throws Exception {
         JSONObject t=tasks.get(id,false);if(t==null||!"phone".equals(t.optString("kind")))throw new IllegalArgumentException("该任务不是可恢复的手机任务");if(expectedRun!=null&&(!expectedRun.equals(t.optString("runId"))||expectedEpoch!=t.optInt("coordinatorEpoch")))throw new SecurityException("原手机执行已变化，请刷新核对");if(dev.pocketengine.store.TaskStoreDeviceTasks.deviceTask(t)){if(feedback!=null&&!feedback.isBlank())throw new SecurityException("设备工具不导入私人反馈；原设备须提交准确新操作");if(!mode.equals(t.getString("executionMode")))throw new SecurityException("设备工具不能换显示");resumeDeviceExecution(id);return id;}
+        if(TaskStore.firstMainInspectionMarked(t))throw new SecurityException("这份工作只读取一次，不能继续读取或改作操作。");
         if(TaskStore.firstMainScreenPending(t))throw new SecurityException("原首次主屏确认未完成。原服务失去后不能借普通继续，目标仍留在原任务。");
         if(dev.pocketengine.phone.MainPhoneOwnerStep.needsOwner(t))throw new SecurityException("本人步骤需交还同一次主屏任务；原现场丢失不能另起执行。");
         JSONObject origin=t.optJSONObject("origin");if(origin!=null&&origin.optString("kind").equals("channel")){

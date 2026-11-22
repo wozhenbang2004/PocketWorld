@@ -1301,9 +1301,16 @@ public final class TaskStore {
     }
     public synchronized JSONObject beginReviewedConversationPhone(ConversationPhoneReview review,long confirmedAt,int allocation,long firstMainPolicyRevision,
             java.util.function.Consumer<String> allocated,java.util.concurrent.Callable<Boolean> current)throws Exception{
+        return beginReviewedConversationPhone(review,confirmedAt,allocation,firstMainPolicyRevision,false,allocated,current);
+    }
+    public synchronized JSONObject beginReviewedConversationPhone(ConversationPhoneReview review,long confirmedAt,int allocation,long firstMainPolicyRevision,
+            boolean inspection,java.util.function.Consumer<String> allocated,java.util.concurrent.Callable<Boolean> current)throws Exception{
         if(review==null||review.issuer!=this||allocated==null||current==null)throw new SecurityException("需要当前原私人对话的首次启动审阅");
         JSONObject shown=review.view(),facts=shown.getJSONObject("reviewFacts");String id=shown.getString("requestId"),mode=shown.getString("executionMode");
         if(firstMainPolicyRevision>=0&&(!"main_screen".equals(mode)||review.preparation!=null))throw new SecurityException("只适用于原私人对话新建的主屏任务");
+        if(inspection&&(firstMainPolicyRevision<0||!"owner_selected_latest".equals(shown.opt("sourceSelection"))||
+                !dev.pocketengine.phone.reading.CurrentMainInspection.matchesGoal(shown.getString("goal"))))
+            throw new SecurityException("仅可从原私人消息确认一次眼前页面读数");
         int tools=TaskExecutionScope.exactInt(facts,"toolLimit",1,TaskExecutionScope.MAX_TOOLS),models=TaskExecutionScope.exactInt(facts,"modelCallLimit",1,TaskExecutionScope.MAX_MODEL_CALLS);
         int minutes=TaskExecutionScope.exactInt(facts,"scopeMinutes",0,120);
         if(confirmedAt<=0||confirmedAt>System.currentTimeMillis()||minutes!=0&&minutes!=30&&minutes!=120)throw new SecurityException("原私聊审阅期限不可核对");
@@ -1324,7 +1331,18 @@ public final class TaskStore {
                 row.put(FIRST_MAIN_SCREEN,new JSONObject().put("format",FIRST_MAIN_FORMAT).put("taskId",id)
                         .put("runId",first.getString("runId")).put("epoch",1).put("phase","waiting").put("attempt",0)
                         .put("scopeRevision",row.getJSONObject("executionScope").getLong("revision")).put("appPolicyRevision",firstMainPolicyRevision));
-                row.put("summary","原任务已保存。到目标页面后，从任务控制条确认读取眼前主屏。");
+                if(inspection){
+                    row.put(FIRST_MAIN_INSPECTION,true);
+                    row.getJSONObject("executionScope").put("tools",new JSONArray()).put("toolsPinned",true);
+                    String run=first.getString("runId");
+                    JSONObject permission=grant(run).put("tools",new JSONArray()).put("remainingOperations",0)
+                            .put("allowedInferencePurposes",new JSONArray());
+                    ContentValues narrowed=new ContentValues();narrowed.put("grant_json",permission.toString());
+                    if(db.update("runs",narrowed,"task_id=? AND run_id=? AND epoch=1 AND status='running'",new String[]{id,run})!=1)
+                        throw new SecurityException("原一次只读范围未登记，没有提交");
+                }
+                row.put("summary", inspection?"到眼前页面后，从任务控制条确认本机只读一次。不操作应用或调用模型。":
+                        "原任务已保存。到目标页面后，从任务控制条确认读取眼前主屏。");
                 write(row);first=copy(row,false);
             }
             requireExecutionEnabled();requirePhoneReviewSource(shown);
@@ -1334,7 +1352,11 @@ public final class TaskStore {
     }
 
     public static final String FIRST_MAIN_SCREEN="ownerFirstCurrentMain";
+    private static final String FIRST_MAIN_INSPECTION="ownerFirstMainReadOnce";
     private static final String FIRST_MAIN_FORMAT="pocketworld.owner-first-current-main.v1";
+
+    /** Presence fences ordinary paths; the native first-start reader separately requires exact typed proof. */
+    public static boolean firstMainInspectionMarked(JSONObject task){return task!=null&&task.has(FIRST_MAIN_INSPECTION);}
 
     /** A malformed or unconfirmed first admission is not permission for an ordinary resume. */
     public static boolean firstMainScreenPending(JSONObject task){
@@ -1352,8 +1374,10 @@ public final class TaskStore {
     }
 
     /** Only the original live native service can obtain/consume this first-screen state. No port or runner is opened here. */
-    public synchronized long firstMainPolicy(RunControl original)throws Exception {
-        return firstMainTask(original,"waiting").getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision");
+    public record FirstMainPreparation(long policy,boolean inspection) {}
+    public synchronized FirstMainPreparation firstMainPreparation(RunControl original)throws Exception {
+        JSONObject task=firstMainTask(original,"waiting");
+        return new FirstMainPreparation(task.getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision"),firstMainInspectionMarked(task));
     }
 
     private JSONObject firstMainTask(RunControl original,String phase)throws Exception {
@@ -1368,7 +1392,16 @@ public final class TaskStore {
             throw new SecurityException("原主屏开始或执行范围已变化");
         requireExecutionEnabled();OwnerExecutionPolicy.requireRevision(ownerExecutionState(),task.getLong("executionAdmissionRevision"));
         requireExecutionGrantCurrent(task,id.runId(),id.epoch());
-        conversationRepository.requirePhoneHandoffSource(ConversationPhoneHandoff.association(task).getJSONObject("source"));
+        JSONObject association=ConversationPhoneHandoff.association(task);
+        if(firstMainInspectionMarked(task)){
+            JSONObject permission=grant(id.runId());
+            if(!Boolean.TRUE.equals(task.opt(FIRST_MAIN_INSPECTION))||!"owner_selected_latest".equals(association.opt("sourceSelection"))||
+                    !dev.pocketengine.phone.reading.CurrentMainInspection.matchesGoal(task.getString("goal"))||
+                    permission.getInt("remainingOperations")!=0||permission.getJSONArray("tools").length()!=0||
+                    permission.getJSONArray("allowedInferencePurposes").length()!=0)
+                throw new SecurityException("原一次只读范围不可核对");
+        }
+        conversationRepository.requirePhoneHandoffSource(association.getJSONObject("source"));
         return task;
     }
 
@@ -1376,6 +1409,7 @@ public final class TaskStore {
         db.beginTransaction();try{
             JSONObject row=firstMainTask(original,"waiting"),mark=row.getJSONObject(FIRST_MAIN_SCREEN);
             if(!stillVisible.getAsBoolean())throw new SecurityException("这次可见的主屏确认已失效");
+            if(firstMainInspectionMarked(row)&&mark.getInt("attempt")!=0)throw new SecurityException("原一次读取已经尝试");
             int attempt=Math.addExact(mark.getInt("attempt"),1);
             mark.put("attempt",attempt).put("phase","checking");
             row.put("summary","正在核对你刚确认的主屏页面，原任务尚未开始执行。");
@@ -1390,7 +1424,10 @@ public final class TaskStore {
             JSONObject task=firstMainTask(claim.original,"checking"),mark=task.getJSONObject(FIRST_MAIN_SCREEN);
             if(mark.getInt("attempt")!=claim.attempt||!current.getAsBoolean())throw new SecurityException("这次主屏核对已变化");
             if(structure==null){
-                mark.put("phase","waiting");task.put("summary","没能核对这次主屏页面，原任务仍待你在眼前页面确认。未启动模型或后续操作。");
+                boolean inspection=firstMainInspectionMarked(task);
+                mark.put("phase",inspection?"unavailable":"waiting");
+                task.put("summary",inspection?"本次没有确认到可读的主屏内容。未操作应用或调用模型。":
+                        "没能核对这次主屏页面，原任务仍待你在眼前页面确认。未启动模型或后续操作。");
                 write(task);
             }else{
                 JSONObject pin=structure.getJSONObject("observationBinding"),sources=structure.getJSONObject("observationSources");
@@ -4876,6 +4913,7 @@ public final class TaskStore {
     public synchronized JSONObject enterExecutionPlanning(String id,String run,int epoch,long expectedRevision,java.util.function.BooleanSupplier current)throws Exception{
         requireOwnerPlanningWindow(current);db.beginTransaction();try{
             JSONObject task=planningTask(id),scope=task.getJSONObject("executionScope");
+            if(firstMainInspectionMarked(task))throw new SecurityException("本次只读范围不能改为规划或执行。");
             if(firstMainScreenPending(task))throw new SecurityException("首次主屏确认尚未完成，不能将原任务改为规划。");
             if(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||expectedRevision!=scope.getLong("revision")||task.optBoolean("cancelRequested")||task.optString("status").matches("running|preparing|pausing|stopping|completed|cancelled")||hasUnresolved(id))throw new SecurityException("请先暂停并核对原执行，再重新审阅当前范围进入只读规划");
             if(!TaskExecutionScope.planning(scope)){
@@ -5162,6 +5200,7 @@ public final class TaskStore {
     public synchronized JSONObject configureExecutionScope(String id,long expectedRevision,long deadlineAt,int totalTools,int totalModels)throws Exception {
         db.beginTransaction();try{
             JSONObject task=executionScopeTask(id),old=task.optJSONObject("executionScope");long revision=old==null?0:old.getLong("revision"),now=System.currentTimeMillis();
+            if(firstMainInspectionMarked(task))throw new SecurityException("本次只读取一次，不能更换范围。");
             if(firstMainScreenPending(task))throw new SecurityException("首次主屏确认尚未完成，不能替换机主已核对的范围。");
             if(revision!=expectedRevision||task.optString("status").matches("completed|stopping")||deadlineAt!=0&&(deadlineAt<=now||deadlineAt-now>31_536_000_000L))throw new SecurityException("原任务范围已变化或期限无效，请重新审阅");
             int usedTools=old==null?executionOperationCount(id):old.getInt("toolsUsed"),usedModels=old==null?executionModelCount(id):old.getInt("modelCallsUsed");
@@ -5220,6 +5259,7 @@ public final class TaskStore {
     public synchronized JSONObject extendExecutionToolsForOwner(String id,String run,int epoch,long expectedRevision,JSONArray names)throws Exception {
         db.beginTransaction();try{
             JSONObject task=executionScopeTask(id);if(!run.equals(task.optString("runId"))||epoch!=task.optInt("coordinatorEpoch")||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|paused|awaiting_user"))throw new SecurityException("原主人执行已变化");
+            if(firstMainInspectionMarked(task))throw new SecurityException("本次只读取一次，不能添加工具。");
             JSONObject scope=task.getJSONObject("executionScope"),permission=grant(run);executionScopeCurrent(task,run,permission);
             if(expectedRevision!=scope.getLong("revision")||TaskExecutionScope.effectiveDeadline(scope)<=System.currentTimeMillis()||names==null||names.length()>ScopedToolCatalog.MAX_TOOLS)throw new SecurityException("请重新审阅当前任务工具范围");
             JSONArray allowed=new JSONArray(scope.getJSONArray("tools").toString());java.util.Set<String> seen=new java.util.HashSet<>();for(int i=0;i<allowed.length();i++)seen.add(allowed.getString(i));
@@ -13602,6 +13642,7 @@ public final class TaskStore {
         db.beginTransaction();try{
             boolean gatewayOnly=nativeGatewayReview!=null;if(gatewayOnly){if(nativeGatewayReview.store!=this||!id.equals(nativeGatewayReview.view().getString("parentTaskId"))||!mode.equals("capabilities")||nativeTeam||nativeLearning||nativeRoundReview!=null)throw new SecurityException("不是私构原网关恢复审阅");nativeGatewayReview.checkCurrent();}
             JSONObject t=required(id);if(t.has("evaluation")&&!t.optString("runId").isEmpty())throw new SecurityException("评测只核对原试验；不能通用恢复、重放或授予真实应用工具");if(t.has("ownerMcpDiscovery"))throw new SecurityException("本机MCP发现只能核对原一次性操作，不能恢复为Runner、重派或借作工具调用");if((t.optJSONObject("workProfileRef")!=null||t.optJSONObject("workProfileIntent")!=null)&&nativeProfile==null)throw new SecurityException("请在原任务工作配置页恢复并审阅准确Profile，再继续；没有改用全局默认配置");if(TaskStoreDeviceTasks.deviceTask(t))throw new SecurityException("设备任务须使用原配对证明的专用准入，不能借通用startAttempt继续");if(nativeTeamRoundPool(t)&&nativeRoundReview==null)throw new SecurityException("原结果round继续须先在native前台审阅原池剩余与本次新run，不从普通JSON恢复或补满");if("attachments".equals(t.optString("feature"))&&t.optString("command").matches("createDocument|transformImage|trimMedia"))throw new SecurityException("主人文档动作只能核对原固定产物，不恢复为通用Runner或重放生成");if(t.has("ownerStorageCleanup"))throw new SecurityException("主人清理只能只读核对原范围，不能恢复为Runner重放删除");if(t.has("ownerArchivePhase"))throw new SecurityException("主人备份恢复只能核对原分区，不恢复为通用Runner或重放写入");if(t.has("ownerBackupUpload"))throw new SecurityException("主人备份上传只核对原编号，不恢复为Runner或重新发送密文");if(t.has("ownerGit"))throw new SecurityException("主人Git动作只能在原项目Git入口核对或另行审阅，不能恢复为通用Runner");if("inference".equals(t.optString("kind")))throw new SecurityException("用量记录不能恢复为任务执行；请从原模型、语音或本机服务入口明确发起新请求");if(t.has("ownerGitImport"))throw new SecurityException("主人Git导入只能查询原下载与另行明确发布，不能恢复为Runner或重送凭据");if(t.has("ownerGitPublication"))throw new SecurityException("主人Git发布只查询原新项目，不恢复为Runner或重放复制");if(t.has("sourceLearningJob")&&!nativeLearning)throw new SecurityException("来源学习只能回原逐批任务入口继续，不能由通用Runner重放");if(!nativeTeam&&t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("team_assignment|team_integration|team_review|team_research|team_phone"))throw new SecurityException("团队分工只能回到原团队assignment入口继续");if(t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").matches("group|reviewed_external_group|native_remote_group_inputs"))throw new SecurityException("外部材料或群任务只能使用保留原生受众授权的专用入口");if(hasUnresolved(id))throw new IllegalStateException("有动作结果尚未核对，请先确认这些动作是否已经发生");
+            if(firstMainInspectionMarked(t))throw new SecurityException("原一次只读任务不能再次读取或改为操作。");
             if(firstMainScreenPending(t))throw new SecurityException("原首次主屏确认未完成。不能恢复旧动作，请回原任务核对或停止。");
             if(t.optJSONObject("origin")!=null&&t.getJSONObject("origin").optString("kind").equals("channel")){
                 if(!mode.equals("capabilities")&&(phoneRequest==null||!"phone".equals(t.optString("kind"))||!mode.equals(t.getString("executionMode"))))throw new SecurityException("渠道能力任务不能取得手机执行权限");
@@ -13679,6 +13720,7 @@ public final class TaskStore {
     /** Read-only current native destination; paused state confers no dispatch or resume authority. */
     public synchronized JSONObject ownerScreenContextTarget(String id,String run,int epoch,RunControl original)throws Exception {
         JSONObject task=required(id);requirePrivateOwner(task);
+        if(firstMainInspectionMarked(task))throw new SecurityException("这份工作只有原来一次读取，不接受补充画面或指令。");
         if(original==null||!original.hasHostRun()||!original.matchesHostRun(id,run,epoch))throw new SecurityException("画面补充没有原任务控制器");
         original.check();fence(id,run,epoch,original,false);
         JSONObject origin=task.optJSONObject("origin");String kind=task.optString("kind"),mode=task.optString("executionMode");
@@ -14526,6 +14568,7 @@ public final class TaskStore {
     }
     private void requireOriginalPhoneResume(String id,String run,int epoch,RunControl original,long pause,String feedback,boolean ownerReturn)throws Exception {
         JSONObject task=originalPhoneAttempt(id,run,epoch,true);
+        if(firstMainInspectionMarked(task))throw new SecurityException("原一次只读工作不会恢复或重试。");
         if(firstMainScreenPending(task))throw new SecurityException("请在原主屏的任务控制条确认开始，不用普通继续代替。");
         if(!ownerReturn&&MainPhoneOwnerStep.needsOwner(task))throw new SecurityException("这次本人步骤不能用普通继续或文字代替，请打开原任务。");
         if(original==null||!original.matchesHostRun(id,run,epoch)||original.isCancelled()||!original.isPaused()||original.pauseRevision()!=pause||task.optBoolean("cancelRequested")||!task.optString("status").matches("preparing|running|pausing|paused|awaiting_user|needs_confirmation|reconciling"))throw new SecurityException("原暂停状态已变化，请重新核对");
@@ -18030,7 +18073,12 @@ public final class TaskStore {
             if(channel&&t.optString("status").equals("completed"))return;
             TaskAttemptJournal.Original ending=TaskAttemptJournal.requireOriginal(db,id,t,runId);
             JSONObject origin=t.optJSONObject("origin");boolean plan=origin!=null&&"automation".equals(origin.optString("kind"))&&!origin.optString("planId").isEmpty();
-            if((channel||plan||OwnerWorkTask.isOwnerWork(t))&&t.optBoolean("cancelRequested")){
+            if(firstMainInspectionMarked(t)){
+                if(ConversationPhoneHandoff.ended(t.optString("status")))return;
+                if(t.optBoolean("cancelRequested")){
+                    status="cancelled";summary="本次只读已停止；没有操作应用或发送给模型。";evidence=new JSONObject();
+                }
+            }else if((channel||plan||OwnerWorkTask.isOwnerWork(t))&&t.optBoolean("cancelRequested")){
                 status="cancelled";summary="已停止后续派发；已有动作和结果保留，停止不代表撤销已发生的效果";
             }
             if(TaskStoreDeviceTasks.deviceTask(t))deviceTasks.closeUndispatchedChildrenForTerminal(id,runId);
@@ -19317,7 +19365,9 @@ public final class TaskStore {
     }
     /** Only definite original phone receipts, bound to an actual native observation, are inputs. */
     public synchronized JSONArray appLearningInputs(String id)throws Exception {
-        JSONObject task=required(id),policy=appLearningPolicy(id).getJSONObject("policy");JSONArray result=new JSONArray();
+        JSONObject task=required(id);JSONArray result=new JSONArray();
+        if(firstMainInspectionMarked(task))return result;
+        JSONObject policy=appLearningPolicy(id).getJSONObject("policy");
         if(!policy.optBoolean("enabled")||!task.optString("status").matches("completed|needs_confirmation|awaiting_user"))return result;
         String run=task.optString("runId");if(run.isEmpty()||hasUnresolved(id))return result;
         JSONObject verification=TaskAuditStore.latest(db,id,"user_verification");
@@ -19839,7 +19889,7 @@ public final class TaskStore {
         if(dispatch)requireExecutionEnabled();
         if(control!=null)control.check();JSONObject t=required(id);if(!runId.equals(t.optString("runId"))||epoch!=t.optInt("coordinatorEpoch"))throw new SecurityException("旧执行代次已失效");
         if(TaskStoreDeviceTasks.deviceTask(t)){deviceTasks.fence(id,runId,epoch,control,dispatch);if(dispatch&&hasUnresolved(id)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("原设备动作结果尚未核对，不派发新效果");return;}
-        if(dispatch){if(firstMainScreenPending(t))throw new SecurityException("原首次主屏确认未完成，尚不能派发模型或操作");requireOwnerWorkPreparationTargetCurrent(t);if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");requireExecutionGrantCurrent(t,runId,epoch);}
+        if(dispatch){if(firstMainInspectionMarked(t))throw new SecurityException("本机一次只读不能派发模型或操作");if(firstMainScreenPending(t))throw new SecurityException("原首次主屏确认未完成，尚不能派发模型或操作");requireOwnerWorkPreparationTargetCurrent(t);if(control==null||control.isPaused()||t.optBoolean("cancelRequested"))throw new IllegalStateException("任务已暂停或取消");if(hasUnresolved(id)&&!onlyTeamRoundReadPending(id,runId,epoch,control)&&(!ownedInference||!onlyOwnedProjectPending(id,runId,epoch,preparedStop)))throw new IllegalStateException("有动作结果待核对，禁止继续派发");requireExecutionGrantCurrent(t,runId,epoch);}
     }
     /** Identity/expiry check shared with phase metadata; it creates no dispatch admission. */
     private void requireExecutionGrantCurrent(JSONObject task,String run,int epoch)throws Exception{
@@ -20885,7 +20935,7 @@ public final class TaskStore {
         boolean identifiedSource=origin!=null&&!origin.optString("kind").isBlank()||
                 !t.isNull("parentTaskId")&&!t.optString("parentTaskId").isBlank()||t.optJSONObject("ownerDeviceWork")!=null||t.optJSONObject("ownerPhoneControl")!=null;
         out.put("identifiedSource",identifiedSource).put("unresolved",hasUnresolved(id));
-        if(firstMainScreenPending(t)){
+        if(firstMainScreenPending(t)||firstMainInspectionMarked(t)){
             JSONObject mark=t.optJSONObject(FIRST_MAIN_SCREEN);
             out.put("firstMainHeld",true).put("firstMainWaiting",mark!=null&&"waiting".equals(mark.opt("phase")));
         }
@@ -20908,7 +20958,7 @@ public final class TaskStore {
     public synchronized JSONObject foregroundNotificationContextSnapshot(String id)throws Exception{
         JSONObject task=read(id);if(task==null)return null;
         JSONObject context=new JSONObject();
-        for(String key:new String[]{"id","runId","coordinatorEpoch","kind","status","executionMode","goal","summary","origin","actorId","spaceId","sourceLearningJob","cancelRequested","evidence","ownerPhoneQuestionHold","ownerInputMailbox","ownerPhoneQuestionNotice",FIRST_MAIN_SCREEN})
+        for(String key:new String[]{"id","runId","coordinatorEpoch","kind","status","executionMode","goal","summary","origin","actorId","spaceId","sourceLearningJob","cancelRequested","evidence","ownerPhoneQuestionHold","ownerInputMailbox","ownerPhoneQuestionNotice",FIRST_MAIN_SCREEN,FIRST_MAIN_INSPECTION})
             if(task.has(key))context.put(key,task.get(key));
         // A bounded notice header omits parent/owner routing objects; omissions cannot classify a source.
         if("phone".equals(task.optString("kind")))context.put("originalNoticePrivateLocal",PhoneActionRecovery.local(task));
@@ -21688,7 +21738,12 @@ public final class TaskStore {
                     else if(t.optString("kind").equals("phone")&&!t.optString("runId").isEmpty()){
                         boolean stop=t.optBoolean("cancelRequested");
                         // The conversation freezes this summary. A recorded stop is not a resume invitation or proof of rollback.
-                        t.put("status",stop?"cancelled":"paused").put("summary",stop&&PhoneActionRecovery.local(t)
+                        if(firstMainInspectionMarked(t)){
+                            // Recovery cannot recreate the original physical confirmation or replay its single read.
+                            t.put("status",stop?"cancelled":"interrupted").put("summary",stop
+                                    ?"停止请求已保存。本次只读不会恢复或再次读取。"
+                                    :"本次只读在保存结果前中断，未确认读数。原记录保留，不会继续或重读。");
+                        }else t.put("status",stop?"cancelled":"paused").put("summary",stop&&PhoneActionRecovery.local(t)
                                 ?"停止请求已保留，重新打开时没有重启本轮。之前的操作是否生效，请核对记录。":"执行已中断，目标和上下文已保留，可继续原任务");
                     }
                     else t.put("status","interrupted").put("summary","上次执行已中断，请检查已有结果");

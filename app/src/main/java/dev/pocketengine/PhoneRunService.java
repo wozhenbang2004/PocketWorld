@@ -80,7 +80,7 @@ public final class PhoneRunService extends Service {
     private volatile DeferredPhoneSession phoneSession;
     private volatile long ownerWaitGeneration;
     private record FirstMainWait(String task,String run,int epoch,RunControl owner,ModelConfig config,
-                                 String goal,int start,long policy,AtomicBoolean checking){}
+                                 String goal,int start,long policy,boolean inspection,AtomicBoolean checking){}
     private volatile FirstMainWait firstMainWait;
     /** Set only from a positive owner-private Main row at this native Service's original START. */
     private volatile RunControl mainProgressOwner;
@@ -108,13 +108,22 @@ public final class PhoneRunService extends Service {
         try{worker.execute(()->readFirstMain(wait,page));return true;}
         catch(java.util.concurrent.RejectedExecutionException closed){wait.checking().set(false);return false;}
     }
+    private void finishFirstMainInspectionUnavailable(FirstMainWait wait,String message){
+        RunControl original=wait.owner();
+        synchronized(this){
+            if(!wait.inspection()||!ownsFirstMain(wait)||!app.keepsFirstMainInspectionHold(wait.task(),original))return;
+            waitingForUser=false;firstMainWait=null;++ownerWaitGeneration;
+        }
+        finishAttempt(wait.task(),wait.run(),original,new RunOutcome("failed",message,new JSONObject()),wait.start());
+    }
     private void readFirstMain(FirstMainWait wait,FirstMainScreenWindow page){
         TaskStore.FirstMainClaim claim=null;boolean recorded=false;
         RunControl original=wait.owner();
         java.util.function.BooleanSupplier current=()->ownsFirstMain(wait)&&page.stillCurrent(original);
         try{
             if(!current.getAsBoolean()||app.firstMainScreenPolicyRevision()!=wait.policy()||
-                    !new dev.pocketengine.runtime.policy.OwnerIntent(wait.goal()).deviceReadAllowed()||
+                    !(wait.inspection()?dev.pocketengine.phone.reading.CurrentMainInspection.matchesGoal(wait.goal()):
+                            new dev.pocketengine.runtime.policy.OwnerIntent(wait.goal()).deviceReadAllowed())||
                     !AndroidPhoneReadiness.snapshot(this,null).getJSONObject("taskNotifications").getBoolean("ready"))
                 throw new SecurityException("原主屏准备已变化");
             page.checkWindow(original);
@@ -127,22 +136,44 @@ public final class PhoneRunService extends Service {
             app.tasks.finishFirstMainScreen(claim,structure,current);recorded=true;
             page.checkWindow(original);
             if(app.firstMainScreenPolicyRevision()!=wait.policy())throw new SecurityException("原主屏规则已变化");
+            RunOutcome inspection=null;
+            if(wait.inspection()){
+                String number=dev.pocketengine.phone.reading.CurrentMainInspection.observedNumber(structure);
+                page.checkWindow(original);
+                boolean observed=number!=null;
+                inspection=new RunOutcome(observed?"completed":"failed",observed
+                        ?"从你确认的页面读到数字：\n\n"+number+"\n\n本次只读一次，未操作页面或发送给模型。"
+                        :"未能从刚确认的页面读到唯一可核对的数字。没有操作页面或发送给模型。",
+                        new JSONObject().put("kind","owner_main_current_numeric_read").put("observationId",structure.getString("observationId"))
+                                .put("numericLiteralObserved",observed).put("modelCalled",false).put("deviceActionDispatched",false));
+            }
             var appRules=new dev.pocketengine.phone.access.AndroidPhoneAccessStore(this);
             original.retainAuthorityCheck(()->{var rules=appRules.current();if(!rules.available()||rules.revision()!=wait.policy()||!rules.rules().isEmpty())
                 throw new SecurityException("原主屏应用规则已变化，不能继续使用已读页面");});
             synchronized(this){
                 if(!current.getAsBoolean())throw new SecurityException("原主屏确认已离开");
-                if(!app.releaseVerifiedFirstMainHold(wait.task(),original))throw new SecurityException("原主屏任务的本机控制已变化");
+                boolean originalHeld=wait.inspection()?app.keepsFirstMainInspectionHold(wait.task(),original):
+                        app.releaseVerifiedFirstMainHold(wait.task(),original);
+                if(!originalHeld)throw new SecurityException("原主屏任务的本机控制已变化");
                 waitingForUser=false;firstMainWait=null;++ownerWaitGeneration;
             }
             PhoneAccessibilityService service=PhoneAccessibilityService.get();
             if(service!=null&&service==mainProgressSurface(wait.task(),wait.run(),wait.epoch(),original))try{
                 service.retainOriginalMainProgress(original,OwnerMainPhoneProgress.screen(original,service.observationSessionId(),structure));
             }catch(RuntimeException unavailable){/* The already saved original observation is unchanged. */}
+            if(inspection!=null){
+                // No DeferredPhoneSession, model request, capability port or second observation.
+                finishAttempt(wait.task(),wait.run(),original,inspection,wait.start());return;
+            }
             if(service!=null)try{service.showControls(wait.task(),wait.goal(),original);}catch(RuntimeException ignored){/* Existing exact notification remains the stop surface. */}
             run(wait.task(),wait.run(),wait.epoch(),wait.goal(),wait.config(),original,wait.start(),false,null,null,structure);
         }catch(Exception unavailable){
-            if(recorded&&ownsFirstMain(wait)){
+            if(wait.inspection()){
+                if(claim!=null&&!recorded&&ownsFirstMain(wait))try{app.tasks.finishFirstMainScreen(claim,null,()->ownsFirstMain(wait));}
+                catch(Exception unknown){/* The spent original claim cannot authorize a second read. */}
+                // The accepted physical click may lose its window before a SQL claim. No reoffer.
+                finishFirstMainInspectionUnavailable(wait,"未能核对这次确认的页面读数。不会重读，也没有操作页面或发送给模型。");
+            }else if(recorded&&ownsFirstMain(wait)){
                 waitingForUser=false;firstMainWait=null;++ownerWaitGeneration;
                 finishAttempt(wait.task(),wait.run(),original,new RunOutcome("interrupted","已保存原主屏观察；之后页面或控制变化，未开始模型处理。",new JSONObject()),wait.start());
             }else if(claim!=null&&ownsFirstMain(wait))try{app.tasks.finishFirstMainScreen(claim,null,()->ownsFirstMain(wait));}
@@ -299,13 +330,17 @@ public final class PhoneRunService extends Service {
             mainProgressOwner=START.equals(intent.getAction())&&id.equals(task.opt("id"))&&"main_screen".equals(task.opt("executionMode"))&&
                     Boolean.TRUE.equals(task.opt("originalNoticePrivateLocal"))&&runId.equals(intent.getStringExtra("phoneRunId"))&&
                     epoch==intent.getIntExtra("phoneEpoch",-1)&&control.matchesHostRun(id,runId,epoch)?control:null;
-            boolean first=TaskStore.firstMainScreenPending(task)||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
+            boolean inspection=TaskStore.firstMainInspectionMarked(task);
+            boolean first=TaskStore.firstMainScreenPending(task)||inspection||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
             if(first){
                 long policy=-1;
                 if(START.equals(intent.getAction())&&epoch==1&&runId.equals(intent.getStringExtra("phoneRunId"))&&epoch==intent.getIntExtra("phoneEpoch",-1))
-                    try{policy=app.tasks.firstMainPolicy(control);}catch(Exception unavailable){/* A durable first start never falls through on unknown. */}
+                    try{
+                        TaskStore.FirstMainPreparation preparation=app.tasks.firstMainPreparation(control);
+                        if(preparation.inspection()==inspection)policy=preparation.policy();
+                    }catch(Exception unavailable){/* A durable first start never falls through on unknown. */}
                 waitingForUser=true;
-                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,new AtomicBoolean());firstMainWait=hold;
+                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,inspection,new AtomicBoolean());firstMainWait=hold;
                 startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
                 // The ordinary Service already created its task channel. Queue this once before
                 // presenting the owner's first-screen control, without blocking that control on success.
@@ -316,6 +351,13 @@ public final class PhoneRunService extends Service {
                     });}catch(java.util.concurrent.RejectedExecutionException closed){/* This optional choice never changes the start. */}
                 }
                 var overlay=PhoneAccessibilityService.get();
+                if(inspection&&(policy<0||overlay==null)){
+                    // Do not wait for a new service or imply a control was shown. This
+                    // exact native START has no usable first-offer proof at this point.
+                    if(mainProgressOwner==control)finishFirstMainInspectionUnavailable(hold,
+                            "没有取得本次主屏确认，未确认读数。原记录保留，不会恢复或重读。");
+                    return START_NOT_STICKY;
+                }
                 if(overlay!=null&&policy>=0)overlay.showFirstMainControls(id,runningGoal,control,()->ownsFirstMain(hold),page->confirmFirstMain(hold,page));
                 return START_NOT_STICKY;
             }

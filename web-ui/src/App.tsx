@@ -1141,7 +1141,7 @@ export default function App(){
  const [phoneStart,setPhoneStart]=useState<PhoneStartReceipt|null>(null);
  const phoneAction=useRef(false),phoneWindow=useRef(0),phoneReviewLive=useRef(phoneReview);phoneReviewLive.current=phoneReview;
  const phonePlacePicker=useRef<{pin:PhonePlaceReturn;navigation:number}|null>(null);
- const phonePresentation=useMemo(()=>phoneReview?{goal:phoneReview.goal,mode:phoneReview.mode,message:phoneReview.message,screenDisclosure:phoneReview.screenDisclosure,conversationId:phoneReview.conversationId,conversationTitle:phoneReview.conversationTitle,modelName:phoneReview.modelName,toolLimit:phoneReview.toolLimit,modelCallLimit:phoneReview.modelCallLimit,scopeMinutes:phoneReview.scopeMinutes,conditions:phoneReview.conditions}:null,[phoneReview]);
+ const phonePresentation=useMemo(()=>phoneReview?{goal:phoneReview.goal,mode:phoneReview.mode,message:phoneReview.message,screenDisclosure:phoneReview.screenDisclosure,conversationId:phoneReview.conversationId,conversationTitle:phoneReview.conversationTitle,modelName:phoneReview.modelName,toolLimit:phoneReview.toolLimit,modelCallLimit:phoneReview.modelCallLimit,scopeMinutes:phoneReview.scopeMinutes,conditions:phoneReview.conditions,readCurrentOnce:phoneReview.readCurrentOnce}:null,[phoneReview]);
  const phoneExit=useClosingSnapshot(phonePresentation),phoneDisplay=phoneExit.display;
  const [scopeMinutes,setScopeMinutes]=useState('-1');const [newProjectOpen,setNewProjectOpen]=useState(false),[projectName,setProjectName]=useState(''),[newFileOpen,setNewFileOpen]=useState(false),[newPath,setNewPath]=useState(''),[fileModes,setFileModes]=useState<Record<string,FileLayer>>({}),[fileDrafts,setFileDrafts]=useState<Record<string,FileDraft>>({});
  const channelPhoneModel=intent!=='chat'&&phoneDraft.channelOrigin===true;
@@ -3772,15 +3772,17 @@ export default function App(){
   }
   phoneExit.onCloseAutoFocus(event);
  };
- const startReviewedPhone=(manualFirstMain=false,watchReviewedHandle?:string)=>{
+ const startReviewedPhone=(manualFirstMain=false,watchReviewedHandle?:string,readCurrentOnce=false)=>{
   const reviewed=phoneReviewLive.current;
   if(document.hidden||phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;
   if(manualFirstMain&&reviewed.manualFirstMainAvailable!==true)return;
+  if(readCurrentOnce!==(reviewed.readCurrentOnce===true)||readCurrentOnce&&!manualFirstMain)return;
   const backgroundWatch=!manualFirstMain&&reviewed.mode==='background'&&reviewed.firstBackgroundResultWatchAvailable===true&&!!reviewed.conversationId;
   if(watchReviewedHandle&&(watchReviewedHandle!==reviewed.reviewHandle||!manualFirstMain&&!backgroundWatch))return;
   const startWindow=phoneWindow.current,startDoc=bridge.getDocumentEpoch();const here=()=>!document.hidden&&phoneWindow.current===startWindow&&bridge.getDocumentEpoch()===startDoc;
   phoneAction.current=true;phoneText.markSent();setPhoneReviewPending(true);
   void act('phone.start',{reviewHandle:reviewed.reviewHandle,...(manualFirstMain?{manualFirstMain:true}:{}),
+    ...(readCurrentOnce?{readCurrentOnce:true}:{}),
     ...(watchReviewedHandle?(manualFirstMain?{watchFirstMainResult:true}:{watchFirstBackgroundResult:true}):{})}).then(value=>{
     if(!here())return;const receipt=phoneStartReceipt(value,reviewed);setPhoneStart(receipt);
     if(reviewed.conditions&&receipt.status==='rejected'&&value?.recheckReview===reviewed.reviewHandle){
