@@ -4733,6 +4733,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         return if (picked == null) app.prepareConversationPhoneStart(conversation, goal, mode, choices)
         else app.preparePickedConversationPhoneStart(conversation, goal, mode, choices, picked)
     }
+    internal fun runLocalPhoneReview(work: Runnable) { check(!closed); io.execute(work) }
+    internal fun prepareLocalMainInspection(conversation: String, originalGoal: String, picked: JSONObject): EngineApplication.LocalMainInspectionReview {
+        check(webPrivateOwnerVisible() && !hasChannelPhoneOrigin && conversation.isNotBlank() &&
+            state.conversationId == conversation && composerDraft?.conversationId == conversation) { "请回到原私人消息核对本机一次只读" }
+        return app.prepareLocalMainInspection(conversation, originalGoal, newTaskScopeMinutes, picked)
+    }
     internal fun prepareDraftPhoneStart(scope: String, goal: String, mode: String): EngineApplication.DraftPhoneStartReview {
         check(webPrivateOwnerVisible() && state.conversationId.isNullOrBlank() && composerDraft?.conversationId.isNullOrBlank() && scope == conversationModelScope()) { "请回到原新对话草稿核对这次手机任务" }
         check(!hasChannelPhoneOrigin) { "渠道请求保留原渠道归属，不能改为私人草稿任务" }
@@ -4773,14 +4779,26 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun startConversationPhone(review: EngineApplication.ConversationPhoneStartReview, ownerCurrent: () -> Boolean, capacity: JSONObject? = null,
                                         firstMainPolicyRevision: Long = -1, watchFirstMainResult: Boolean = false,
                                         watchFirstBackgroundResult: Boolean = false, completed: (JSONObject?, String?) -> Unit): Boolean {
-        val shown = review.view()
+        return submitReviewedLinkedPhone(review.view(), ownerCurrent, capacity, true, completed) { current, allocated ->
+            app.startConversationPhone(review, true, firstMainPolicyRevision, watchFirstMainResult, watchFirstBackgroundResult, current, allocated)
+        }
+    }
+    internal fun startLocalMainInspection(review: EngineApplication.LocalMainInspectionReview, ownerCurrent: () -> Boolean,
+                                          capacity: JSONObject?, firstMainPolicyRevision: Long, completed: (JSONObject?, String?) -> Unit): Boolean {
+        return submitReviewedLinkedPhone(review.view(), ownerCurrent, checkNotNull(capacity), false, completed) { current, allocated ->
+            app.startLocalMainInspection(review, true, firstMainPolicyRevision, current, allocated)
+        }
+    }
+    private fun submitReviewedLinkedPhone(shown: JSONObject, ownerCurrent: () -> Boolean, capacity: JSONObject?, modelBacked: Boolean,
+                                          completed: (JSONObject?, String?) -> Unit,
+                                          submit: (java.util.function.BooleanSupplier, java.util.function.Consumer<String>) -> JSONObject): Boolean {
         if (!webPrivateOwnerVisible() || !ownerCurrent() || hasChannelPhoneOrigin) { state = state.copy(error = "原私人手机任务审阅已变化，请重新核对"); return false }
-        if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"))) return false
+        if (!preparePhoneSubmission(shown.getString("goal"), shown.getString("mode"), modelBacked)) return false
         state = state.copy(phoneSubmitting = true)
         return try {
             io.execute {
                 var allocated: String? = null
-                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { app.startConversationPhone(review, true, firstMainPolicyRevision, watchFirstMainResult, watchFirstBackgroundResult,
+                val result = runCatching { withReviewedPhoneCapacity(shown.getString("mode"), capacity, ownerCurrent) { submit(
                     java.util.function.BooleanSupplier { webPrivateOwnerVisible() && ownerCurrent() },
                     java.util.function.Consumer { allocated = it }) } }
                 main.post {
@@ -4852,8 +4870,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
 
-    private fun preparePhoneSubmission(goal: String, mode: String): Boolean {
-        if (modelSelectionPending()) { state = state.copy(error = "模型设置正在保存，请等待回执后再开始手机任务"); return false }
+    private fun preparePhoneSubmission(goal: String, mode: String, modelBacked: Boolean = true): Boolean {
+        if (modelBacked && modelSelectionPending()) { state = state.copy(error = "模型设置正在保存，请等待回执后再开始手机任务"); return false }
         if (state.phoneSubmitting) { state = state.copy(error = "请先核对上一次手机任务的启动回执"); return false }
         if (channelPhoneBlocked) { state = state.copy(error = "原渠道请求待核对或已取消；请清空草稿后另写本机新目标") ; return false }
         val channel = channelPhoneRequest

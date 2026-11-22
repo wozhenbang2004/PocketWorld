@@ -1242,6 +1242,8 @@ public final class TaskStore {
         else conversationRepository.requirePhoneHandoffSource(shown.getJSONObject("source"));
     }
     private ConversationPhoneReview prepareConversationPhone(JSONObject pinnedSource,String goal,String mode,JSONObject reviewFacts,OwnerWorkPreparation preparation,JSONObject ownerLocator)throws Exception {
+        if(ConversationPhoneHandoff.localMainInspection(reviewFacts)&&(ownerLocator==null||preparation!=null))
+            throw new SecurityException("本机一次只读只接受机主选中的原私人消息");
         db.beginTransaction();try{
             String requestId=UUID.randomUUID().toString();
             if(preparation!=null){if(preparation.issuer!=this)throw new SecurityException("准备提案不属于同一原TaskStore");JSONObject proposal=preparation.current();if(!"phone".equals(proposal.getString("kind"))||!proposal.getString("sourceConversationId").equals(pinnedSource.optString("conversationId")))throw new SecurityException("不是原手机准备提案的会话来源");
@@ -1309,11 +1311,16 @@ public final class TaskStore {
             boolean inspection,java.util.function.Consumer<String> allocated,java.util.concurrent.Callable<Boolean> current)throws Exception{
         if(review==null||review.issuer!=this||allocated==null||current==null)throw new SecurityException("需要当前原私人对话的首次启动审阅");
         JSONObject shown=review.view(),facts=shown.getJSONObject("reviewFacts");String id=shown.getString("requestId"),mode=shown.getString("executionMode");
+        boolean localInspection=ConversationPhoneHandoff.localMainInspection(facts);
+        if(localInspection&&!inspection)throw new SecurityException("本机一次只读不能借普通手机启动");
         if(firstMainPolicyRevision>=0&&(!"main_screen".equals(mode)||review.preparation!=null))throw new SecurityException("只适用于原私人对话新建的主屏任务");
         if(inspection&&(firstMainPolicyRevision<0||!"owner_selected_latest".equals(shown.opt("sourceSelection"))||
                 !dev.pocketengine.phone.reading.CurrentMainInspection.matchesGoal(shown.getString("goal"))))
             throw new SecurityException("仅可从原私人消息确认一次眼前页面读数");
-        int tools=TaskExecutionScope.exactInt(facts,"toolLimit",1,TaskExecutionScope.MAX_TOOLS),models=TaskExecutionScope.exactInt(facts,"modelCallLimit",1,TaskExecutionScope.MAX_MODEL_CALLS);
+        // The v1 lease/scope record requires positive bookkeeping ceilings. The local
+        // review is zero, and before commit its native grant below permits neither tools nor inference.
+        int tools=localInspection?1:TaskExecutionScope.exactInt(facts,"toolLimit",1,TaskExecutionScope.MAX_TOOLS);
+        int models=localInspection?1:TaskExecutionScope.exactInt(facts,"modelCallLimit",1,TaskExecutionScope.MAX_MODEL_CALLS);
         int minutes=TaskExecutionScope.exactInt(facts,"scopeMinutes",0,120);
         if(confirmedAt<=0||confirmedAt>System.currentTimeMillis()||minutes!=0&&minutes!=30&&minutes!=120)throw new SecurityException("原私聊审阅期限不可核对");
         long deadline=minutes==0?0:Math.addExact(confirmedAt,minutes*60_000L);
@@ -1376,12 +1383,13 @@ public final class TaskStore {
     }
 
     /** Only the original live native service can obtain/consume this first-screen state. No port or runner is opened here. */
-    public record FirstMainPreparation(long policy,boolean inspection) {}
+    public record FirstMainPreparation(long policy,boolean inspection,boolean localModelFree) {}
     public synchronized FirstMainPreparation firstMainPreparation(RunControl original)throws Exception {
         db.beginTransaction();try{
             JSONObject task=firstMainTask(original,"waiting");
             // The original conversation source proof requires this TaskStore and its transaction.
-            FirstMainPreparation result=new FirstMainPreparation(task.getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision"),firstMainInspectionMarked(task));
+            boolean local=ConversationPhoneHandoff.localMainInspection(task.getJSONObject("conversationPhoneHandoff").getJSONObject("reviewFacts"));
+            FirstMainPreparation result=new FirstMainPreparation(task.getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision"),firstMainInspectionMarked(task),local);
             db.setTransactionSuccessful();return result;
         }finally{db.endTransaction();}
     }
@@ -1399,6 +1407,8 @@ public final class TaskStore {
         requireExecutionEnabled();OwnerExecutionPolicy.requireRevision(ownerExecutionState(),task.getLong("executionAdmissionRevision"));
         requireExecutionGrantCurrent(task,id.runId(),id.epoch());
         JSONObject association=ConversationPhoneHandoff.association(task);
+        if(ConversationPhoneHandoff.localMainInspection(association.getJSONObject("reviewFacts"))&&!Boolean.TRUE.equals(task.opt(FIRST_MAIN_INSPECTION)))
+            throw new SecurityException("本机一次只读不能借普通主屏读取");
         if(firstMainInspectionMarked(task)){
             JSONObject permission=grant(id.runId());
             if(!Boolean.TRUE.equals(task.opt(FIRST_MAIN_INSPECTION))||!"owner_selected_latest".equals(association.opt("sourceSelection"))||

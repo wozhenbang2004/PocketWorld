@@ -203,7 +203,8 @@ type TeamReportMode={visit:TeamReportVisit;reading?:TeamReportRead;error?:string
 type WorkFileVisit={owner:TaskReviewWindow;work:WorkIdentity;layer:TaskLayer;navigation:number;taskRequest:number;
  file?:Pick<TaskResultFile,'id'|'sha256'>;afterAck?:number;windowId?:string};
 type DraftAcceptanceClick=OriginalProjectDraft&{window:TaskReviewWindow;reviewHandle:string;reviewDigest:string;reviewedRevision:number;completed:boolean};
-type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
+type LocalMainStartRefusal={reviewHandle:string;requestId:string};
+type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string;localModelFree?:true;localStartRefusal?:LocalMainStartRefusal};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type OriginalOwnerRequest={work:WorkIdentity;draftEpoch:number;resume:number;nativeTaskRequest:number};
 type ChatReportLink={target:ReportTarget;deliveryId:string;revision:number;writer:WorkIdentity;replyId:string};
@@ -2281,23 +2282,31 @@ export default function App(){
   void navigate('model-settings',()=>{relatedOrigin.current=origin},{keepOrigin:true,stillCurrent});
   return true;
  };
- const originalPhoneModelInput=(live:ReturnType<typeof bridge.getState>):OriginalPhoneModelInput|null=>{
+ const originalPhoneModelInput=(live:ReturnType<typeof bridge.getState>,refusal?:LocalMainStartRefusal):OriginalPhoneModelInput|null=>{
   const owner=live.state,draft=live.composer,phone=obj(live.phoneDraft),view=obj(live.view),preference=obj(owner.conversationModel);
-  const conversationId=owner.conversationId,mode=phone.mode;
+  const conversationId=owner.conversationId,mode=phone.mode,receipt=obj(phone.startReceipt);
+  // Native only projects recheckReview for this saved rejection after a pre-admission capacity change.
+  const startMatches=refusal?mode==='main_screen'&&receipt.status==='rejected'&&receipt.localModelFree===true&&
+    receipt.ownerPickedMessage===true&&receipt.mode===mode&&receipt.goal===phone.text&&
+    receipt.reviewHandle===refusal.reviewHandle&&receipt.recheckReview===refusal.reviewHandle&&receipt.requestId===refusal.requestId&&
+    receipt.conversationId===conversationId&&receipt.draftConversationId===conversationId&&receipt.composerKey===draft?.key&&receipt.composerEpoch===draft?.epoch&&
+    receipt.draftEpoch===phone.epoch&&receipt.draftRevision===phone.revision&&
+    ['taskId','runId','epoch','admitted','admissionState','draftRequestId'].every(field=>!Object.hasOwn(receipt,field))
+    :phone.startReceipt==null;
   if(typeof conversationId!=='string'||!conversationId||conversationId.length>240||draft?.key!=='conversation:'+conversationId||
      draft.ready!==true||draft.conversationId!==conversationId||view.taskId!==null||openedTaskId.current!==null||
      owner.conversationReader||owner.queuedInputsPage||owner.attachmentWorkspace?.open||owner.chatAttachmentPickerOpen||
      owner.attachmentImporting||owner.filePath!==null||owner.fileLoading||owner.fileSaving||owner.chatSubmitting||owner.phoneSubmitting||
      phone.phone!==true||(mode!=='main_screen'&&mode!=='background')||phone.channelOrigin!==false||phone.sourceState!=='current'||
-     phone.startReceipt!=null||typeof phone.text!=='string'||!phone.text.trim()||phone.text.length>4000||phone.text!==phoneText.currentValue()||
+     !startMatches||typeof phone.text!=='string'||!phone.text.trim()||phone.text.length>4000||phone.text!==phoneText.currentValue()||
      preference.scopeKey!=='conversation:'+conversationId||preference.inherited!==true||preference.target!==null||
      ![draft.epoch,draft.revision,phone.epoch,phone.revision,phone.sourceEditTicket,view.resumeRevision,preference.revision]
        .every(value=>Number.isSafeInteger(value)&&value>=0)||draft.revision<1||phone.revision<1||phone.sourceEditTicket<1)return null;
   return {conversationId,key:draft.key,epoch:draft.epoch,revision:draft.revision,phoneEpoch:phone.epoch,phoneRevision:phone.revision,
     sourceEditTicket:phone.sourceEditTicket,resumeRevision:view.resumeRevision,preferenceRevision:preference.revision,mode};
  };
- const sameOriginalPhoneModelInput=(expected:OriginalPhoneModelInput,live:ReturnType<typeof bridge.getState>)=>{
-  const now=originalPhoneModelInput(live);
+ const sameOriginalPhoneModelInput=(expected:OriginalPhoneModelInput,live:ReturnType<typeof bridge.getState>,refusal?:LocalMainStartRefusal)=>{
+  const now=originalPhoneModelInput(live,refusal);
   return !!now&&Object.entries(expected).every(([key,value])=>now[key as keyof OriginalPhoneModelInput]===value);
  };
  const openModelSetup=async(inlineHome=false)=>{
@@ -3723,22 +3732,68 @@ export default function App(){
  const blankReceiptActions=(receipt:PhoneStartReceipt)=><BlankPhoneReceiptActions receipt={receipt} pending={phoneReviewPending}
   onCheck={can('phone.query')?()=>queryOriginalPhone():undefined} onCloseWait={can('phone.draft.retireUncreated')?()=>queryOriginalPhone(true):undefined}
   onTask={openBlankFirst}/>;
- const preparePhone=(original?:string)=>{
-  if(document.hidden||phoneAction.current||['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)||!phoneText.value.trim()||!can('phone.prepare'))return;
+ const localMainReadAction='phone.readCurrentOnce.prepare';
+ const currentLocalMainRead=(live:ReturnType<typeof bridge.getState>,goal:string,refusal?:LocalMainStartRefusal)=>{
+  const phone=obj(live.phoneDraft),view=obj(live.view);
+  if(route!=='chat'||intent!=='main_screen'||!ready||taskOpen||taskOpening||document.hidden||draftSwitchPending()||
+    view.section!==null||phone.localMainReadOnceEligible!==true||phone.text!==goal||
+    ![localMainReadAction,'phone.start'].every(action=>live.capabilities.commands.includes(action)))return null;
+  const original=originalPhoneModelInput(live,refusal);
+  return original?.mode==='main_screen'?original:null;
+ };
+ const matchesLocalMainDraft=(review:Pick<PhoneReview,'originalDraft'|'conversationId'>,input:OriginalPhoneModelInput)=>{
+  const original=review.originalDraft;
+  return !!original&&review.conversationId===input.conversationId&&original.conversation===input.conversationId&&
+   original.composer===input.key&&original.ownerEpoch===input.epoch&&original.revision===input.phoneRevision&&
+   Number.isSafeInteger(original.origin)&&original.origin>=0;
+ };
+ const shownLocalMainRead=!composerModelName&&state.modelSelectionBusy===false&&phoneStart?.status!=='unknown'&&!keepOriginalPhoneGoal?
+  currentLocalMainRead(snapshot,phoneText.value):null;
+ const preparePhone=(original?:string,clickedLocal?:OriginalPhoneModelInput)=>{
+  if(document.hidden||phoneAction.current||['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)||!phoneText.value.trim())return;
   const previous=original?phoneReviewLive.current:null;
   if(original&&(!previous?.originalDraft||previous.reviewHandle!==original))return;
   if(previous&&(previous.mode!==intent||previous.goal.trim()!==phoneText.value.trim())){
     setPhoneReviewError({handle:previous.reviewHandle,message:'原目标或执行位置已变化。请返回核对，未准备其他任务。'});return;
   }
   if(phoneStart?.status==='unknown'){setLocalStatus('请先查询原手机请求，草稿仍保留。');return}
+  const local=!!clickedLocal||previous?.localModelFree===true;
+  const source=bridge.getState(),goal=phoneText.value;
+  const nativeStart=obj(source.phoneDraft).startReceipt;
+  const localStartRefusal=previous?.localModelFree===true&&nativeStart!=null?
+   obj(nativeStart).reviewHandle===previous.reviewHandle&&typeof previous.requestId==='string'&&previous.requestId?
+    {reviewHandle:previous.reviewHandle,requestId:previous.requestId}:previous.localStartRefusal:undefined;
+  const input=local?currentLocalMainRead(source,goal,localStartRefusal):null;
+  if(local&&(!input||clickedLocal&&(source.state.modelSelectionBusy!==false||conversationModelName(source.state)||!sameOriginalPhoneModelInput(clickedLocal,source))||
+     previous&&!matchesLocalMainDraft(previous,input))){
+   const message='原手机目标或窗口已变化。没有核对其他目标，也没有调用模型。';
+   if(original)setPhoneReviewError({handle:original,message});else setLocalError(message);
+   return;
+  }
+  if(!local&&!can('phone.prepare'))return;
   if(!original)phoneExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);
-  const window=phoneWindow.current,documentEpoch=bridge.getDocumentEpoch();
-  const current=()=>phoneWindow.current===window&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden&&(!original||phoneReviewLive.current?.reviewHandle===original);
+  const window=phoneWindow.current,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const current=()=>{
+   if(phoneWindow.current!==window||bridge.getDocumentEpoch()!==documentEpoch||document.hidden||(original&&phoneReviewLive.current?.reviewHandle!==original))return false;
+   if(!input)return true;
+   const live=bridge.getState();
+   return navigationWindow.current===navigation&&!!currentLocalMainRead(live,goal,localStartRefusal)&&sameOriginalPhoneModelInput(input,live,localStartRefusal);
+  };
   phoneAction.current=true;setPhoneReviewPending(true);setPhoneReviewError(null);
-  void act('phone.prepare',{goal:phoneText.value,mode:intent,epoch:phoneDraft.epoch,...(previous?{originalDraft:previous.originalDraft}:{})}).then(value=>{
+  if(local)setLocalError('');
+  const args={goal,mode:input?'main_screen':intent,epoch:input?.phoneEpoch??phoneDraft.epoch,...(previous?{originalDraft:previous.originalDraft}:{})};
+  void (local?bridge.command(localMainReadAction,args):act('phone.prepare',args)).then(value=>{
     if(!current())return;
     if(!value?.reviewHandle)throw Error('未取得这次目标的范围审阅，请重新核对。');
-    setPhoneStart(null);setPhoneReview({...value,documentEpoch});
+   if(input&&(typeof value.reviewHandle!=='string'||value.localModelFree!==true||value.readCurrentOnce!==true||
+     typeof value.requestId!=='string'||!value.requestId||value.reviewHandle===original||value.requestId===previous?.requestId||
+     value.mode!=='main_screen'||value.goal!==goal||value.toolLimit!==0||value.modelCallLimit!==0||
+     Object.hasOwn(value,'modelName')||Object.hasOwn(value,'provider')||!matchesLocalMainDraft(value,input)||
+     (previous?.originalDraft&&value.originalDraft.origin!==previous.originalDraft.origin)||
+     !Number.isSafeInteger(value.expiresInMs)||value.expiresInMs<1||!['notification','screen','capacity'].every(key=>
+       ['ready','blocked','unknown'].includes(obj(obj(value.conditions)[key]).state))))throw Error('未取得原目标的本机只读核对。没有用模型或其他任务替代。');
+    // Re-preparing checks the original goal again but does not erase its retained refusal.
+    setPhoneStart(null);setPhoneReview({...value,documentEpoch,localStartRefusal});
   }).catch(error=>{
     if(!current())return;const message=error instanceof Error?error.message:String(error);
     if(original)setPhoneReviewError({handle:original,message});else setLocalError(message);
@@ -3777,6 +3832,12 @@ export default function App(){
   if(document.hidden||phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;
   if(manualFirstMain&&reviewed.manualFirstMainAvailable!==true)return;
   if(readCurrentOnce!==(reviewed.readCurrentOnce===true)||readCurrentOnce&&!manualFirstMain)return;
+  if(reviewed.localModelFree===true){
+   const input=currentLocalMainRead(bridge.getState(),reviewed.goal,reviewed.localStartRefusal);
+   if(!input||reviewed.documentEpoch!==bridge.getDocumentEpoch()||!matchesLocalMainDraft(reviewed,input)||watchReviewedHandle){
+    setPhoneReviewError({handle:reviewed.reviewHandle,message:'原本机只读核对已变化，请重新核对。没有提交其他任务。'});return;
+   }
+  }
   const backgroundWatch=!manualFirstMain&&reviewed.mode==='background'&&reviewed.firstBackgroundResultWatchAvailable===true&&!!reviewed.conversationId;
   if(watchReviewedHandle&&(watchReviewedHandle!==reviewed.reviewHandle||!manualFirstMain&&!backgroundWatch))return;
   const startWindow=phoneWindow.current,startDoc=bridge.getDocumentEpoch();const here=()=>!document.hidden&&phoneWindow.current===startWindow&&bridge.getDocumentEpoch()===startDoc;
@@ -3795,7 +3856,9 @@ export default function App(){
  useEffect(()=>{const receipt=phoneDraft.startReceipt;if(receipt&&['accepted','rejected','unknown'].includes(receipt.status)){const original=phoneStartReceipt(receipt);setPhoneStart(original);if(original.status!=='unknown'&&phoneReview&&phoneReview.reviewHandle===receipt.reviewHandle)setPhoneReview(receipt.recheckReview===phoneReview.reviewHandle?{...phoneReview,documentEpoch:undefined}:null)}},[phoneDraft.startReceipt?.status,phoneDraft.startReceipt?.reviewHandle,phoneDraft.startReceipt?.requestId,phoneDraft.startReceipt?.draftRequestId,phoneDraft.startReceipt?.canRetire,phoneDraft.startReceipt?.taskId,phoneDraft.startReceipt?.admitted,phoneDraft.startReceipt?.admissionState,phoneDraft.startReceipt?.runId,phoneDraft.startReceipt?.epoch,phoneOwner]);
  const send=()=>{
   if(intent==='chat'&&teamReplacements.current.has(draftKey)){setLocalStatus('请先核对编组更换，原草稿没有发送。');return;}
-  if(displayDraftSettling||reportDraftFlight.current)return;if(keepOriginalPhoneGoal){setLocalStatus('这段目标已有原启动回执。可以核对，或编辑成一个新目标。');return}if(intent!=='chat'&&['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)){setLocalStatus('请先核对所选原话。这份手机目标没有提交。');return}if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(displayBlocked){setLocalError(displayBlocked);return}if(!composerModelName&&!localDisplayReady){if(can('setup.read'))void openModelSetup();else void navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
+  if(displayDraftSettling||reportDraftFlight.current)return;if(keepOriginalPhoneGoal){setLocalStatus('这段目标已有原启动回执。可以核对，或编辑成一个新目标。');return}if(intent!=='chat'&&['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)){setLocalStatus('请先核对所选原话。这份手机目标没有提交。');return}if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(displayBlocked){setLocalError(displayBlocked);return}
+  if(shownLocalMainRead){preparePhone(undefined,shownLocalMainRead);return}
+  if(!composerModelName&&!localDisplayReady){if(can('setup.read'))void openModelSetup();else void navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
   if(!can('composer.send')||state.chatSubmitting||pendingOriginal)return;
   if(!localDisplayReady&&ordinaryDraftRevision===null){setLocalError('请等本机核对当前草稿，再发送。');return;}
   const settled=registration.begin();if(!settled)return;
@@ -7580,7 +7643,7 @@ export default function App(){
    </div>}
    {route==='chat'&&<ConversationReadingNav {...readingNav}/>}
    {route==='chat'&&chatAttention&&<Button variant="ghost" className="pw-chat-attention" data-task-id={chatAttention.id} trailingIcon={IconChevronRight} aria-label={`${can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}：${chatAttention.goal}`} disabled={taskOpening} onClick={event=>openConversationWorkRow(chatAttention,event.currentTarget,true)}><span className="pw-chat-attention-copy"><small>{can('tasks.review')?taskActionLabel(chatAttention):'查看任务'}</small><b>{chatAttention.goal}</b></span></Button>}
-   {route==='chat'&&ready&&messages.some(m=>!m.firstHostRequestLocal)&&!composerModelName&&!displayGate&&<div className="pw-butler-model-setup">{modelSetupAction}</div>}
+   {route==='chat'&&ready&&messages.some(m=>!m.firstHostRequestLocal)&&!composerModelName&&!displayGate&&!shownLocalMainRead&&<div className="pw-butler-model-setup">{modelSetupAction}</div>}
    {setupFeedback&&setupUse&&<div className="pw-butler-model-setup" aria-label="原输入的模型">
     <p role="status">{modelSetupUseMessage(setupFeedback.choice,setupUse)}</p>
     {setupUse!=='inherited'&&setupUse!=='explicit'&&!channelPhoneModel&&
@@ -7604,12 +7667,14 @@ export default function App(){
     <Button variant="ghost" size="small" leadingIcon={IconTeam} onClick={()=>void attachCarriedRoster(carriedTeamRoster)}>也关联这次用的编组</Button>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
-     contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={firstDraftConnect?
+     contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={shownLocalMainRead?undefined:firstDraftConnect?
        <Button variant="secondary" size="small" className="min-h-11" leadingIcon={IconModel} data-workspace-entry="connect-model"
         disabled={modelSetupOpening||state.modelSelectionBusy||state.modelSaving||state.modelTesting||draftSwitching||reportDraftSwitching||
           state.chatSubmitting||registration.waiting||firstHostSaving||composer.saving===true||ordinaryDraftRevision===null}
         aria-busy={modelSetupOpening||undefined} onClick={()=>void openModelSetup(true)}>{modelSetupOpening?'正在核对…':'连接模型'}</Button>
-       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={!!pendingDraftTeam||keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={pendingDraftTeam?'先核对编组更换':keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
+       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined}
+     visibleSendLabel={shownLocalMainRead?'核对本机只读一次':undefined}
+     sendDisabled={!!pendingDraftTeam||keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady&&!shownLocalMainRead)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={pendingDraftTeam?'先核对编组更换':keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady&&!shownLocalMainRead?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容" data-chat-add-content="true"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>
     {intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting||!draftKey||fileAttachmentPickerLaunch.current?.settled===false} onClick={openRegularAttachmentPicker}>添加附件</Button>}
     {referenceShelfAvailable&&<Button variant="ghost" leadingIcon={IconBook} aria-haspopup="dialog" onClick={openChatReference}>引用本对话备忘</Button>}
@@ -7619,7 +7684,7 @@ export default function App(){
     }}>选择协作编组</Button>}{can('voice.start')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!state.phoneSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'})}}>{isListening?'结束听写':'语音输入'}</Button>}</Popover></PopoverTrigger>
     <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} cloudGoalLabel={state.conversationId?'带目标去我的主机':'保存到本机（不发送）'} onCloudGoal={!firstHostSave&&!firstHostSaving&&intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.length<=(state.conversationId?8000:4000)&&
       (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
-   </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
+   </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')&&!shownLocalMainRead||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
      <BlankPhoneOriginal enabled={(route==='butler'||route==='chat')&&ready&&!taskOpen&&!workOpen&&!commandOpen&&
        !preparationTarget&&!phoneReview&&!phoneReviewPending&&!draftSwitching&&!reportDraftSwitching&&!voiceReview&&!isListening}
@@ -8946,7 +9011,7 @@ export default function App(){
    <p role="status"><strong>{drawerStopCopy.title}</strong>{drawerStop.phase!=='checking'&&<>。{drawerStopCopy.note}</>}</p>
    {drawerStop.phase!=='checking'&&taskLayer!=='process'&&can('history.read')&&<Button variant="ghost" size="small" onClick={seeDrawerStopProcess}>到过程核对</Button>}
   </div>}{drawerCurrentTask&&selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={recheckSelectedWork}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&drawerCurrentTask&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{!compactChatQuestion&&taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{compactChatQuestion?questionBody:selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{ownerRequestUnavailable?(ownerRequestAnotherRound?'这件工作已进入另一轮。可返回原话，或到「我的工作」查看当前进展。':'暂未核对到这条消息打开的原轮次。可返回原话。'):chatReportVisit?'暂未核对到这条汇报的原工作，可返回原对话。':originalLiveProcess?'原回复的执行窗口已变化，没有打开其他轮次。可返回原对话。':taskLayer==='homeReport'?(route==='tasks'?'暂未核对到这份原汇报，请返回「我的工作」重试。':'原工作或汇报已变化，请返回管家首页核对。'):taskId&&taskErrors[taskId]||(expectedProjectRun?'原运行暂不可读取，没有用其他轮次代替。':'原任务暂不可读取，请重新读取原历史窗口。')}</p>{taskLayer!=='homeReport'&&!ownerRequestUnavailable&&!noticeBinding&&!expectedProjectRun&&!chatReportVisit&&!originalLiveProcess&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{!compactChatQuestion&&selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
-  <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={finishPhoneReviewExit}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PhoneScopeReview key={phoneExit.generation} shown={phoneDisplay} live={phoneReview} pending={phoneReviewPending} unknown={phoneStart?.status==='unknown'} onClose={()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onStart={can('phone.start')?startReviewedPhone:undefined} onCheck={can('phone.prepare')?preparePhone:undefined} onSettings={can('phone.review.settings')?openPhoneReviewSettings:undefined} onPlace={canVisitReviewedPlace?visitReviewedPhonePlace:undefined} error={phoneReviewError?.handle===phoneReview?.reviewHandle?phoneReviewError?.message:undefined}/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.draftRequestId?blankReceiptActions(phoneStart):phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
+  <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={finishPhoneReviewExit}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PhoneScopeReview key={phoneExit.generation} shown={phoneDisplay} live={phoneReview} pending={phoneReviewPending} unknown={phoneStart?.status==='unknown'} onClose={()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onStart={can('phone.start')?startReviewedPhone:undefined} onCheck={can(phoneReview?.localModelFree===true?localMainReadAction:'phone.prepare')?preparePhone:undefined} onSettings={can('phone.review.settings')?openPhoneReviewSettings:undefined} onPlace={canVisitReviewedPlace?visitReviewedPhonePlace:undefined} error={phoneReviewError?.handle===phoneReview?.reviewHandle?phoneReviewError?.message:undefined}/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.draftRequestId?blankReceiptActions(phoneStart):phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
   <SettingsDialog isOpen={newProjectOpen||newFileOpen} title={createKind==='project'?'新项目':'新文件'} onClose={closeCreate} closeLabel="关闭创建" className="pw-create-dialog">
    <form className="pw-create-form" onSubmit={event=>{event.preventDefault();if(!createBusy&&(createKind==='project'?projectName:newPath).trim())createObject()}}>
     <TextField label={createKind==='project'?'项目名称':'文件路径'} isDisabled={createBusy} value={createKind==='project'?projectName:newPath} onChange={createKind==='project'?setProjectName:setNewPath} placeholder={createKind==='project'?'输入项目名称':'例如 index.html'}/>

@@ -106,7 +106,7 @@ function sizeComposerEditor(measurement:ReturnType<typeof createTextareaMeasure>
  next.onfinish=()=>{if(animation.current===next){animation.current=null;next.cancel()}};
 }
 
-export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,continuationMode,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string}){
+export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,continuationMode,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel,visibleSendLabel}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string;visibleSendLabel?:string}){
  const editor=useRef<HTMLTextAreaElement>(null);
  const allowed=useMotionAllowed(),resizeAnimation=useRef<Animation|null>(null),editorHeight=useRef(0);
  const editorOwner=useRef(composerKey),measurement=useRef<ReturnType<typeof createTextareaMeasure>|null>(null);
@@ -165,7 +165,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
       <div className="afa-toolbar">
        <AnimatePresence key={`controls:${composerKey}`} initial={false} mode="popLayout">
         {onVoice&&!busy&&(!hasContent||listening)&&<ComposerControl key="voice"><ToolButton label={listening?'结束听写':'语音输入'} icon="mic" onClick={onVoice} disabled={disabled||submitting}/></ComposerControl>}
-        {hasContent&&!listening&&<ComposerControl key="send"><PressButton compact aria-label={submitting?'正在登记':sendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}>{submitting?<ProgressCircle isIndeterminate size="sm" aria-label="正在登记输入"/>:<Icon name="arrow" size={18}/>}</PressButton></ComposerControl>}
+        {hasContent&&!listening&&<ComposerControl key="send"><PressButton compact={!visibleSendLabel} aria-label={submitting?(visibleSendLabel?'正在核对':'正在登记'):sendLabel||visibleSendLabel||(busy?'补充给当前工作':'发送')} disabled={!canSend} onClick={onSend}>{submitting?<ProgressCircle isIndeterminate size="sm" aria-label={visibleSendLabel?'正在核对原目标':'正在登记输入'}/>:visibleSendLabel||<Icon name="arrow" size={18}/>}</PressButton></ComposerControl>}
         {busy&&onStop&&<ComposerControl key="stop"><button type="button" className="afa-stop pw-stop-motion" onClick={onStop} aria-label="停止当前回复"><span className="pw-stop-ring" aria-hidden="true"><ProgressCircle isIndeterminate size="md" aria-label="当前回复状态"/></span><span className="pw-stop-mark" aria-hidden="true"><IconStop size={12}/></span></button></ComposerControl>}
        </AnimatePresence>
       </div>

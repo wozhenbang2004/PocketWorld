@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.EngineApplication
 import dev.pocketengine.features.assistant.OwnerComposerState
+import dev.pocketengine.phone.reading.CurrentMainInspection
 import dev.pocketengine.ui.PocketWorldController
 import java.util.UUID
 import org.json.JSONObject
@@ -26,9 +27,14 @@ internal class PocketWebPhoneComposer(
     private data class PhoneReview(val goal: String, val mode: String, val tools: Int, val models: Int, val minutes: Int,
         val viewEpoch: Int, val expires: Long, val window: PocketWebWindowTicket, val composerKey: String,
         val conversation: String, val draftEpoch: Int, val draftRevision: Long, val reviewGeneration: Long, val originRevision: Long,
-        val modelRevision: Long, val privateOwner: Boolean, val linked: EngineApplication.ConversationPhoneStartReview? = null,
+        val modelRevision: Long?, val privateOwner: Boolean, val linked: EngineApplication.ConversationPhoneStartReview? = null,
         val draft: EngineApplication.DraftPhoneStartReview? = null, val conditions: JSONObject? = null,
-        val firstMainPolicyRevision: Long = -1, val readCurrentOnce: Boolean = false)
+        val firstMainPolicyRevision: Long = -1, val readCurrentOnce: Boolean = false,
+        val localGoal: String? = null, val localWindow: (() -> Boolean)? = null,
+        val localInspection: EngineApplication.LocalMainInspectionReview? = null) {
+        fun linkedView(): JSONObject? = localInspection?.view() ?: linked?.view()
+        fun linkedPrivate(): Boolean = localInspection != null || linked != null
+    }
     private val main = Handler(Looper.getMainLooper())
     private val phoneReviews = mutableMapOf<String, PhoneReview>()
     // Main-thread invalidation also revokes a review already captured by a queued worker.
@@ -45,6 +51,14 @@ internal class PocketWebPhoneComposer(
         val last = controller.state.messages.lastOrNull { it.role == "user" } ?: return false
         return last.id == pin.message && last.sourceRevision == pin.version && last.textOnlyHandoffEligible &&
             PhoneDraftMessagePin.from(last.ownerOriginalLocator) == pin
+    }
+    /** From the already loaded exact owner message, not merely matching editor words. The native store validates its body digest. */
+    private fun exactLocalMainGoal(pin: PhoneDraftMessagePin?): String? {
+        if (pin == null || !phoneIntent || phoneExecutionMode != "main_screen" || pinLost || textElsewhere() ||
+            savingFirstOriginal != null || !pickedCurrent(pin)) return null
+        val last = controller.state.messages.lastOrNull { it.role == "user" } ?: return null
+        return last.content.takeIf { last.id == pin.message && last.sourceRevision == pin.version &&
+            it.trim() == phoneDraft.trim() && CurrentMainInspection.matchesGoal(it) }
     }
     /** Same native picked original goal only; no model, seal, body, or preparation is returned. */
     fun originalMainModelInputCurrent(phoneEpoch: Int, phoneRevision: Long, editTicket: Long): Boolean =
@@ -112,6 +126,8 @@ internal class PocketWebPhoneComposer(
         .put("firstCheckOnly",receipt?.let{checkFirstOnly(it,phoneDraft)}==true)
         .put("epoch", presentationEpoch).put("phone", phoneIntent).put("mode", phoneExecutionMode).put("startReceipt", receipt).put("channelOrigin", controller.hasChannelPhoneOrigin)
         .put("saveFirstOriginalReady",firstOriginalEligible())
+        // Eligibility is input identity; Android readiness, live reviews and admission are separate.
+        .putOpt("localMainReadOnceEligible", true.takeIf { source == "current" && exactLocalMainGoal(pin) != null })
     }
 
     private fun firstOriginalEligible():Boolean{
@@ -238,7 +254,11 @@ internal class PocketWebPhoneComposer(
             .put("message", if(keep) "草稿文字未修改，已关联你刚选的这条原话。仍须审阅后才会提交。" else "原请求已放入手机目标草稿。核对完整目标、联系人和内容，再审阅执行位置与范围；尚未启动或发送。")
     }
 
-    fun prepare(id: String, args: JSONObject) {
+    fun prepare(id: String, args: JSONObject) = preparePhoneReview(id, args, null)
+    fun prepareLocalMainInspection(id: String, args: JSONObject, originalWindow: () -> Boolean) =
+        preparePhoneReview(id, args, originalWindow)
+
+    private fun preparePhoneReview(id: String, args: JSONObject, localWindow: (() -> Boolean)?) {
         checkedPayload(args, setOf("goal", "mode", "epoch", "originalDraft"))
         require(controller.webPrivateOwnerVisible() && requiredInt(args, "epoch") == presentationEpoch) { "原手机输入窗口已变化，请重新核对保留草稿" }
         val goal = requiredString(args, "goal"); val mode = requiredString(args, "mode")
@@ -264,37 +284,46 @@ internal class PocketWebPhoneComposer(
             check(prior.optString("status") !in setOf("pending","unknown") || !prior.has("requestId") && !prior.has("draftRequestId") && prior.optString("goal").trim()!=goal.trim()){"原手机请求的启动结果待核对，请先查询原请求。草稿仍保留。"}
             check(!(prior.has("draftRequestId") && prior.optString("status")=="accepted" && !prior.optBoolean("admitted") && prior.optString("goal").trim()==goal.trim())){"这个目标已有原任务，请打开该任务；没有重复提交。"}
         }
-        clearReviews()
-        val handle = UUID.randomUUID().toString()
         val conversation = controller.state.conversationId.orEmpty()
         val pin=picked
+        val localGoal = if (localWindow != null) {
+            val noAdmission = prior == null || receiptHere(prior) && prior.opt("localModelFree") == true &&
+                prior.opt("status") == "rejected" && !prior.has("taskId") && !prior.has("runId") &&
+                prior.optLong("draftRevision", -1) == phoneDraftRevision && prior.optInt("draftEpoch", -1) == presentationEpoch
+            check(localWindow() && !channel && mode == "main_screen" && noAdmission) { "请回到原私人消息核对本机一次只读；已有请求只核对原回执" }
+            exactLocalMainGoal(pin) ?: error("原私人消息与这次只读目标已变化；没有改为普通手机任务")
+        } else null
+        clearReviews()
+        val handle = UUID.randomUUID().toString()
         check(!pinLost && (pin == null || !channel && pin.conversation == conversation && pickedCurrent(pin))) { "所选的原请求已换版、移出窗口或不再是最新交代。原草稿保留，没有关联其他消息" }
-        val modelScope = if (channel) null else controller.conversationModelScope()
-        val modelStatus = controller.nativeModelSelection().status()
-        check(!modelStatus.pending()) { "请等待原模型设置回执" }
-        val original = PhoneReview(goal, mode, controller.newTaskToolBudget,
-            controller.newTaskModelBudget, controller.newTaskScopeMinutes,
+        val modelScope = if (channel || localGoal != null) null else controller.conversationModelScope()
+        val modelStatus = if (localGoal != null) null else controller.nativeModelSelection().status()
+        check(modelStatus?.pending() != true) { "请等待原模型设置回执" }
+        val original = PhoneReview(goal, mode, if (localGoal != null) 0 else controller.newTaskToolBudget,
+            if (localGoal != null) 0 else controller.newTaskModelBudget, controller.newTaskScopeMinutes,
             controller.composerViewEpoch, SystemClock.elapsedRealtime() + 120_000L, if (channel) captureWindow() else captureOwnerWindow(),
-            controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, reviewGeneration, controller.phoneOriginRevision, modelStatus.revision(), !channel)
-        // Account refresh/model resolution may use the network. Keep it off the WebView's main thread.
-        controller.runModelConnectionWork(Runnable {
+            controller.composerDraft?.key.orEmpty(), conversation, presentationEpoch, phoneDraftRevision, reviewGeneration, controller.phoneOriginRevision, modelStatus?.revision(), !channel,
+            localGoal = localGoal, localWindow = localWindow)
+        val changed = if (localGoal != null) "原私人消息或本机只读窗口已变化，请重新核对" else "原手机草稿或模型设置已变化，请重新核对"
+        val work = Runnable {
             val prepared = runCatching {
-                check(phoneReviewCurrent(original)) { "原手机草稿或模型设置已变化，请重新核对" }
+                check(phoneReviewCurrent(original)) { changed }
                 when {
+                    localGoal != null -> original.copy(localInspection = controller.prepareLocalMainInspection(conversation, localGoal, checkNotNull(pin).locator()))
                     channel -> original
                     conversation.isNotBlank() -> original.copy(linked = controller.prepareConversationPhoneStart(conversation, goal, mode, pin?.locator()))
                     else -> original.copy(draft = controller.prepareDraftPhoneStart(modelScope!!, goal, mode))
                 }.let { review ->
                     if (channel) review else {
                         val conditions = readConditions(mode)
-                        val readCurrentOnce = review.linked?.view()?.opt("readCurrentOnce") == true
-                        val firstMainPolicy = if (review.linked != null && mode == "main_screen" &&
+                        val readCurrentOnce = review.linkedView()?.opt("readCurrentOnce") == true
+                        val firstMainPolicy = if (review.linkedPrivate() && mode == "main_screen" &&
                             conditions.optJSONObject("screen")?.optString("state") == "ready" &&
                             (readCurrentOnce || dev.pocketengine.runtime.policy.OwnerIntent(goal).deviceReadAllowed())) controller.firstMainScreenPolicyRevision() else -1L
                         review.copy(conditions = conditions, firstMainPolicyRevision = firstMainPolicy, readCurrentOnce = readCurrentOnce)
                     }
                 }.also { review ->
-                    val native = review.linked?.view() ?: review.draft?.view()
+                    val native = review.linkedView() ?: review.draft?.view()
                     check(native == null || native.getInt("toolLimit") == original.tools &&
                         native.getInt("modelCallLimit") == original.models && native.getInt("scopeMinutes") == original.minutes) {
                         "原手机执行范围已变化，请重新核对；草稿仍保留"
@@ -305,11 +334,13 @@ internal class PocketWebPhoneComposer(
                 if (runCatching { phoneReviewCurrent(original) }.getOrDefault(false)) prepared.fold({ review ->
                     phoneReviews[handle] = review
                     complete(id, reviewView(handle, review), null)
-                }, { error -> complete(id, null, error.message ?: "本次手机模型暂不可核对，草稿仍保留") })
-                else complete(id, null, "原手机草稿或模型设置已变化，请重新核对；草稿仍保留")
+                }, { error -> complete(id, null, error.message ?: if (localGoal != null) "本机只读尚未核对，原话保留" else "本次手机模型暂不可核对，草稿仍保留") })
+                else complete(id, null, "$changed；草稿仍保留")
                 publishState()
             }
-        })
+        }
+        if (localGoal != null) controller.runLocalPhoneReview(work)
+        else controller.runModelConnectionWork(work)
     }
 
     private val preflight = PrivatePhoneStartConditions(controller, taskChannelSettings = true)
@@ -333,7 +364,7 @@ internal class PocketWebPhoneComposer(
             listOf("notification", "screen", "capacity").all { review.conditions?.optJSONObject(it)?.optString("state") == "ready" }
 
     private fun reviewView(handle: String, review: PhoneReview): JSONObject {
-        val shown = review.linked?.view() ?: review.draft?.view()
+        val shown = review.linkedView() ?: review.draft?.view()
         return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
             .putOpt("manualFirstMainAvailable", true.takeIf { review.firstMainPolicyRevision >= 0 })
             .putOpt("firstBackgroundResultWatchAvailable", true.takeIf { firstBackgroundResultWatchAvailable(review) })
@@ -396,8 +427,10 @@ internal class PocketWebPhoneComposer(
         (if (review.privateOwner) acceptsOwnerWindow(review.window) else acceptsWindow(review.window)) &&
         review.viewEpoch == controller.composerViewEpoch && review.composerKey == controller.composerDraft?.key.orEmpty() &&
         review.conversation == controller.state.conversationId.orEmpty() && review.draftEpoch == presentationEpoch && review.draftRevision == phoneDraftRevision &&
-        !controller.nativeModelSelection().status().pending() && review.modelRevision == controller.nativeModelSelection().status().revision() &&
-        review.tools == controller.newTaskToolBudget && review.models == controller.newTaskModelBudget && review.minutes == controller.newTaskScopeMinutes && review.reviewGeneration == reviewGeneration &&
+        (if (review.localGoal != null) review.localWindow?.invoke() == true && exactLocalMainGoal(picked) == review.localGoal
+            else !controller.nativeModelSelection().status().pending() && review.modelRevision == controller.nativeModelSelection().status().revision() &&
+                review.tools == controller.newTaskToolBudget && review.models == controller.newTaskModelBudget) &&
+        review.minutes == controller.newTaskScopeMinutes && review.reviewGeneration == reviewGeneration &&
         review.originRevision == controller.phoneOriginRevision
 
     private fun phoneReceiptIdentity(handle: String, review: PhoneReview): JSONObject = JSONObject()
@@ -405,7 +438,8 @@ internal class PocketWebPhoneComposer(
         .put("draftEpoch", review.draftEpoch).put("draftRevision", review.draftRevision)
         .put("composerKey", review.composerKey).put("composerEpoch", review.viewEpoch).put("draftConversationId", review.conversation)
         .also { identity ->
-            review.linked?.view()?.let { identity.put("requestId", it.getString("requestId")).put("conversationId", it.getString("conversationId")).put("ownerPickedMessage",it.optBoolean("ownerPickedMessage")) }
+            review.linkedView()?.let { identity.put("requestId", it.getString("requestId")).put("conversationId", it.getString("conversationId")).put("ownerPickedMessage",it.optBoolean("ownerPickedMessage")) }
+            if (review.localInspection != null) identity.put("localModelFree", true)
             review.draft?.view()?.let { identity.put("draftRequestId",it.getString("draftRequestId")) }
         }
 
@@ -600,7 +634,7 @@ internal class PocketWebPhoneComposer(
             "这次只读需单独确认，不能将主屏或其他任务切换为一次读取"
         }
         val firstMainPolicy = if (args.has("manualFirstMain")) {
-            require(requiredBoolean(args,"manualFirstMain") && review.linked != null && review.privateOwner && review.mode == "main_screen" &&
+            require(requiredBoolean(args,"manualFirstMain") && review.linkedPrivate() && review.privateOwner && review.mode == "main_screen" &&
                 review.firstMainPolicyRevision >= 0 && controller.firstMainScreenPolicyRevision() == review.firstMainPolicyRevision) {
                 "这次没有取得眼前主屏手动开始条件，原目标仍保留，没有改用普通开始"
             }
@@ -615,7 +649,7 @@ internal class PocketWebPhoneComposer(
             !watchFirstMainResult && requiredBoolean(args,"watchFirstBackgroundResult")) {
             "只能为这次原私聊的独立屏任务选择提醒"
         }
-        val privateRequest = review.privateOwner && (review.linked != null || review.draft != null)
+        val privateRequest = review.privateOwner && (review.linkedPrivate() || review.draft != null)
         require(!controller.state.phoneSubmitting && (privateRequest || controller.state.activeTaskId == null)) { "原输入仍在提交或渠道工作正占用，未重复开始" }
         val original = phoneReceiptIdentity(handle, review)
         val capacity = review.conditions?.optJSONObject("capacity")
@@ -626,7 +660,7 @@ internal class PocketWebPhoneComposer(
             publishState()
             return
         }
-        if(review.linked!=null&&phoneDraft.isNotBlank())heldLinkedGoal=linkedOwner(original)
+        if(review.linkedPrivate()&&phoneDraft.isNotBlank())heldLinkedGoal=linkedOwner(original)
         val completed: (JSONObject?, String?) -> Unit = { result, error ->
             val retained=phoneStartReceipt
             val knownChat=original.has("requestId") && retained?.optString("status")=="accepted" &&
@@ -641,7 +675,8 @@ internal class PocketWebPhoneComposer(
                 publishState()
             } else complete(id,null,"原启动窗口已变化，未覆盖已核对的回执")
         }
-        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, watchFirstMainResult, watchFirstBackgroundResult, completed) }
+        val admitted = review.localInspection?.let { controller.startLocalMainInspection(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, completed) }
+            ?: review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, watchFirstMainResult, watchFirstBackgroundResult, completed) }
             ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
             ?: controller.startReviewedPhone(review.goal, review.mode, { phoneReviewCurrent(review) }, completed)
         if (admitted) {

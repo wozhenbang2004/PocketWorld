@@ -29,18 +29,30 @@ final class ConversationPhoneHandoff {
         if(source.has("conversationTitle"))text(source,"conversationTitle",0,200);
         if(goal==null||goal.trim().isEmpty()||goal.trim().length()>4000||!StandardCharsets.UTF_8.newEncoder().canEncode(goal))throw new IllegalArgumentException("手机任务目标需要1–4000字完整文字");
         if(!Set.of("main_screen","background").contains(mode))throw new IllegalArgumentException("请选择原手机执行位置");
-        fields(facts,Set.of("modelName","provider","toolLimit","modelCallLimit","scopeMinutes","modelSelectionRevision"));
-        text(facts,"modelName",1,2000);text(facts,"provider",1,100);
-        TaskExecutionScope.exactInt(facts,"toolLimit",1,TaskExecutionScope.MAX_TOOLS);
-        TaskExecutionScope.exactInt(facts,"modelCallLimit",1,TaskExecutionScope.MAX_MODEL_CALLS);
+        if(localMainInspection(facts)){
+            fields(facts,Set.of("localModelFree","toolLimit","modelCallLimit","scopeMinutes"));
+            if(!Boolean.TRUE.equals(facts.opt("localModelFree"))||!"main_screen".equals(mode)||
+                    !dev.pocketengine.phone.reading.CurrentMainInspection.matchesGoal(goal)||
+                    !("sha256:"+summaryDigest(goal)).equals(source.getString("bodyFingerprint")))
+                throw new SecurityException("本机一次只读必须使用当前这条私人原话");
+            TaskExecutionScope.exactInt(facts,"toolLimit",0,0);
+            TaskExecutionScope.exactInt(facts,"modelCallLimit",0,0);
+        }else{
+            fields(facts,Set.of("modelName","provider","toolLimit","modelCallLimit","scopeMinutes","modelSelectionRevision"));
+            text(facts,"modelName",1,2000);text(facts,"provider",1,100);
+            TaskExecutionScope.exactInt(facts,"toolLimit",1,TaskExecutionScope.MAX_TOOLS);
+            TaskExecutionScope.exactInt(facts,"modelCallLimit",1,TaskExecutionScope.MAX_MODEL_CALLS);
+            TaskExecutionScope.exactLong(facts,"modelSelectionRevision",0,Long.MAX_VALUE);
+        }
         int minutes=TaskExecutionScope.exactInt(facts,"scopeMinutes",0,120);
         if(minutes!=0&&minutes!=30&&minutes!=120)throw new IllegalArgumentException("任务期限只能使用本次审阅选项");
-        TaskExecutionScope.exactLong(facts,"modelSelectionRevision",0,Long.MAX_VALUE);
         JSONObject result=new JSONObject().put("format",REVIEW).put("requestId",requestId).put("taskId",requestId)
                 .put("conversationId",source.getString("conversationId")).put("source",new JSONObject(source.toString()))
                 .put("goal",goal.trim()).put("executionMode",mode).put("reviewFacts",new JSONObject(facts.toString()));
         return result.put("reviewDigest",digest(result));
     }
+
+    static boolean localMainInspection(JSONObject facts){return facts!=null&&facts.has("localModelFree");}
 
     static JSONObject picked(JSONObject review,JSONObject locator)throws Exception {
         if(!REVIEW.equals(review.optString("format")))throw new SecurityException("缺少原手机目标审阅");

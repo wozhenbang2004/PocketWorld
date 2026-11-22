@@ -101,6 +101,7 @@ public final class PhoneRunService extends Service {
         return wait!=null&&firstMainWait==wait&&!destroyed&&waitingForUser&&ownerControl==wait.owner()&&
                 runningConfig==wait.config()&&wait.task().equals(runningId)&&wait.run().equals(runningRunId)&&wait.epoch()==runningEpoch&&
                 wait.owner().matchesHostRun(wait.task(),wait.run(),wait.epoch())&&!wait.owner().isCancelled()&&!wait.owner().isPaused()&&
+                (wait.config()!=null||wait.inspection()&&app.ownsLocalMainInspectionStart(wait.task(),wait.run(),wait.epoch(),wait.owner()))&&
                 app.retainsShownPhoneControl(wait.task(),wait.owner());
     }
     private boolean confirmFirstMain(FirstMainWait wait,FirstMainScreenWindow page){
@@ -318,7 +319,9 @@ public final class PhoneRunService extends Service {
             return START_NOT_STICKY;
         }
         if(runningId!=null)return START_NOT_STICKY;
-        if(control==null||config==null){settleForegroundOwnership(startId);return START_NOT_STICKY;}
+        boolean localInspection=config==null&&START.equals(intent.getAction())&&
+                app.ownsLocalMainInspectionStart(id,intent.getStringExtra("phoneRunId"),intent.getIntExtra("phoneEpoch",-1),control);
+        if(control==null||config==null&&!localInspection){settleForegroundOwnership(startId);return START_NOT_STICKY;}
         var admitted=control.hostRunIdentity();
         if(admitted==null||!admitted.taskId().equals(id)){settleForegroundOwnership(startId);return START_NOT_STICKY;}
         // Keep the admitted owner even if the first task read fails before the
@@ -331,16 +334,17 @@ public final class PhoneRunService extends Service {
                     Boolean.TRUE.equals(task.opt("originalNoticePrivateLocal"))&&runId.equals(intent.getStringExtra("phoneRunId"))&&
                     epoch==intent.getIntExtra("phoneEpoch",-1)&&control.matchesHostRun(id,runId,epoch)?control:null;
             boolean inspection=TaskStore.firstMainInspectionMarked(task);
-            boolean first=TaskStore.firstMainScreenPending(task)||inspection||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
+            boolean first=localInspection||TaskStore.firstMainScreenPending(task)||inspection||intent.getBooleanExtra(TaskStore.FIRST_MAIN_SCREEN,false);
             if(first){
                 long policy=-1;
                 if(START.equals(intent.getAction())&&epoch==1&&runId.equals(intent.getStringExtra("phoneRunId"))&&epoch==intent.getIntExtra("phoneEpoch",-1))
                     try{
                         TaskStore.FirstMainPreparation preparation=app.tasks.firstMainPreparation(control);
-                        if(preparation.inspection()==inspection)policy=preparation.policy();
+                        if(preparation.inspection()==inspection&&preparation.localModelFree()==localInspection&&(!localInspection||inspection))
+                            policy=preparation.policy();
                     }catch(Exception unavailable){/* A durable first start never falls through on unknown. */}
                 waitingForUser=true;
-                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,inspection,new AtomicBoolean());firstMainWait=hold;
+                FirstMainWait hold=new FirstMainWait(id,runId,epoch,control,config,runningGoal,startId,policy,inspection||localInspection,new AtomicBoolean());firstMainWait=hold;
                 startLeaseWatch(id,runId,epoch,control);startTaskForeground(task);
                 // The ordinary Service already created its task channel. Queue this once before
                 // presenting the owner's first-screen control, without blocking that control on success.
@@ -351,7 +355,7 @@ public final class PhoneRunService extends Service {
                     });}catch(java.util.concurrent.RejectedExecutionException closed){/* This optional choice never changes the start. */}
                 }
                 var overlay=PhoneAccessibilityService.get();
-                if(inspection&&(policy<0||overlay==null)){
+                if((inspection||localInspection)&&(policy<0||overlay==null)){
                     // Do not wait for a new service or imply a control was shown. This
                     // exact native START has no usable first-offer proof at this point.
                     if(mainProgressOwner==control)finishFirstMainInspectionUnavailable(hold,
