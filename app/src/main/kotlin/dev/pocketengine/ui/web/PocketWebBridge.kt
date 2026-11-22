@@ -499,7 +499,7 @@ internal class PocketWebBridge(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
-            "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst",
+            "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
@@ -853,6 +853,10 @@ internal class PocketWebBridge(
                 checkedPayload(args, setOf("projectId","path","version","versions"));requireFile(args)
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到这个正式项目文件再比较" }
                 complete(id, dev.pocketengine.ui.originalHistoryComparison(controller.state.fileHistory,requiredString(args,"projectId"),checkedPath(args),requiredInt(args,"version"),requiredString(args,"versions")),null,retainValue=false)
+                return
+            }
+            if (action == "composer.team.replace") {
+                replaceOriginalComposerTeam(id, args)
                 return
             }
             if (action in PocketWebWorkSearch.COMMANDS) {
@@ -2790,6 +2794,40 @@ internal class PocketWebBridge(
         commandReceipts[id] = identity to replay
         while (commandReceipts.size > 128) commandReceipts.remove(commandReceipts.keys.first())
         emit(response)
+    }
+
+    private fun replaceOriginalComposerTeam(id:String, args:JSONObject) {
+        checkedPayload(args,setOf("key","epoch","revision","fromTeamId","teamId"))
+        val key=requiredString(args,"key"); val epoch=requiredInt(args,"epoch"); val revision=requiredLong(args,"revision")
+        val source=requiredString(args,"fromTeamId"); val target=requiredString(args,"teamId")
+        val uuid=Regex("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+        require(source!=target&&uuid.matches(source)&&uuid.matches(target)&&epoch>=0&&revision>0) { "原编组或草稿身份无效" }
+        val window=captureWindow(); val document=documentId
+        fun current()=!closed&&document!=null&&documentId==document&&acceptsWindow(window)&&section==null&&taskViewId==null&&
+            !phoneComposer.intent&&controller.webPrivateOwnerVisible()
+        check(current()&&controller.matchesComposerTeamReplacement(key,epoch,revision,source)) { "原草稿或编组已变化，未更换" }
+        val module=controller.nativeButlerHost().features.module("teams") as? dev.pocketengine.features.teams.TeamsModule
+            ?:error("原编组不可读取，未更换")
+        val recheck="请在原草稿核对当前编组；没有发送，也没有重试。"
+        controller.runPluginCatalogWork {
+            val selected=runCatching { module.ownerDraftRoster(target) }
+            main.post {
+                if(!current()||!controller.matchesComposerTeamReplacement(key,epoch,revision,source)) {
+                    complete(id,null,"原草稿或编组已变化，未更换",retainValue=false,replayHint=recheck); return@post
+                }
+                val roster=selected.getOrElse { failure ->
+                    complete(id,null,failure.message?:"所选编组不可核对，未更换",retainValue=false,replayHint=recheck)
+                    return@post
+                }
+                try {
+                    controller.replaceComposerTeam(key,epoch,revision,source,roster,::current) { result,error ->
+                        complete(id,result,error,"outcome_unknown",retainValue=false,replayHint=recheck)
+                        publishState()
+                    }
+                    publishState()
+                } catch(_:Exception) { complete(id,null,recheck,"outcome_unknown",retainValue=false,replayHint=recheck) }
+            }
+        }
     }
 
     private fun ownerTeamResultWindow(task: String): () -> Boolean {

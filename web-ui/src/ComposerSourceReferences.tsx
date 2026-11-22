@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
-import { IconQuote } from './icons';
+import { IconChevronRight, IconQuote, IconTeam } from './icons';
 import { ComposerQuoteReview, type ComposerQuoteSelection, type StoredQuoteReview } from './ComposerQuoteReview';
 import { draftQuoteKey, draftQuotePin, draftQuoteView, loadedQuoteReceipt, storedDraftQuote, storedDraftQuoteCurrent, type DraftQuotePin, type StoredDraftQuoteRead } from './composer-quote-review';
 import './composer-context.css';
@@ -85,17 +85,31 @@ export function useComposerReferenceRemoval(composer: Data, disabled: boolean, k
 }
 
 /** Reuse the existing draft disclosure for explicitly selected work objects. */
-export function ComposerObjectReferences({ composer, disabled }: { composer: Data; disabled: boolean }) {
+export function ComposerObjectReferences({ composer, disabled, teamChoice }: {
+  composer: Data; disabled: boolean; teamChoice?: { id:string; disabled:boolean; open:()=>void };
+}) {
   const refs: Data[] = Array.isArray(composer.objectRefs) ? composer.objectRefs : [];
+  const pinned=teamChoice?refs.findIndex(ref=>ref.kind==='team'&&ref.id===teamChoice.id):-1;
+  const team=pinned<0?null:refs[pinned], other=refs.flatMap((ref,index)=>index===pinned?[]:[{ref,index}]);
   const removal = useComposerReferenceRemoval(composer, disabled, 'object');
   if (!refs.length && !removal.error) return null;
   const kinds: Record<string, string> = { work: '工作', project: '项目', artifact: '文件', team: '团队' };
+  const remove=(ref:Data,index:number)=><Button variant="ghost" size="small" className="pw-composer-context-remove"
+    disabled={disabled || removal.busy || removal.unknown} onClick={() => removal.remove(index)} aria-label={`移除关联：${ref.label}`}>移除</Button>;
   return <section className="pw-composer-context" aria-label="这条消息关联的对象">
-    {refs.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="object-references" title={`关于 · ${refs.map(ref => ref.label).join('、')}`} description={composer.saving===true ? "已在当前草稿关联，本机保存待确认。" : "这是这份草稿的关联；发送时会核对所选对象。"}>
+    {team&&teamChoice&&<div className="pw-composer-context-row">
+      <Button variant="ghost" size="small" className="pw-composer-context-object pw-composer-context-read" leadingIcon={IconTeam} trailingIcon={IconChevronRight}
+        data-workspace-entry="draft-team-choice" aria-label={`更换协作编组，当前：${team.label}`}
+        disabled={teamChoice.disabled||removal.busy||removal.unknown} onClick={teamChoice.open}>
+        <span className="pw-composer-context-excerpt">协作编组 · {String(team.label)}</span>
+      </Button>
+      {remove(team,pinned)}
+    </div>}
+    {other.length > 0 && <Accordion className="pw-composer-context-disclosure"><AccordionItem id="object-references" title={`关于 · ${other.map(({ref}) => ref.label).join('、')}`} description={composer.saving===true ? "已在当前草稿关联，本机保存待确认。" : "这是这份草稿的关联；发送时会核对所选对象。"}>
       <div className="pw-composer-context-scroll" role="region" aria-label="关联对象清单" tabIndex={0}>
-        {refs.map((ref, index) => <div className="pw-composer-context-row" key={`${ref.kind}:${ref.id}`}>
+        {other.map(({ref, index}) => <div className="pw-composer-context-row" key={`${ref.kind}:${ref.id}`}>
           <div className="pw-composer-context-object"><strong>{String(ref.label)}</strong><p className="pw-composer-context-hint">{kinds[ref.kind] || '对象'}{ref.kind==='artifact'?' · 固定版本'+(typeof ref.sha256==='string'&&/^[a-f0-9]{64}$/.test(ref.sha256)? ` ${ref.sha256.slice(0,12)}`:''):ref.kind==='work'?' · 当前执行回合':''}</p></div>
-          <Button variant="ghost" size="small" className="pw-composer-context-remove" disabled={disabled || removal.busy || removal.unknown} onClick={() => removal.remove(index)} aria-label={`移除关联：${ref.label}`}>移除</Button>
+          {remove(ref,index)}
         </div>)}
         <p className="pw-composer-context-hint">关联对象保留在这份草稿中，发送前可以移除。</p>
       </div>

@@ -1763,6 +1763,48 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(!replaced)next.put(selected)
         model.editObjectRefs(key,revision,next);publishComposer();scheduleComposerSave()
     }
+    internal fun matchesComposerTeamReplacement(key:String, viewEpoch:Int, revision:Long, fromTeamId:String):Boolean {
+        val model=ownerComposer?:return false
+        val draft=model.active()
+        val conversation=state.conversationId
+        if(!webPrivateOwnerVisible()||webTaskViewId!=null||conversationReader!=null||hasChannelPhoneOrigin||
+            state.filePath!=null||attachmentOutcomes.state.open||state.chatAttachmentPickerOpen||queuedInputsPage!=null||
+            state.chatBusy||state.chatSubmitting||state.phoneSubmitting||state.listening||voiceInput.active()||
+            voiceInput.snapshot().optBoolean("reviewAvailable")||firstHostSave!=null||
+            draft.key!=key||draft.revision!=revision||chatViewEpoch!=viewEpoch||draft.text.isBlank()||draft.voiceText.isNotEmpty())return false
+        val ordinary=if(conversation==null)ordinaryNewAttachmentDraft(draft) else
+            draft.key=="conversation:$conversation"&&draft.conversationId==conversation&&model.independentReportFollowUpKey()!=key&&
+                model.pending().none { it.draftKey==key }
+        if(!ordinary)return false
+        val refs=draft.objectRefs().objects()
+        return refs.none { it.opt("kind")=="work" }&&refs.filter { it.opt("kind")=="team" }.singleOrNull()?.opt("id")==fromTeamId
+    }
+
+    internal fun replaceComposerTeam(key:String, viewEpoch:Int, revision:Long, fromTeamId:String,
+                                     selected:JSONObject, current:()->Boolean, done:(JSONObject?,String?)->Unit) {
+        check(current()&&matchesComposerTeamReplacement(key,viewEpoch,revision,fromTeamId)) { "原草稿或编组已变化，未更换" }
+        val model=ownerComposer?:error("原草稿尚未读取")
+        val teamId=selected.getString("id")
+        require(selected.opt("kind")=="team"&&teamId!=fromTeamId) { "请选择另一个已核对的编组" }
+        val next=JSONArray()
+        model.active().objectRefs().objects().forEach { ref ->
+            next.put(if(ref.opt("kind")=="team"&&ref.opt("id")==fromTeamId)selected else ref)
+        }
+        // One original draft CAS; text, attachments and every other reference are kept by editObjectRefs.
+        val updated=model.editObjectRefs(key,revision,next)
+        publishComposer()
+        persistComposer(model) { failure ->
+            if(!current()||ownerComposer!==model||model.activeKey()!=key||chatViewEpoch!=viewEpoch) {
+                done(null,"原输入已离开，请回原草稿核对编组；没有发送")
+            } else {
+                val result=JSONObject().put("key",key).put("epoch",viewEpoch).put("fromRevision",revision)
+                    .put("revision",updated.revision).put("fromTeamId",fromTeamId).put("teamId",teamId)
+                if(failure==null)done(result.put("replaced",true).put("persisted",true),null)
+                else done(result.put("status","storage_unconfirmed"),null)
+            }
+        }
+    }
+
     internal fun removeComposerObject(key:String,viewEpoch:Int,revision:Long,index:Int) {
         check(webPrivateOwnerVisible()&&!state.chatSubmitting) { "请回到私人管家输入" }
         val model=ownerComposer?:error("原草稿尚未读取");val draft=model.active()

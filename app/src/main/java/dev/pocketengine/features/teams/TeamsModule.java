@@ -85,6 +85,30 @@ public final class TeamsModule implements EngineModule {
         }
     }
     private synchronized JSONObject definition(String id)throws Exception{JSONArray all=definitions();for(int i=0;i<all.length();i++)if(id.equals(all.getJSONObject(i).getString("id")))return new JSONObject(all.getJSONObject(i).toString());throw new SecurityException("原已配置团队不存在");}
+    /** Resolve the chosen ordinary saved roster for a draft edit, without reading any run or granting execution. */
+    public synchronized JSONObject ownerDraftRoster(String id)throws Exception {
+        JSONObject selected=null;
+        JSONArray all=definitions();
+        for(int i=0;i<all.length();i++){
+            JSONObject team=all.getJSONObject(i);
+            if(!id.equals(team.opt("id")))continue;
+            if(selected!=null)throw new SecurityException("原编组身份重复，未更换");
+            selected=team;
+        }
+        if(selected==null||!"collaborate".equals(selected.opt("mode"))||!"classic".equals(selected.optString("discussionFormat","classic"))
+                ||!selected.isNull("definitionKind")||selected.optBoolean("archived")||selected.has("nativeWorkProfileModels"))
+            throw new SecurityException("所选本机编组不可核对，未更换");
+        JSONArray members=selected.getJSONArray("members");
+        if(members.length()<1||members.length()>4)throw new SecurityException("原编组成员不可核对，未更换");
+        for(int i=0;i<members.length();i++){
+            JSONObject member=members.getJSONObject(i);
+            if(!"model".equals(member.optString("runner","model"))||!"phone".equals(member.optString("device","phone"))
+                    ||member.has("writeFiles")||member.has("remoteProduction"))
+                throw new SecurityException("这里只能换成本机模型协作编组，未更换");
+        }
+        return dev.pocketengine.features.assistant.OwnerObjectReferences.selected(
+                new JSONObject().put("kind","team").put("id",id),selected.getString("name"));
+    }
     /** Metadata only: test the selected saved native roster, not current or historical runs. */
     public synchronized boolean savedLocalTeamMissingDefault(String teamId)throws Exception {
         if(researchHost==null||parentHost==null)return false;

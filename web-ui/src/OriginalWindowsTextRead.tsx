@@ -18,6 +18,7 @@ type Received = { identity: string; requestDigest: string; content: string; byte
 const directoryKinds = { directory: '目录', file: '文件', reparse_point: '重解析点，未跟随', unsupported: '其他' };
 type DirectoryEntry = { name: string; kind: keyof typeof directoryKinds };
 type ReceivedDirectory = { identity: string; returned: number; truncated: boolean; entries: DirectoryEntry[]; linkedFileIndex?: number };
+type ReceivedFile = { original: Original; received: Received; path: string; position: number };
 
 /** Visible local tool row only. Native rechecks the actual Work, wire, claim and current peer. */
 function originalWindowsReadAt(task: TaskHeader, op: TaskOperation, tool: WorkspaceRead): Original | undefined {
@@ -145,6 +146,25 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
 const displayText = (content: string) => content.replace(/\r\n?/g, '\n').replace(/\p{C}/gu, ch => ch === '\n' || ch === '\t' ? ch : '�');
 const sameReceived = (a: Received, b: Received) => a.identity === b.identity && a.content === b.content;
 
+/** Several reads in one original grant/allocation can be distinct authenticated Windows jobs. */
+function receivedWindowsFileChoices(task: TaskHeader, reads: TaskOperation[], page: AuditPage): ReceivedFile[] | undefined {
+  const files: ReceivedFile[] = [], jobs = new Set<string>();
+  let workspace: string | undefined;
+  for (const operation of reads) {
+    const original = originalWindowsTextAt(task, operation);
+    const read = original && receivedOriginalWindowsReadAt(task, operation, original, page);
+    const received = read && receivedWindowsText(read);
+    const path: unknown = read?.args?.path, position = operation.position;
+    if (!original || !read?.workspace || !received || typeof path !== 'string' ||
+      typeof position !== 'number' || !Number.isSafeInteger(position) || position < 1 || jobs.has(read.job) ||
+      (workspace !== undefined && read.workspace !== workspace)) return;
+    workspace = read.workspace;
+    jobs.add(read.job);
+    files.push({ original, received, path, position });
+  }
+  return files.sort((a, b) => a.position - b.position);
+}
+
 /** Presentation only, after the complete original byte/SHA check. Never split a Unicode scalar. */
 function receivedTextPageEnds(text: string): number[] {
   const ends: number[] = [];
@@ -170,7 +190,7 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
   if (!raw?.ownerDeviceWork?.directWorkspace || raw.status !== task.status || !nativeId(raw.runId)) return;
   let page: AuditPage;
   try { page = taskAuditPage(raw.historyOperationPage, taskId, 'operations'); } catch { return; }
-  // A bounded/partial page or more than one read belongs in the existing per-operation view.
+  // Bounded/partial pages still belong in the existing per-operation view.
   if (page.completeHistory !== true || page.readLimited !== false || page.hasMore !== false || page.entries[0]?.position !== page.upperPosition) return;
   const calls = getTaskOperations({ id: taskId, raw: { historyOperationPage: page } }).filter(op => op.tool === 'device_invoke_tool');
   if (calls.some(op => {
@@ -179,6 +199,10 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
   })) return;
   const current = calls.filter(op => op.runId === raw.runId);
   const reads = current.filter(op => record(op.arguments)?.toolName === 'workspace.read');
+  if (reads.length > 1) {
+    const files = receivedWindowsFileChoices(task, reads, page);
+    if (files) return { kind: 'files' as const, files, resumeRevision };
+  }
   if (reads.length === 1) {
     const operation = reads[0], original = originalWindowsTextAt(task, operation);
     const read = original && receivedOriginalWindowsReadAt(task, operation, original, page);
@@ -198,7 +222,7 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
   if (received) return { kind: 'directory' as const, received, resumeRevision };
 }
 
-/** Mount only in the active Work overview. Explicitly disclose the single already-received
+/** Mount only in the active Work overview. Explicitly disclose an already-received
  * result; never open Process, ask the Windows peer, or start a new audit read. */
 export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string }) {
   const snapshot = usePocketSnapshot();
@@ -206,6 +230,16 @@ export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string })
   const source = documentEpoch > 0 ? overviewWindowsRead(snapshot, taskId) : undefined;
   if (!source) return null;
   const { resumeRevision } = source, sourceRevision = String(snapshot.state.traceSourceRevision ?? 0);
+  if (source.kind === 'files') {
+    const key = JSON.stringify([documentEpoch, resumeRevision, sourceRevision, source.files.map(file => [file.position, file.received.identity])]);
+    return <OriginalWindowsFileChoices key={key} files={source.files} documentEpoch={documentEpoch} sourceRevision={sourceRevision} checkOverview={live => {
+      if (live === snapshot) return true;
+      const actual = overviewWindowsRead(live, taskId);
+      return actual?.kind === 'files' && actual.resumeRevision === resumeRevision && actual.files.length === source.files.length &&
+        actual.files.every((file, index) => file.position === source.files[index].position && file.path === source.files[index].path &&
+          sameReceived(file.received, source.files[index].received));
+    }}/>;
+  }
   const key = JSON.stringify([documentEpoch, resumeRevision, sourceRevision, source.received.identity,
     source.kind === 'directory' ? source.linked?.received.identity : undefined]);
   if (source.kind === 'directory') {
@@ -230,6 +264,26 @@ export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string })
       const current = overviewWindowsRead(live, taskId);
       return current?.kind === 'text' && current.resumeRevision === resumeRevision && sameReceived(current.received, source.received);
     }}/>;
+}
+
+function OriginalWindowsFileChoices({ files, documentEpoch, sourceRevision, checkOverview }: {
+  files: ReceivedFile[]; documentEpoch: number; sourceRevision: string; checkOverview: (live: PocketSnapshot) => boolean;
+}) {
+  const [selected, setSelected] = useState('');
+  const current = useRef('');
+  return <section className="pw-operation-entry" aria-label="这次从电脑收到的文件">
+    <h4>这次从电脑收到的文件</h4>
+    <p className="pw-muted">只看本机当时收到的文本，不会重新联系电脑。</p>
+    {files.map(({ original, received, path }, index) => {
+      const label = <><span>{index + 1}. </span><bdi style={{overflowWrap:'anywhere'}}>{path.replace(/\p{C}/gu, '�')}</bdi></>;
+      const id = original.operationId;
+      return <ReceivedOriginalWindowsText key={id} original={original} received={received} documentEpoch={documentEpoch}
+        sourceRevision={sourceRevision} fallback={null} checkOverview={checkOverview} choice={{
+          label, selected: selected === id, isCurrent: () => current.current === id,
+          choose: () => { current.current = id; setSelected(id); },
+        }}/>;
+    })}
+  </section>;
 }
 
 function OriginalWindowsDirectory({ received, current, linked }: { received: ReceivedDirectory; current: () => boolean; linked?: ReactNode }) {
@@ -262,9 +316,10 @@ function OriginalWindowsDirectory({ received, current, linked }: { received: Rec
   </section>;
 }
 
-export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview }: {
+export function ReceivedOriginalWindowsText({ original, received, documentEpoch, sourceRevision, fallback, checkOverview, choice }: {
   original: Original; received: Received; documentEpoch: number; sourceRevision: string; fallback: ReactNode;
   checkOverview?: (live: PocketSnapshot) => boolean;
+  choice?: { label: ReactNode; selected: boolean; isCurrent: () => boolean; choose: () => void };
 }) {
   const [check, setCheck] = useState<{ generation: number; verified: boolean } | null>(null);
   const [busy, setBusy] = useState(false), [page, setPage] = useState(0);
@@ -289,9 +344,10 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
   };
   const read = async () => {
     if (reading.current || !current()) return;
+    choice?.choose();
     reading.current = true; const attempt = ++sequence.current;
     setBusy(true); setCheck(null); setPage(0);
-    const eligible = () => sequence.current === attempt && latest.current.generation === generation && current();
+    const eligible = () => sequence.current === attempt && latest.current.generation === generation && current() && (!choice || choice.isCurrent());
     try {
       const bytes = new TextEncoder().encode(received.content);
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -306,7 +362,7 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
   };
   const inWindow = current();
   if (checkOverview && !inWindow) return null;
-  const checked = inWindow && check?.generation === generation ? check : null;
+  const checked = inWindow && (!choice || choice.selected && choice.isCurrent()) && check?.generation === generation ? check : null;
   if (checked?.verified === false) return <><p role="status">本机收到的原文本无法核对或超过显示范围，未显示正文。</p>{fallback}</>;
   // Derive the displayed pages only while the original already-loaded receipt is
   // still current. No extra body cache, history read, peer call or file operation.
@@ -314,12 +370,12 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
   const ends = receivedTextPageEnds(text), pageCount = ends.length, index = Math.min(page, pageCount - 1);
   const stamp = sequence.current;
   const go = (step: -1 | 1) => {
-    if (checked && stamp === sequence.current && latest.current.generation === generation && current())
+    if (checked && stamp === sequence.current && latest.current.generation === generation && current() && (!choice || choice.isCurrent()))
       setPage(value => Math.max(0, Math.min(pageCount - 1, value + step)));
   };
   return <section className="pw-operation-entry" aria-label="本机收到的原电脑文本">
     {checked ? <>
-      <h4>当时读到的文本</h4>
+      <h4>{choice?.label ?? '当时读到的文本'}</h4>
       <p className="pw-muted">本机当时已收到完整文本 · 原文件 {received.bytes} 字节。不重新读取电脑。</p>
       {received.bytes === 0 ? <p>原回执已核对：当时文件为 0 字节。</p> :
         <pre className="pw-source-copy" dir="auto" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{text.slice(index > 0 ? ends[index - 1] : 0, ends[index])}</pre>}
@@ -330,7 +386,7 @@ export function ReceivedOriginalWindowsText({ original, received, documentEpoch,
       </nav>}
       <Button variant="ghost" onClick={clear}>关闭原文本</Button>
     </> : <Button variant="secondary" disabled={busy || !inWindow} onClick={() => void read()}>
-      {busy ? '正在核对本机原文本…' : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}
+      {busy ? '正在核对本机原文本…' : choice ? <>查看 {choice.label}</> : checkOverview ? '查看这次收到的原文本' : '查看本机收到的原文本'}
     </Button>}
   </section>;
 }

@@ -18,6 +18,8 @@ export type TeamOwnerWorkLink = {
 };
 export type TeamOwnerWorkIntent = 'overview' | 'supplement' | 'followUp' | 'returnResult';
 
+export type DraftTeamSelection = { id:string; label:string };
+export const isDraftTeamSelectionId=(id:unknown):id is string=>typeof id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
 export type TeamButlerRequest = {
   teamId?: string;
   goal?: string;

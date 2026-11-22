@@ -131,7 +131,7 @@ import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
-import {acceptedWorkTeamReport,activeWorkTeamMember,matchesWorkTeamResult,sameAcceptedWorkTeamReport,sameTeamFiles,sameWorkTeamMember,teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,workTeamResultEntryKey,type AcceptedWorkTeamReport,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamMemberStage,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
+import {acceptedWorkTeamReport,activeWorkTeamMember,isDraftTeamSelectionId,matchesWorkTeamResult,sameAcceptedWorkTeamReport,sameTeamFiles,sameWorkTeamMember,teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,workTeamResultEntryKey,type AcceptedWorkTeamReport,type DraftTeamSelection,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamMemberStage,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import {DeclinedTeamStart,originalDeclinedTeamStart,originalPendingNodeCommand,TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,matchesFixedProjectDraft,observedFixedProjectDraft,privateProjectTask,projectContinuation,sameFixedProjectDraftIdentity,savedUnsentProfileProjectApproval,type ContinuationSubmission,type FixedProjectDraft} from './task-continuation';
 import {TaskInference} from './TaskInference';
@@ -443,7 +443,14 @@ function sameEmptyTeamGoal(left:NonNullable<ReturnType<typeof emptyTeamGoalDraft
  return right?.key===left.key&&right.epoch===left.epoch&&right.revision===left.revision&&right.resume===left.resume;
 }
 type TeamDraftInput=NonNullable<ReturnType<typeof originalTeamDraft>>;
-type TeamDraftVisit=TeamDraftInput&{documentEpoch:number;navigation:number;resume:number};
+type TeamDraftVisit=TeamDraftInput&{documentEpoch:number;navigation:number;resume:number;replacing?:DraftTeamSelection};
+type PendingTeamReplacement=Pick<TeamDraftInput,'key'|'epoch'|'revision'|'conversation'>&{phase:'saving'|'unconfirmed'};
+function selectedDraftTeam(live:ReturnType<typeof bridge.getState>):DraftTeamSelection|undefined{
+ const selected=asArray<Json>(live.composer?.objectRefs).filter(ref=>ref?.kind==='team');
+ const ref=selected.length===1?selected[0]:null;
+ return ref&&isDraftTeamSelectionId(ref.id)&&typeof ref.label==='string'&&ref.label.trim()?
+  {id:ref.id,label:ref.label}:undefined;
+}
 function sameTeamDraftInput(visit:TeamDraftInput,current:TeamDraftInput|null,revision=true){
  if(!current||current.conversation!==visit.conversation||current.key!==visit.key||current.epoch!==visit.epoch||
     revision&&current.revision!==visit.revision)return false;
@@ -1394,6 +1401,26 @@ export default function App(){
  const {switching:draftSwitching,pending:draftSwitchPending,open:openDraftSwitch}=useConversationDraftSwitch(setLocalError);
  const reportDraftFlight=useRef<{key:string;epoch:number}|null>(null);
  const [reportDraftSwitching,setReportDraftSwitching]=useState(false);
+ const teamReplacements=useRef(new Map<string,PendingTeamReplacement>());
+ const [,showTeamReplacement]=useState(0);
+ const settleTeamReplacement=(pin:PendingTeamReplacement,unknown=false)=>{
+  if(teamReplacements.current.get(pin.key)!==pin)return;
+  if(unknown)pin.phase='unconfirmed';else teamReplacements.current.delete(pin.key);
+  showTeamReplacement(value=>value+1);
+ };
+ const pendingDraftTeam=intent==='chat'&&isChatSurface?teamReplacements.current.get(draftKey):undefined;
+ useLayoutEffect(()=>{
+  const live=bridge.getState(),pin=pendingDraftTeam,draft=live.composer,view=obj(live.view);
+  // An ambiguous old A is not enough. A newer persisted draft (or a new
+  // native view epoch of that same draft) makes the old CAS impossible.
+  if(pin?.phase!=='unconfirmed'||document.hidden||draftSwitchPending()||view.section!==null||view.taskId!==null||
+     live.state.conversationReader||String(live.state.conversationId||'')!==pin.conversation||
+     draft?.ready!==true||draft.saving!==false||draft.key!==pin.key||draft.conversationId!==pin.conversation||!Array.isArray(draft.objectRefs)||
+     !Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||
+     !(draft.epoch>pin.epoch||draft.epoch===pin.epoch&&draft.revision>pin.revision))return;
+  settleTeamReplacement(pin);
+  setLocalStatus('已核对原草稿当前的编组，请检查后自行发送。');
+ });
  const editText=useCallback((next:string)=>{
   if(intent==='chat'){
    if(reportDraftFlight.current?.key===draftKey&&reportDraftFlight.current?.epoch===draftEpoch)return;
@@ -3573,7 +3600,9 @@ export default function App(){
     .finally(()=>{phoneAction.current=false;setPhoneReviewPending(false)});
  };
  useEffect(()=>{const receipt=phoneDraft.startReceipt;if(receipt&&['accepted','rejected','unknown'].includes(receipt.status)){const original=phoneStartReceipt(receipt);setPhoneStart(original);if(original.status!=='unknown'&&phoneReview&&phoneReview.reviewHandle===receipt.reviewHandle)setPhoneReview(receipt.recheckReview===phoneReview.reviewHandle?{...phoneReview,documentEpoch:undefined}:null)}},[phoneDraft.startReceipt?.status,phoneDraft.startReceipt?.reviewHandle,phoneDraft.startReceipt?.requestId,phoneDraft.startReceipt?.draftRequestId,phoneDraft.startReceipt?.canRetire,phoneDraft.startReceipt?.taskId,phoneDraft.startReceipt?.admitted,phoneDraft.startReceipt?.admissionState,phoneDraft.startReceipt?.runId,phoneDraft.startReceipt?.epoch,phoneOwner]);
- const send=()=>{if(displayDraftSettling||reportDraftFlight.current)return;if(keepOriginalPhoneGoal){setLocalStatus('这段目标已有原启动回执。可以核对，或编辑成一个新目标。');return}if(intent!=='chat'&&['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)){setLocalStatus('请先核对所选原话。这份手机目标没有提交。');return}if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(displayBlocked){setLocalError(displayBlocked);return}if(!composerModelName&&!localDisplayReady){if(can('setup.read'))void openModelSetup();else void navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
+ const send=()=>{
+  if(intent==='chat'&&teamReplacements.current.has(draftKey)){setLocalStatus('请先核对编组更换，原草稿没有发送。');return;}
+  if(displayDraftSettling||reportDraftFlight.current)return;if(keepOriginalPhoneGoal){setLocalStatus('这段目标已有原启动回执。可以核对，或编辑成一个新目标。');return}if(intent!=='chat'&&['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)){setLocalStatus('请先核对所选原话。这份手机目标没有提交。');return}if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(displayBlocked){setLocalError(displayBlocked);return}if(!composerModelName&&!localDisplayReady){if(can('setup.read'))void openModelSetup();else void navigate('models');return}if(intent!=='chat'){preparePhone();return}if(!composerHasPayload(text,asArray<Json>(state.selectedChatAttachments).length)||!draftKey||previewRefsUnavailable)return;
   if(!can('composer.send')||state.chatSubmitting||pendingOriginal)return;
   if(!localDisplayReady&&ordinaryDraftRevision===null){setLocalError('请等本机核对当前草稿，再发送。');return;}
   const settled=registration.begin();if(!settled)return;
@@ -4806,13 +4835,18 @@ export default function App(){
    if(request.originalWorkDraft){
      const selected=request.originalWorkDraft,origin=relatedOrigin.current,visit=origin?.teamDraft,teamId=request.teamId;
      if(route!=='teams'||!origin||!visit||!teamId||!/^[a-f0-9-]{36}$/.test(teamId))return;
+     const replacing=visit.replacing,previousTeam=replacing?.id;
+     if(replacing&&(!isDraftTeamSelectionId(teamId)||teamId===previousTeam||teamReplacements.current.has(visit.key)))return;
      const firstHome=origin.route==='butler'&&visit.kind==='goal'&&visit.conversation==='';
+     const selectionMatches=(live:ReturnType<typeof bridge.getState>,id:string|undefined)=>
+       !replacing||selectedDraftTeam(live)?.id===id;
      const at=(navigation:number)=>!document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===visit.documentEpoch;
      const inSelection=()=>relatedOrigin.current===origin&&at(visit.navigation);
      const mayReturn=()=>{
        if(!inSelection())return false;
        const live=bridge.getState(),view=obj(live.view);
-       if(!selected()||draftSwitchPending()||view.section!=='teams'||view.taskId!==null||view.resumeRevision!==visit.resume||!sameTeamDraftInput(visit,originalTeamDraft(live,undefined,firstHome))){
+       if(!selected()||draftSwitchPending()||view.section!=='teams'||view.taskId!==null||view.resumeRevision!==visit.resume||
+          !selectionMatches(live,previousTeam)||!sameTeamDraftInput(visit,originalTeamDraft(live,previousTeam,firstHome))){
          setLocalError(originalTeamDraftChanged);return false;
        }
        return true;
@@ -4820,24 +4854,77 @@ export default function App(){
      if(!mayReturn())return;
      setLocalError('');
      void navigate(firstHome?'butler':'chat',()=>{
+       // navigate commits the owner return and invokes this synchronously,
+       // before the same composer can paint or admit an old-A Send.
+       const replacement:PendingTeamReplacement|null=replacing?
+         {key:visit.key,epoch:visit.epoch,revision:visit.revision,conversation:visit.conversation,phase:'saving'}:null;
+       if(replacement){
+         teamReplacements.current.set(replacement.key,replacement);
+         showTeamReplacement(value=>value+1);
+       }
+       let replacementRequested=false;
        if(relatedOrigin.current===origin)relatedOrigin.current=origin.parent||null;
        const arrived=()=>at(visit.navigation+1);
        const here=(sameRevision=true)=>{
-         const live=bridge.getState(),view=obj(live.view);
-         return arrived()&&!draftSwitchPending()&&view.taskId===null&&view.resumeRevision===visit.resume&&
-           sameTeamDraftInput(visit,originalTeamDraft(live,sameRevision?undefined:teamId,firstHome),sameRevision);
+         const live=bridge.getState(),view=obj(live.view),id=sameRevision?previousTeam:teamId;
+         return arrived()&&!draftSwitchPending()&&view.taskId===null&&view.resumeRevision===visit.resume&&selectionMatches(live,id)&&
+           sameTeamDraftInput(visit,originalTeamDraft(live,id,firstHome),sameRevision);
        };
        const atOriginalInput=()=>here(false)&&obj(bridge.getState().view).section===null;
        void (async()=>{
          // Secondary already retires its native window; wait for that receipt, not a new read.
          const ready=await awaitPickerProjection(here,()=>obj(bridge.getState().view).section===null?true:undefined);
-         if(!ready||!here()||!atOriginalInput()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
+         if(!ready||!here()){
+           if(replacement)settleTeamReplacement(replacement);
+           if(arrived())setLocalError(originalTeamDraftChanged);
+           return;
+         }
+         if(replacing&&replacement){
+           const sameInput=()=>{
+             const live=bridge.getState(),view=obj(live.view),draft=live.composer;
+             return arrived()&&!draftSwitchPending()&&view.section===null&&view.taskId===null&&view.resumeRevision===visit.resume&&
+               draft?.ready===true&&draft.key===visit.key&&draft.epoch===visit.epoch&&draft.conversationId===visit.conversation;
+           };
+           if(!sameInput()||visit.kind!=='goal'||chatDraft.currentValue()!==visit.text){
+             settleTeamReplacement(replacement);
+             if(arrived())setLocalError('原草稿已变化，未更换编组。');
+             return;
+           }
+           try{
+             replacementRequested=true;
+             const receipt=await bridge.command('composer.team.replace',{key:visit.key,epoch:visit.epoch,revision:visit.revision,fromTeamId:replacing.id,teamId});
+             if(receipt?.replaced!==true||receipt.persisted!==true||receipt.key!==visit.key||receipt.epoch!==visit.epoch||
+                receipt.fromRevision!==visit.revision||receipt.revision!==visit.revision+1||
+                receipt.fromTeamId!==replacing.id||receipt.teamId!==teamId)
+               throw Error('本机尚未确认编组更换，请核对原草稿；没有发送。');
+             const confirmed=await awaitPickerProjection(sameInput,()=>{
+               const live=bridge.getState();
+               return selectedDraftTeam(live)?.id===teamId&&Number(live.composer?.revision)>=receipt.revision?true:undefined;
+             });
+             settleTeamReplacement(replacement,!confirmed);
+             if(confirmed&&sameInput()){
+               setLocalStatus('原草稿的编组已更换，尚未发送。');
+               requestAnimationFrame(()=>{if(sameInput()&&document.activeElement===document.body)
+                 workspace.current?.querySelector<HTMLElement>('[data-workspace-entry="draft-team-choice"]')?.focus({preventScroll:true})});
+             }
+           }catch(error){
+             const refused=['not_accepted','not_sent'].includes(obj(error).code);
+             settleTeamReplacement(replacement,!refused);
+             if(refused&&sameInput())
+               setLocalError(error instanceof Error?error.message:'编组未更换，草稿没有发送。');
+           }
+           return;
+         }
+         if(!atOriginalInput()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
          const added=await stageButlerObject({kind:'team',id:teamId},atOriginalInput,true);
          if(!atOriginalInput()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
          if(!added)return;
          setLocalStatus(firstHome?'编组已关联到原输入，目标未改，尚未发送。':'编组已关联到原对话草稿，未发送。');
          requestAnimationFrame(()=>{if(atOriginalInput())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
-       })().catch(error=>{if(arrived())setLocalError(atOriginalInput()&&error instanceof Error?error.message:originalTeamDraftChanged)});
+       })().catch(error=>{
+         if(replacement)settleTeamReplacement(replacement,replacementRequested);
+         if(arrived()&&!replacementRequested)setLocalError(atOriginalInput()&&error instanceof Error?error.message:originalTeamDraftChanged);
+       });
      },{keepOrigin:true,stillCurrent:mayReturn});
      return;
    }
@@ -5202,20 +5289,26 @@ export default function App(){
  },[route,filter,taskQuery,taskDirectory.loaded,taskDirectory.busy,taskDirectory.error]);
  const attentionTasks=tasks.filter(attention);
  const navigationSelection=state.attachmentWorkspace?.open?'artifacts':route==='chat'?'butler':['developer-logs','setup','remoteInbox','profile'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
- const pickTeamForCurrentDraft=useCallback((expected?:TeamDraftInput)=>{
+ const pickTeamForCurrentDraft=useCallback((expected?:TeamDraftInput,replacing?:DraftTeamSelection)=>{
   // The Home draft uses the explicit composer button, not ordinary directory navigation.
   const firstHome=route==='butler'&&expected?.kind==='goal'&&expected.conversation==='';
   if((route!=='chat'&&!firstHome)||taskOpen||intent!=='chat'||draftSwitchPending()||document.hidden||
      expected&&navigationWindow.current!==navigationRevision)return false;
-  const live=bridge.getState(),view=obj(live.view),draft=originalTeamDraft(live,undefined,firstHome);
-  if(!draft||expected&&!sameTeamDraftInput(expected,draft)||view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision))return false;
+  const live=bridge.getState(),view=obj(live.view),draft=originalTeamDraft(live,replacing?.id,firstHome);
+  const replacementMatches=(current:ReturnType<typeof bridge.getState>)=>!replacing||!current.state.chatBusy&&
+    !teamReplacements.current.has(String(current.composer?.key||''))&&
+    current.capabilities.commands.includes('composer.team.replace')&&selectedDraftTeam(current)?.id===replacing.id;
+  if(!draft||expected&&!sameTeamDraftInput(expected,draft)||view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||
+     replacing&&(draft.kind!=='goal'||!replacementMatches(live)))return false;
   if(draft.kind==='goal'&&chatDraft.currentValue()!==draft.text){setLocalError('当前输入尚未核对，请稍后选择编组。原文字不变。');return true;}
-  const visit:TeamDraftVisit={...draft,documentEpoch:bridge.getDocumentEpoch(),navigation:navigationWindow.current+1,resume:view.resumeRevision};
-  const origin:WorkspaceOrigin={...captureNavigationOrigin(),drawerChat:{id:draft.conversation,draftKey:draft.key,documentEpoch:visit.documentEpoch},teamDraft:visit};
+  const visit:TeamDraftVisit={...draft,documentEpoch:bridge.getDocumentEpoch(),navigation:navigationWindow.current+1,resume:view.resumeRevision,replacing};
+  const origin:WorkspaceOrigin={...captureNavigationOrigin(),...(replacing?{focus:null,focusKey:'draft-team-choice'}:{}),
+    drawerChat:{id:draft.conversation,draftKey:draft.key,documentEpoch:visit.documentEpoch},teamDraft:visit};
   void navigate('teams',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent:()=>{
    if(document.hidden||navigationWindow.current!==visit.navigation-1||bridge.getDocumentEpoch()!==visit.documentEpoch)return false;
    const current=bridge.getState(),window=obj(current.view);
-   const exact=!draftSwitchPending()&&window.section===null&&window.taskId===null&&window.resumeRevision===visit.resume&&sameTeamDraftInput(visit,originalTeamDraft(current,undefined,firstHome))&&
+   const exact=!draftSwitchPending()&&window.section===null&&window.taskId===null&&window.resumeRevision===visit.resume&&
+    replacementMatches(current)&&sameTeamDraftInput(visit,originalTeamDraft(current,replacing?.id,firstHome))&&
     (visit.kind!=='goal'||chatDraft.currentValue()===visit.text);
    if(!exact)setLocalError(originalTeamDraftChanged);
    return exact;
@@ -7129,8 +7222,11 @@ export default function App(){
   }catch(error){if(current())setLocalError(error instanceof Error?error.message:String(error))}
   finally{if(reportDraftFlight.current===pin){reportDraftFlight.current=null;setReportDraftSwitching(false)}}
  };
- const chooseDraftTeam=isChatSurface&&intent==='chat'&&!taskOpen&&!draftSwitching&&snapshot?.view?.section===null&&snapshot.view.taskId===null&&
-   can('teams.snapshot')&&can('teams.readDefinition')?originalTeamDraft(snapshot,undefined,route==='butler'):null;
+ const teamChooserAvailable=isChatSurface&&intent==='chat'&&!taskOpen&&!draftSwitching&&snapshot?.view?.section===null&&snapshot.view.taskId===null&&
+   can('teams.snapshot')&&can('teams.readDefinition');
+ const chooseDraftTeam=teamChooserAvailable?originalTeamDraft(snapshot,undefined,route==='butler'):null;
+ const currentDraftTeam=teamChooserAvailable&&can('composer.team.replace')?selectedDraftTeam(snapshot):undefined;
+ const replaceDraftTeam=currentDraftTeam&&!state.chatBusy?originalTeamDraft(snapshot,currentDraftTeam.id,route==='butler'):null;
  const currentCarriedRoster=(offer:CarriedTeamRoster,live:ReturnType<typeof bridge.getState>)=>{
   if(document.hidden||draftSwitchPending()||navigationWindow.current!==offer.navigation||
      !sameModelSetupInput(offer.input,live,bridge.getDocumentEpoch()))return null;
@@ -7199,7 +7295,13 @@ export default function App(){
    {intent==='chat'&&!text.length&&composer.independentReportDiscardEmpty===true&&can('ownerWork.report.followUp.discardEmpty')&&
     <Button variant="ghost" size="small" disabled={draftSwitching||registration.waiting||reportDraftSwitching}
      onClick={()=>{void abandonEmptyReportDraft()}}>放弃空追问</Button>}
-   {intent==='chat'&&<ComposerObjectReferences key={`objects:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.object.remove')}/>}
+   {pendingDraftTeam&&<p className="pw-field-hint" role="status">{pendingDraftTeam.phase==='saving'
+     ?'正在核对本次编组更换，暂不发送。'
+     :'编组更换尚未核对，暂不能发送。可继续编辑并等保存确认，或重开原草稿核对。'}</p>}
+   {intent==='chat'&&<ComposerObjectReferences key={`objects:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.object.remove')}
+     teamChoice={currentDraftTeam&&replaceDraftTeam?.kind==='goal'?{id:currentDraftTeam.id,disabled:!!pendingDraftTeam||replaceDraftTeam.text!==text,open:()=>{
+       if(!pickTeamForCurrentDraft(replaceDraftTeam,currentDraftTeam))setLocalError('原草稿已变化，未离开这条对话。');
+     }}:undefined}/>}
    {carriedTeamRoster&&rosterDraft&&!rosterDraft.teams.length&&rosterDraft.count<4&&
     <Button variant="ghost" size="small" leadingIcon={IconTeam} onClick={()=>void attachCarriedRoster(carriedTeamRoster)}>也关联这次用的编组</Button>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
@@ -7209,7 +7311,7 @@ export default function App(){
         disabled={modelSetupOpening||state.modelSelectionBusy||state.modelSaving||state.modelTesting||draftSwitching||reportDraftSwitching||
           state.chatSubmitting||registration.waiting||firstHostSaving||composer.saving===true||ordinaryDraftRevision===null}
         aria-busy={modelSetupOpening||undefined} onClick={()=>void openModelSetup(true)}>{modelSetupOpening?'正在核对…':'连接模型'}</Button>
-       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
+       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={!!pendingDraftTeam||keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={pendingDraftTeam?'先核对编组更换':keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容" data-chat-add-content="true"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>
     {intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting||!draftKey||fileAttachmentPickerLaunch.current?.settled===false} onClick={openRegularAttachmentPicker}>添加附件</Button>}
     {referenceShelfAvailable&&<Button variant="ghost" leadingIcon={IconBook} aria-haspopup="dialog" onClick={openChatReference}>引用本对话备忘</Button>}
@@ -8384,7 +8486,7 @@ export default function App(){
       returnWorkFocus?()=>{homeWorkReturn.current={taskId:task.id,report,focus:returnWorkFocus}}:undefined);return}
     homeWorkReturn.current=alreadyOpen&&returnWorkFocus?{taskId:task.id,focus:returnWorkFocus}:null;
     openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview',alreadyOpen,undefined,undefined,undefined,stillOriginal)
-   }} onAllWork={(scope='all')=>{void openRelatedWorkspace('tasks',undefined,()=>{setEndedScopeOrigin(null);setFilter(scope);setTaskQuery('')})}} initialScrollTop={butlerScrollTop.current} onScrollTop={top=>{butlerScrollTop.current=top}}/>:route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace memory={notificationMemory.current} onOpenTeamAttention={locator=>{setTeamAttentionFocus({...locator,requestId:crypto.randomUUID()});void openRelatedWorkspace('teams')}} onOpenTask={(id,review)=>openTask(id,review?'review':'overview')} state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={returnFromSecondary} registerBack={registerSecondaryBack}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={returnFromSecondary} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} initialView={setupView} onViewChange={setSetupView} returnLabel={setupOrigin.current.label} originGoal={setupOrigin.current.goal} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} onReviewOriginalVite={setupOrigin.current.viteToolsSource?.navigation===navigationRevision&&setupOrigin.current.viteToolsSource?.ownerCurrent('setup')===true?reviewViteAfterTools:undefined} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary reminderNoticeVisit={reminderNotice} originalChatReminderRuleVisit={originalReminderPage} reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} onReturnConnectedPhoneDraft={returnConnectedPhoneDraft} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} onSavedHostSetup={returnAfterSavedHostSetup} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} originalWorkDraft={route==='teams'&&relatedOrigin.current?.teamDraft?.navigation===navigationRevision} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} terminalCheckout={originalTerminalCheckout} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput} onReturnOriginalPhoneInput={returnOriginalPhoneModelInput}/></Suspense></SecondaryRouteBoundary> }
+   }} onAllWork={(scope='all')=>{void openRelatedWorkspace('tasks',undefined,()=>{setEndedScopeOrigin(null);setFilter(scope);setTaskQuery('')})}} initialScrollTop={butlerScrollTop.current} onScrollTop={top=>{butlerScrollTop.current=top}}/>:route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace memory={notificationMemory.current} onOpenTeamAttention={locator=>{setTeamAttentionFocus({...locator,requestId:crypto.randomUUID()});void openRelatedWorkspace('teams')}} onOpenTask={(id,review)=>openTask(id,review?'review':'overview')} state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={returnFromSecondary} registerBack={registerSecondaryBack}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={returnFromSecondary} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} initialView={setupView} onViewChange={setSetupView} returnLabel={setupOrigin.current.label} originGoal={setupOrigin.current.goal} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} onReviewOriginalVite={setupOrigin.current.viteToolsSource?.navigation===navigationRevision&&setupOrigin.current.viteToolsSource?.ownerCurrent('setup')===true?reviewViteAfterTools:undefined} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary reminderNoticeVisit={reminderNotice} originalChatReminderRuleVisit={originalReminderPage} reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} onReturnConnectedPhoneDraft={returnConnectedPhoneDraft} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} onSavedHostSetup={returnAfterSavedHostSetup} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} originalWorkDraft={route==='teams'&&relatedOrigin.current?.teamDraft?.navigation===navigationRevision&&(relatedOrigin.current?.teamDraft?.replacing||true)} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} terminalCheckout={originalTerminalCheckout} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput} onReturnOriginalPhoneInput={returnOriginalPhoneModelInput}/></Suspense></SecondaryRouteBoundary> }
   </div>{allWork}
   <ConversationHistoryWindow page={workRequestPage||searchHistoryPage||(route==='chat'&&!historyPage?.workRequest&&!historyPage?.searchAnchor?historyPage:null)} covered={taskOpen&&!workRequestPage} onReturnToChat={focusAfterHistoryClose} onWorkRequestReturn={restoreWorkRequestFocus} onSearchReturn={finishSearchContext}
     activeDraft={!workRequestPage&&intent==='chat'&&composer.ready===true&&draftKey&&state.conversationId&&composer.conversationId===state.conversationId?{conversation:state.conversationId,key:draftKey,epoch:draftEpoch}:undefined} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin,alreadyOpen=false)=>openTask(id,entry,alreadyOpen,origin)}
