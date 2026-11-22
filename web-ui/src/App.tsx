@@ -131,7 +131,7 @@ import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import {sameTeamPackage} from './team-delivered-package';
 import {ownerWorkPresentation,type OwnerWorkTeam} from './owner-work-presentation';
 import type {TeamWorkTarget} from './ConversationTeamDecisions';
-import {acceptedWorkTeamReport,matchesWorkTeamResult,sameAcceptedWorkTeamReport,sameTeamFiles,teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,workTeamResultEntryKey,type AcceptedWorkTeamReport,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
+import {acceptedWorkTeamReport,activeWorkTeamMember,matchesWorkTeamResult,sameAcceptedWorkTeamReport,sameTeamFiles,sameWorkTeamMember,teamDecisionEntryKey,teamFileEntryKey,teamProposalEntryKey,workTeamResultEntryKey,type AcceptedWorkTeamReport,type TeamDecisionOrigin,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamMemberStage,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import {DeclinedTeamStart,originalDeclinedTeamStart,originalPendingNodeCommand,TaskApproval} from './TaskApproval';
 import {continuationBlocks,continuationFailed,continuationRequest,continuationSettled,continuationUnknown,matchesFixedProjectDraft,observedFixedProjectDraft,privateProjectTask,projectContinuation,sameFixedProjectDraftIdentity,savedUnsentProfileProjectApproval,type ContinuationSubmission,type FixedProjectDraft} from './task-continuation';
 import {TaskInference} from './TaskInference';
@@ -208,7 +208,8 @@ type ChatReportLink={target:ReportTarget;deliveryId:string;revision:number;write
 type ChatReportReturn={link:ChatReportLink;draftEpoch:number;resume:number;nativeTaskRequest:number};
 type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number};phoneDelivery?:{result:PhoneResult;resume:number};ownerRequest?:OriginalOwnerRequest;reportReply?:ChatReportReturn};
 type ChatMessageOriginalKind='messagePdf'|'replyDocument';
-type ChatMessageOriginalVisit={kind:ChatMessageOriginalKind;source:MessageAttachmentSource;input:ModelSetupInput;anchor?:ChatWorkReturn;navigation:number;resume:number;windowId:string;shelf?:PreferredReplyDocument};
+type OriginalAnswerInputPdf={answerId:string;revision:1;replyId:string;work:WorkIdentity;source:MessageAttachmentSource};
+type ChatMessageOriginalVisit={kind:ChatMessageOriginalKind;source:MessageAttachmentSource;input:ModelSetupInput;anchor?:ChatWorkReturn;navigation:number;resume:number;windowId:string;shelf?:PreferredReplyDocument;answerPdf?:OriginalAnswerInputPdf};
 type ChatWorkRowOrigin={work:WorkIdentity;conversation:string;draftEpoch:number;documentEpoch:number;resumeRevision:number;navigation:number;nativeTaskRequest:number;trigger:HTMLButtonElement;question?:true;composerRail?:true};
 type ChatWorkTaskOpen={beforeTaskRequest:number;navigation:number}&({returnTo:ChatWorkReturn;row?:never}|{row:ChatWorkRowOrigin;returnTo?:never});
 type AcknowledgedWorkVisit=TaskReviewWindow&{chatRow?:ChatWorkRowOrigin;chatReturnRequest?:number};
@@ -479,6 +480,34 @@ function savedOwnerAttachmentChoices(message:Message):OriginalAttachmentChoice[]
    file.mimeType===ref.mimeType&&file.size===ref.size&&typeof file.name==='string'&&file.name
    ?[{...pin,name:file.name}]:[];
  });
+}
+/** A submitted input, not a citation or proof the model read the PDF's contents. */
+function originalAnswerInputPdfs(rows:readonly Message[],conversation:string,requireReady=true){
+ const links=new Map<string,OriginalAnswerInputPdf>();
+ if(!conversation)return links;
+ const byId=new Map<string,Message|null>();
+ for(const row of rows)if(row.id)byId.set(row.id,byId.has(row.id)?null:row);
+ for(const row of byId.values()){
+  if(!row?.id||row.role!=='assistant'||row.sourceRevision!==1||row.quoteAvailable!==true||row.phoneResult||row.taskResult||row.hostGoalTaskId||row.originalHostFinal)continue;
+  const reply=messageReplyContext(row);
+  if(!reply?.replyId||reply.deliveryId!==null||row.replyContext?.replyToMessageIds.length!==1||reply.replyToMessageIds.length!==1)continue;
+  const id=reply.replyToMessageIds[0],input=byId.get(id),receipt=input?.submission,revision=input?.sourceRevision;
+  if(input?.role!=='user'||input.quoteAvailable!==true||input.hostGoalTaskId||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1||
+     receipt?.status!=='consumed'||receipt.queueState!=='materialized'||receipt.reconciliationRequired!==false||
+     receipt.messageId!==id||receipt.conversationId!==conversation||receipt.replyMessageId!==row.id||receipt.ownerMessageRevision!==revision||
+     receipt.taskId!==reply.taskId||receipt.runId!==reply.runId||receipt.consumedRunId!==reply.runId||receipt.epoch!==reply.epoch||receipt.consumedEpoch!==reply.epoch)continue;
+  const refs=asArray<Json>(input.attachments),file=refs.length===1?obj(refs[0]):null,pin=file&&exactFileTarget(file);
+  if(!file||!pin||file.mimeType!=='application/pdf'||!Number.isSafeInteger(file.size)||file.size<1||
+     requireReady&&(input.localMessagePdfSourceCurrent!==true||!savedOwnerAttachmentChoices(input).some(choice=>choice.fileId===pin.fileId&&choice.sha256===pin.sha256)))continue;
+  const {taskId,runId,epoch,replyId}=reply;
+  links.set(row.id,{answerId:row.id,revision:1,replyId,work:{taskId,runId,epoch},source:{conversationId:conversation,messageId:id,sourceRevision:revision,id:pin.fileId,sha256:pin.sha256}});
+ }
+ return links;
+}
+function exactAnswerInputPdf(rows:unknown,pin:OriginalAnswerInputPdf,requireReady:boolean){
+ const prior=pin.source,current=originalAnswerInputPdfs(asArray<Message>(rows),prior.conversationId,requireReady).get(pin.answerId);
+ return !!current&&current.revision===pin.revision&&current.replyId===pin.replyId&&workIdentityKey(current.work)===workIdentityKey(pin.work)&&
+  current.source.messageId===prior.messageId&&current.source.sourceRevision===prior.sourceRevision&&current.source.id===prior.id&&current.source.sha256===prior.sha256;
 }
 function openedRetainedDraftCopyKey({state,view}:ReturnType<typeof bridge.getState>){
  const pin=obj(state.openedRetainedDraftCopy),native=obj(view);
@@ -3725,6 +3754,8 @@ export default function App(){
   composer.conversationId===state.conversationId&&messageOriginalView.section===null&&messageOriginalView.taskId===null&&
   Number.isSafeInteger(messageOriginalView.resumeRevision)&&can('attachmentWorkspace.open');
  const mayOpenChatMessagePdf=mayOpenChatMessageOriginal&&can('attachments.open');
+ const answerInputPdfs=useMemo(()=>originalAnswerInputPdfs(mayOpenChatMessagePdf?asArray<Message>(state.messages):[],String(state.conversationId||'')),
+  [mayOpenChatMessagePdf,state.messages,state.conversationId]);
  const currentChatMessageOriginal=(source:MessageAttachmentSource,input:ModelSetupInput,resume:number,navigation:number,
   kind:ChatMessageOriginalKind,requireReady=true)=>{
   const live=bridge.getState(),owner=live.state,view=obj(live.view),phone=obj(live.phoneDraft);
@@ -3744,14 +3775,17 @@ export default function App(){
    asArray<Json>(message.attachments).filter(file=>file.id===source.id).length===1&&asArray<Json>(message.attachments).some(file=>
     file.id===source.id&&file.sha256===source.sha256&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0);
  };
- const openChatMessageOriginal=async(source:MessageAttachmentSource,trigger:HTMLButtonElement,kind:ChatMessageOriginalKind='messagePdf',shelf?:PreferredReplyDocument)=>{
+ const openChatMessageOriginal=async(source:MessageAttachmentSource,trigger:HTMLButtonElement,kind:ChatMessageOriginalKind='messagePdf',shelf?:PreferredReplyDocument,answerPdf?:OriginalAnswerInputPdf)=>{
   const native=bridge.getState(),input=modelSetupInput(native,bridge.getDocumentEpoch()),resume=obj(native.view).resumeRevision;
   const navigation=navigationWindow.current,node=scroll.current;
+  const anchorMessage=answerPdf?.answerId??source.messageId,anchorRevision=answerPdf?.revision??source.sourceRevision;
   const article=shelf?Array.from(chatMessageList.current?.children||[]).find((row):row is HTMLElement=>
    row instanceof HTMLElement&&row.dataset.messageId===source.messageId):trigger.closest<HTMLElement>('[data-message-id]');
-  const anchored=!!node&&!!article&&article.dataset.messageId===source.messageId&&node.contains(article);
+  const anchored=!!node&&!!article&&article.dataset.messageId===anchorMessage&&node.contains(article);
+  const answerCurrent=(requireReady:boolean)=>!answerPdf||kind==='messagePdf'&&!shelf&&answerPdf.source===source&&
+   exactAnswerInputPdf(bridge.getState().state.messages,answerPdf,requireReady);
   if(!(kind==='replyDocument'?mayOpenChatMessageOriginal:mayOpenChatMessagePdf)||openingMessageOriginal.current||native.state.attachmentWorkspace?.open!==false||
-     !input||!Number.isSafeInteger(resume)||!currentChatMessageOriginal(source,input,resume,navigation,kind)||
+     !input||!Number.isSafeInteger(resume)||!currentChatMessageOriginal(source,input,resume,navigation,kind)||!answerCurrent(true)||
      !node||node.dataset.conversationId!==source.conversationId||!trigger.isConnected||
      (shelf?kind!=='replyDocument'||!deliveredFilesCurrent(shelf.visit)||!shelf.visit.sources.includes(shelf.reply)||
       shelf.visit.conversation!==source.conversationId||shelf.reply.messageId!==source.messageId||shelf.reply.revision!==source.sourceRevision||
@@ -3760,8 +3794,8 @@ export default function App(){
       openingChatResult.current||resultFileReturnFocus.current:!anchored))
    throw new Error(kind==='replyDocument'?'请从原答复查看这份文档。':'请从原消息查看这份 PDF。');
   const returnTrigger=shelf?article?.querySelector<HTMLButtonElement>('[data-original-reply-document]')||trigger:trigger;
-  const anchor=anchored&&article?{document:input.document,conversation:source.conversationId,message:source.messageId,revision:source.sourceRevision,
-   top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger:returnTrigger}:undefined;
+  const anchor=anchored&&article?{document:input.document,conversation:source.conversationId,message:anchorMessage,revision:anchorRevision,
+   top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger:returnTrigger,replyRun:answerPdf?.work}:undefined;
   openingMessageOriginal.current=true;stopFollowing();
   if(shelf)setDeliveredFileReader(shelf);
   let arrived=false;
@@ -3769,10 +3803,10 @@ export default function App(){
    const opened=await bridge.command('attachmentWorkspace.open',{[kind]:source});
    if(opened?.opened!==true||opened.reading!==true||opened.readOnly!==true||typeof opened.windowId!=='string'||!opened.windowId)
     throw new Error(kind==='replyDocument'?'尚未打开原答复文档。可在原工作核对。':'原消息 PDF 尚未打开。');
-   if(currentChatMessageOriginal(source,input,resume,navigation,kind,false)){
+   if(currentChatMessageOriginal(source,input,resume,navigation,kind,false)&&answerCurrent(false)){
     const bound=shelf&&deliveredFileRef.current===shelf.visit&&deliveredFilesWindow(shelf.visit)?{...shelf,windowId:opened.windowId}:undefined;
     if(shelf&&!bound)return;
-    messageOriginalReturn.current={kind,source,input,anchor,navigation,resume,windowId:opened.windowId,shelf:bound};
+    messageOriginalReturn.current={kind,source,input,anchor,navigation,resume,windowId:opened.windowId,shelf:bound,answerPdf};
     if(bound){arrived=true;setDeliveredFileReader(reader=>reader===shelf?bound:reader);}
    }
   }finally{
@@ -3797,6 +3831,7 @@ export default function App(){
      bridge.getState().state.attachmentWorkspace?.open!==false||
      document.querySelector('[role="dialog"][data-state="open"]')||
      !currentChatMessageOriginal(visit.source,visit.input,visit.resume,visit.navigation,visit.kind,false)||!visit.anchor||
+     visit.answerPdf&&!exactAnswerInputPdf(bridge.getState().state.messages,visit.answerPdf,false)||
      !chatWorkLocation(visit.anchor,undefined,true))return;
   if(restoreChatWorkAt(visit.anchor))event.preventDefault();
  };
@@ -4824,7 +4859,7 @@ export default function App(){
    const back=(reason?:string)=>{if(document.hidden||relatedOrigin.current!==origin)return;void restoreWorkspace(origin).then(()=>{if(reason&&!document.hidden)setLocalError(reason)});};
    void openRelatedWorkspace('teams',origin,()=>{setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:source.teamRunId,fromProject:source,returnToWork:back})});
  };
- const openWorkTeam=(team:OwnerWorkTeam,openPackage=false,acceptedReport?:AcceptedWorkTeamReport,files?:WorkFileSource)=>{
+ const openWorkTeam=(team:OwnerWorkTeam,openPackage=false,acceptedReport?:AcceptedWorkTeamReport,files?:WorkFileSource,member?:WorkTeamMemberStage)=>{
    if(!can('teams.readRun'))return;
    if(files){
      const live=bridge.getState(),view=obj(live.view),captured=captureWorkspaceOrigin();
@@ -4895,9 +4930,17 @@ export default function App(){
     relatedOrigin.current=exact;
     return pin;
    };
+   const parent=member&&parentIn(live.state);
+   const freshTeam=parent&&ownerWorkPresentation(parent)?.teams.find(row=>row.teamRunId===teamRunId&&row.taskId===source.taskId&&
+     row.parentRunId===parentRunId&&row.parentEpoch===parentEpoch&&row.conversationId===conversationId);
+   const stage=member&&parent&&freshTeam&&isPrimaryRoute&&originalTaskOverview(parent)&&!live.state.conversationReader&&
+     !live.state.attachmentWorkspace?.open&&!live.state.filePath&&parent.raw?.origin==null&&parent.raw?.contextAvailable===true&&
+     parent.raw?.contextWithdrawn!==true&&parent.raw?.sourceCurrentReadRequired!==true&&parent.raw?.cancelRequested!==true&&
+     sameWorkTeamMember(member,activeWorkTeamMember(freshTeam,obj(live.state.teamRuns)[teamRunId]))?
+       {source,selected:member}:undefined;
    void openRelatedWorkspace('teams',original?origin:undefined,()=>{
     setTeamAttentionFocus(undefined);setTeamRunFocus({requestId:crypto.randomUUID(),runId:teamRunId,
-      ...(original?{fromWorkResult:{source,arm,accepted}}:{})});
+      ...(original?{fromWorkResult:{source,arm,accepted}}:{}),fromWorkMember:stage});
    });
  };
  const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:TeamOwnerWorkIntent,savedTeamId?:string)=>{
@@ -6043,6 +6086,9 @@ export default function App(){
       projectName={projects.find(project=>project.id===failureOverview.projectId)?.name} editFailedCopy={buildCopy?()=>void openOriginalBuildCopy(buildCopy):undefined}
       prepareFailure={can('tasks.review')?prepareFailedBuild:undefined}/>}</ConversationModelPickerVisibility>}{originalEvidence}</TaskPackageProjectContext.Provider>;
   const workFacts=<OwnerWorkFacts key="task-handling" task={task} onTeam={can('teams.readRun')?openWorkTeam:undefined}
+   activeTeamRuns={overviewActive&&isPrimaryRoute&&task.raw?.origin==null&&task.raw?.contextAvailable===true&&
+    task.raw?.contextWithdrawn!==true&&task.raw?.sourceCurrentReadRequired!==true&&task.raw?.cancelRequested!==true&&
+    !phoneViewerObscured&&obj(snapshot?.view).section===null&&obj(snapshot?.view).taskId===task.id?obj(state.teamRuns):undefined}
    canOpenTeamFiles={overviewActive&&isPrimaryRoute&&obj(snapshot?.view).taskId===task.id&&obj(snapshot?.view).section===null&&
     !state.conversationReader&&can('teams.readFrozenOutputs')}
    reportLabel={reportHistory?'在原对话定位汇报':undefined}
@@ -7558,6 +7604,7 @@ export default function App(){
     const linkedFeedback=linked&&!linkedProjectAction(linked)&&!m.hostGoalTaskId&&!phoneResult&&!taskResult&&!representedPhoneTaskIds.has(linked.id)&&linked.id!==chatAttention?.id&&!conversationWorkIds.has(linked.id)&&messageTaskAnchors.get(linked.id)===index?linked:null;
     const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
     const chatReport=m.id?chatReports.get(m.id):undefined;
+    const answerInputPdf=!chatReport&&m.id&&m.role==='assistant'&&m.sourceRevision===1?answerInputPdfs.get(m.id):undefined;
     const returnedWork=phoneResult||(taskResult?.noticeKind?null:taskResult);
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
@@ -7641,6 +7688,15 @@ export default function App(){
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||delivery||m.role==='assistant'||canQuote||savedAttachmentChoices.length>0||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
+       {answerInputPdf&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFile}
+        onClick={(event:{currentTarget:HTMLButtonElement})=>{
+         if(openingMessageOriginal.current)return;
+         const target=event.currentTarget,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+         void openChatMessageOriginal(answerInputPdf.source,target,'messagePdf',undefined,answerInputPdf).catch(error=>{
+          if(!document.hidden&&target.isConnected&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation)
+           setLocalError(error instanceof Error?error.message:'未打开提问所附原件。');
+         });
+        }}>查看提问所附 PDF</Button>}
        {chatReport&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
         disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
         onClick={event=>openReportFromChat(chatReport,event.currentTarget)}>查看原工作成果</Button>}
@@ -7839,6 +7895,22 @@ export default function App(){
   !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
  const importedFileTarget=importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
   !projectListBusy&&!projectListError&&!files.length&&!fileQuery?importedCopy:null;
+ const projectStartDraft=currentProject?projectWorkDrafts[currentProject.id]:undefined;
+ const projectStartPresentation:ProjectWorkPresentation=(currentProject?projectWorkPresentations[currentProject.id]:undefined)??{
+  open:!!(projectStartDraft?.operation||projectStartDraft?.expanded),
+  mode:projectStartDraft?.operation||projectStartDraft?.expanded||!can('projects.development.read')?'profile':'default',
+ };
+ const localFilesLanding=currentProject&&route==='projects'&&!projectStartPresentation.open&&
+  !previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&!importedCopy&&!retainedCopyFirst&&
+  !projectLocalFilesIntent&&!projectDraftReturn&&!projectBuildReturn&&!projectImportedEditor&&!projectStartDraft?.operation&&!projectStartDraft?.expanded;
+ // An existing ordinary copy is a native registration, not a guess from an
+ // empty Work directory. Its saved choice is still checked on opening.
+ const preparedLocalFiles=localFilesLanding&&currentProject&&(projectSection==='work'||projectSection==='files')&&
+  !pythonSetupReturn&&!dependencyBuildReturn&&!viteToolsReturn&&!viteResultLookup?
+  originalPreparedLocalCopy(currentProject.id):null;
+ const preparedLocalFilesWork=projectSection==='work'?preparedLocalFiles:null;
+ const preparedLocalFilesTab=projectSection==='files'&&currentProject&&projectListInput.projectId===currentProject.id&&
+  !projectListBusy&&!projectListError&&!files.length&&!fileQuery?preparedLocalFiles:null;
  const firstProjectFilesCurrent=(live:ReturnType<typeof bridge.getState>,projectId:string)=>{
   const view=obj(live.view),results=obj(live.state.moduleResults),created=obj(results['workspace.create']),listed=obj(results['workspace.list']);
   return !document.hidden&&live.state.projectId===projectId&&!live.state.filePath&&view.section===null&&view.taskId===null&&
@@ -7851,9 +7923,9 @@ export default function App(){
   !previewBlocked&&!projectPreview.expanded&&!projectListBusy&&!projectListError&&!projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&
   !projectWorkDrafts[currentProject.id]?.operation&&!projectWorkDrafts[currentProject.id]?.expanded&&
   firstProjectFilesCurrent(bridge.getState(),currentProject.id)?currentProject.id:'';
- const firstLocalFilesProject=projectSection==='files'&&!fileQuery&&!importedFileTarget?emptyCreatedProject:'';
+ const firstLocalFilesProject=projectSection==='files'&&!fileQuery&&!importedFileTarget&&!preparedLocalFilesTab?emptyCreatedProject:'';
  const openLocalProjectFiles=(from:'files'|'work',originalCopy?:ProjectPreparedLocalCopy)=>{
-  if(route!=='projects'||projectSection!==from||originalCopy&&from!=='work')return;
+  if(route!=='projects'||projectSection!==from||originalCopy&&originalCopy!==(from==='work'?preparedLocalFilesWork:preparedLocalFilesTab))return;
   const projectId=originalCopy?.projectId||(from==='work'?firstLocalFilesWorkProject:firstLocalFilesProject);
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
   const resume=obj(bridge.getState().view).resumeRevision;
@@ -7887,11 +7959,11 @@ export default function App(){
     asArray<string>(live.moduleBusy).includes('workspace.list'))){
     setLocalError('原项目或导入副本状态已变化，没有打开其他文件。');return;
   }
-  // Reopening a single registered phone import should reach the same inventory
-  // as its fresh receipt. Let that existing window verify any prior saved file.
+  // Reopening one original phone import or built-in starter starts at its
+  // directory, so a verified prior save is not hidden by the template entry file.
   const copies=asArray<Json>(live.features?.local?.checkouts).filter(row=>row?.projectId===target.projectId);
-  const originalPhoneDirectory=target.exactPhoneSource===true&&copies.length===1&&copies[0].id===target.checkoutId;
-  showImportedEditor(originalPhoneDirectory?{...target,openDirectory:true}:target);
+  const originalDirectory=(target.exactPhoneSource===true||target.exactStarterSource===true)&&copies.length===1&&copies[0].id===target.checkoutId;
+  showImportedEditor(originalDirectory?{...target,openDirectory:true}:target);
  };
  phoneImportFilesQuiet.current=project=>ready&&route==='projects'&&!previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&
   !projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&!projectLocalFilesIntent&&!pythonSetupReturn&&!dependencyBuildReturn&&
@@ -7933,14 +8005,16 @@ export default function App(){
  const starterFiles=importedFileTarget?.sourceKind==='builtin_vite_starter';
  const starterWork=importedWorkTarget?.sourceKind==='builtin_vite_starter';
  const projectFilesEmpty=<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
-  <h3>{fileQuery?'没有匹配的文件':starterFiles?'网页源码已准备':importedFileTarget?fixedTaskCopy?'源码在新工作副本':'导入源码在本机副本':firstLocalFilesProject?'还没有正式文件':'暂无列出的文件'}</h3>
+  <h3>{fileQuery?'没有匹配的文件':starterFiles?'网页源码在本机副本':importedFileTarget?fixedTaskCopy?'源码在新工作副本':'导入源码在本机副本':firstLocalFilesProject||preparedLocalFilesTab?'还没有正式文件':'暂无列出的文件'}</h3>
   <p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':starterFiles?'在这份本机副本编辑网页，改完再构建。':importedFileTarget?fixedTaskCopy?
     '这里还没有正式文件。可编辑新副本中的源码，原固定包保持不变。':'这里还没有正式文件。编辑和后续本机构建都用这份导入副本。':
+    preparedLocalFilesTab?'正式文件与本机副本分开。打开本机源码可查看这份副本的文件。':
     firstLocalFilesProject?'要在手机上运行，请在工作副本里添加源码。新建正式文件不会改动已有副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
   {fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<div className="pw-action-row">
-   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>{starterFiles?'编辑网页':fixedTaskCopy?'编辑新副本源码':'编辑导入的本机源码'}</Button>}
+   {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>{starterFiles?'打开网页源码':fixedTaskCopy?'编辑新副本源码':'编辑导入的本机源码'}</Button>}
+   {preparedLocalFilesTab&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openLocalProjectFiles('files',preparedLocalFilesTab)}>打开本机源码</Button>}
    {firstLocalFilesProject&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openLocalProjectFiles('files')}>在本机副本里编辑</Button>}
-   {can('projects.newFile')&&<Button variant={importedFileTarget||firstLocalFilesProject?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget||firstLocalFilesProject?'新建正式文件':'新建文件'}</Button>}
+   {can('projects.newFile')&&<Button variant={importedFileTarget||firstLocalFilesProject||preparedLocalFilesTab?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget||firstLocalFilesProject||preparedLocalFilesTab?'新建正式文件':'新建文件'}</Button>}
    {can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}
   </div>}
  </div>;
@@ -7965,20 +8039,12 @@ export default function App(){
   };
   void navigate('projects',()=>run('projects.localSource.open'),{stillCurrent:sameColdHome});
  };
- const projectStartDraft=currentProject?projectWorkDrafts[currentProject.id]:undefined;
- const projectStartPresentation:ProjectWorkPresentation=(currentProject?projectWorkPresentations[currentProject.id]:undefined)??{
-  open:!!(projectStartDraft?.operation||projectStartDraft?.expanded),
-  mode:projectStartDraft?.operation||projectStartDraft?.expanded||!can('projects.development.read')?'profile':'default',
- };
  // The formal list proves nothing about the checkout. The existing Work page
  // still checks the saved choice and owns explicit copy preparation.
- const quietLocalFilesWork=currentProject&&route==='projects'&&projectSection==='work'&&!projectStartPresentation.open&&
-  !previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&!importedCopy&&!retainedCopyFirst&&
-  !projectLocalFilesIntent&&!projectDraftReturn&&!projectBuildReturn&&!projectImportedEditor&&!projectStartDraft?.operation&&!projectStartDraft?.expanded&&
+ const quietLocalFilesWork=localFilesLanding&&projectSection==='work'&&
   projectWorkView.filter==='all'&&!projectWorkView.query.trim()&&projectDirectory.loaded&&!projectDirectory.busy&&!projectDirectory.error&&
   !projectDirectory.hasMore&&!projectDirectory.hasReadGaps&&!projectDirectory.tasks.length;
- const firstLocalFilesWorkProject=quietLocalFilesWork&&can('projects.development.prepare')?emptyCreatedProject:'';
- const preparedLocalFilesWork=quietLocalFilesWork&&!firstLocalFilesWorkProject?originalPreparedLocalCopy(currentProject.id):null;
+ const firstLocalFilesWorkProject=quietLocalFilesWork&&!preparedLocalFilesWork&&can('projects.development.prepare')?emptyCreatedProject:'';
  const pairedDeviceProjectCurrent=(native:ReturnType<typeof bridge.getState>,projectId:string,returning=false)=>{
   const view=obj(native.view),owner=native.state;
   return (view.section===null||returning&&view.section==='devices')&&view.taskId===null&&Number.isSafeInteger(view.resumeRevision)&&owner.projectId===projectId&&
@@ -8017,9 +8083,9 @@ export default function App(){
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
-        editLocalFiles={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:starterWork?'编辑网页':fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:
+        editLocalFiles={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:starterWork?'打开网页源码':fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:
          firstLocalFilesWorkProject?{onOpen:()=>openLocalProjectFiles('work'),label:'编辑本机文件'}:
-         preparedLocalFilesWork?{onOpen:()=>openLocalProjectFiles('work',preparedLocalFilesWork),label:'打开本机文件'}:undefined}
+         preparedLocalFilesWork?{onOpen:()=>openLocalProjectFiles('work',preparedLocalFilesWork),label:'打开本机源码'}:undefined}
         localCopyFirst={importedSourceFirst||retainedCopyFirst}
         savedWebContent={can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}

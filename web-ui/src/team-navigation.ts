@@ -1,5 +1,6 @@
 import type {ProjectTeamReviewOrigin} from './project-team-review-origin';
 import type { TeamPackageMark } from './team-delivered-package';
+import type { OwnerWorkTeam } from './owner-work-presentation';
 
 /** Native-verified links keep collaboration in the work that requested it. */
 export type TeamOwnerWorkLink = {
@@ -73,7 +74,52 @@ export const matchesWorkTeamResult=(source:WorkTeamResultSource,link:TeamOwnerWo
   link.taskId===source.parentTaskId&&link.runId===source.parentRunId&&link.epoch===source.parentEpoch&&link.conversationId===source.conversationId&&
   link.teamTaskId===source.taskId&&link.teamRunId===source.teamRunId;
 export const workTeamResultEntryKey=(source:WorkTeamResultSource)=>JSON.stringify(['team-result',source.parentTaskId,source.parentRunId,source.parentEpoch,source.conversationId,source.taskId,source.teamRunId]);
+export type WorkTeamMemberStage = { memberId:string; name:string; generation:number; memberGeneration:number; turnId:string; round:1 };
+const memberRun=(value:unknown,runId:string)=>{
+  const run=value as (Record<string,any>&{members:Record<string,any>[]})|undefined;
+  if(!run||run.id!==runId||run.operationId!==runId||run.mode!=='collaborate'||run.rounds!==1||
+     run.definitionKind!=null||run.archived===true||run.workPlan||run.productionScope||run.phoneScope||
+     run.researchExecutionFormat!=='pocketworld.team-research-agent.v1'||run.discussion||
+     !Array.isArray(run.members)||run.members.length!==2||!Number.isSafeInteger(run.generation)||
+     !run.members.every(member=>member&&typeof member.id==='string'&&member.id&&member.runner==='model'&&member.device==='phone'&&
+       member.exited!==true&&Array.isArray(member.roundStates)&&member.roundStates.length===1&&member.roundStates[0]?.round===1)||
+     run.members[0].id===run.members[1].id)return;
+  return run;
+};
+
+/** A display hint from the already pushed native run and the same Work receipt. No child read or control. */
+export function activeWorkTeamMember(team:OwnerWorkTeam,value:unknown):WorkTeamMemberStage|undefined{
+  if(!team.active||team.needsAttention||team.cancelRequested||team.status!=='running'||team.memberCount!==2||team.completedMemberCount!==1)return;
+  const run=memberRun(value,team.teamRunId);
+  if(!run||run.status!=='running'||run.phase!=='collaborate'||run.updatedAt!==team.updatedAt)return;
+  const [first,second]=run.members;
+  const member=first.status==='running'?first:second, other=member===first?second:first;
+  const stage=member.roundStates[0],done=other.roundStates[0];
+  if(member.status!=='running'||member.paused!==false||stage.status!=='running'||stage.generation!==member.generation||
+     !Number.isSafeInteger(member.generation)||typeof stage.turnId!=='string'||!stage.turnId||
+     typeof member.name!=='string'||!member.name.trim()||member.name===other.name||
+     other.status!=='completed'||done.status!=='completed'||!done.researchTaskId||
+     done.researchTask?.status!=='completed'||done.researchTask.taskId!==done.researchTaskId)return;
+  return {memberId:member.id,name:member.name,generation:run.generation,memberGeneration:member.generation,turnId:stage.turnId,round:1};
+}
+
+export function sameWorkTeamMember(left:WorkTeamMemberStage,right:WorkTeamMemberStage|undefined):boolean{
+  return !!right&&left.memberId===right.memberId&&left.name===right.name&&left.generation===right.generation&&
+    left.memberGeneration===right.memberGeneration&&left.round===right.round&&left.turnId===right.turnId;
+}
+
+/** It may now be finished, but this must still be the stage selected by the owner. */
+export function matchesWorkTeamMember(source:WorkTeamResultSource,selected:WorkTeamMemberStage,link:TeamOwnerWorkLink,runValue:unknown):boolean{
+  if(!link||!matchesWorkTeamResult(source,link))return false;
+  const run=memberRun(runValue,source.teamRunId);
+  const member=run?.members.find(row=>row.id===selected.memberId),stage=member?.roundStates[0];
+  return !!run&&!!member&&run.generation===selected.generation&&member.name===selected.name&&
+    member.generation===selected.memberGeneration&&stage?.round===selected.round&&
+    stage.turnId===selected.turnId&&stage.generation===selected.memberGeneration;
+}
+
 export type TeamRunFocus = { requestId: string; runId: string; fromProject?:ProjectTeamReviewOrigin; fromWork?: WorkFileSource|WorkProposalSource|WorkPackageSource;
+  fromWorkMember?: {source:WorkTeamResultSource; selected:WorkTeamMemberStage};
   fromWorkResult?: {source:WorkTeamResultSource; arm:(current:()=>boolean)=>WorkTeamResultReturn|null;
     accepted?:{report:AcceptedWorkTeamReport;current:()=>boolean}}; returnToWork?: (reason?:string)=>void };
 export function teamFileMark(input:unknown): TeamFileReviewMark | null {

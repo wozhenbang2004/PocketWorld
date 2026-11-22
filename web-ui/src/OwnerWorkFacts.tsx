@@ -8,7 +8,7 @@ import './owner-work.css';
 
 /** The Brief/Assets relationship from Affect AgentChat, rendered with the
  * retained BoardUI controls and host-owned facts instead of demo data. */
-export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTeam, canOpenTeamFiles }: { task: unknown; onReport?: () => void; reportLabel?: string; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: OpenOwnerWorkTeam; canOpenTeamFiles?: boolean }) {
+export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTeam, canOpenTeamFiles, activeTeamRuns }: { task: unknown; onReport?: () => void; reportLabel?: string; onReconcile?: (target: ReportReconciliationTarget) => void; onTeam?: OpenOwnerWorkTeam; canOpenTeamFiles?: boolean; activeTeamRuns?:Record<string,unknown> }) {
   const work = ownerWorkPresentation(task);
   if (!work) return null;
   const showHandling = work.waitingForButler || work.waitingForChildren || work.delivered ||
@@ -31,7 +31,7 @@ export function OwnerWorkFacts({ task, onReport, reportLabel, onReconcile, onTea
       {teamDecision.anotherPending && <p>另一笔待审分工是不同申请，不代表这次批准没保存。</p>}
     </div></div>}
     {teamDecision?.savedPlan && <ApprovedSavedTeamRoster plan={teamDecision.savedPlan} />}
-    <OwnerWorkTeams task={task} teams={work.teams} onOpen={onTeam} canOpenFiles={canOpenTeamFiles} />
+    <OwnerWorkTeams task={task} teams={work.teams} onOpen={onTeam} canOpenFiles={canOpenTeamFiles} activeTeamRuns={activeTeamRuns}/>
     {work.teamsUnavailable && <p className="pw-owner-work-result-state" role="status">协作进展待读取，请稍后重新打开这件工作。</p>}
   </section>;
 }

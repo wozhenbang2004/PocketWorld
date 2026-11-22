@@ -34,7 +34,7 @@ import { ReadingContext } from './reading-context';
 import { PHONE_OUTPUT_NOT_RETURNED, teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import {sameTeamPackage} from './team-delivered-package';
-import {matchesWorkTeamResult,sameTeamFiles,sameTeamProposal,type AcceptedWorkTeamReport,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
+import {matchesWorkTeamMember,matchesWorkTeamResult,sameTeamFiles,sameTeamProposal,type AcceptedWorkTeamReport,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -347,7 +347,21 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     scroll.addEventListener('scroll', remember, { passive: true });
     return () => { cancelAnimationFrame(frame); scroll.removeEventListener('scroll', remember); };
   }, [viewKey]);
-  const decisionTarget=useRef<{handle:string;focus:AttentionFocus}|null>(null);
+  type FocusStage=NonNullable<TeamRunFocus['fromWorkMember']>;
+  const checkStageFocus=(reading:Data,focus:FocusStage,live=bridge.getState())=>{
+    const {source,selected}=focus;
+    const parents=rows(live.state.tasks).filter(row=>row.id===source.parentTaskId);
+    const raw=parents.length===1?parents[0].raw:undefined;
+    if(!raw||raw.runId!==source.parentRunId||raw.coordinatorEpoch!==source.parentEpoch||
+       raw.conversationId!==source.conversationId||raw.contextAvailable===false||raw.contextWithdrawn===true||
+       raw.sourceCurrentReadRequired===true||raw.cancelRequested===true)return false;
+    const latest=object(object(live.state.teamRuns)[source.teamRunId]);
+    // A routine progress update can advance the revision while the same member
+    // is still making the same turn. Never substitute a different member or turn.
+    return matchesWorkTeamMember(source,selected,reading.ownerWorkLink,reading.run)&&
+      (!newerTeamReading(reading.run,latest)||matchesWorkTeamMember(source,selected,reading.ownerWorkLink,latest));
+  };
+  const decisionTarget=useRef<{handle:string;focus:AttentionFocus|{stage:FocusStage}}|null>(null);
   const showDecisionTarget=(id:string,handle:string,focus:AttentionFocus)=>{
     decisionTarget.current={handle,focus};
     setRunSections(old=>({...old,[id]:focus.kind==='question'||focus.kind==='workItem'?'details':'progress'}));
@@ -365,7 +379,19 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const frame=requestAnimationFrame(()=>{
       if(decisionTarget.current!==pending||currentReading.current?.viewHandle!==pending.handle||!ownsNativeWindow()||document.hidden)return;
       decisionTarget.current=null;
-      const focus=pending.focus, selector=focus.kind==='question'?`[data-message-id="${CSS.escape(focus.messageId!)}"]`
+      const focus=pending.focus;
+      if('stage' in focus){
+        const {selected}=focus.stage,shown=currentReading.current;
+        if(shownRunSection.current!=='progress'||!shown||!checkStageFocus(shown,focus.stage))return;
+        const nodes=root.current?.querySelectorAll<HTMLElement>(
+          `[data-team-member-id="${CSS.escape(selected.memberId)}"] [data-team-progress-round="${selected.round}"]`);
+        const row=nodes?.length===1?nodes[0]:undefined;
+        if(row&&!row.closest('[hidden],[inert],[aria-hidden="true"]')){
+          row.focus({preventScroll:true});row.scrollIntoView({block:'center'});
+        }
+        return;
+      }
+      const selector=focus.kind==='question'?`[data-message-id="${CSS.escape(focus.messageId!)}"]`
         :focus.kind==='workItem'?`[data-work-item-id="${CSS.escape(focus.workItemId!)}"]`
         :focus.kind==='member'?`[data-team-member-id="${CSS.escape(focus.memberId!)}"]`:'.pw-team-run h2';
       const target=root.current?.querySelector<HTMLElement>(selector), child=focus.taskId?target?.querySelector<HTMLElement>(`[data-team-source-task="${CSS.escape(focus.taskId)}"]`):null;
@@ -441,7 +467,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
     handledRunFocus.current = requestId;
     const project=runFocus?.fromProject,from=runFocus?.fromWork,proposal=from&&'proposal' in from?from:undefined,files=from&&'fileReview' in from?from:undefined,pack=from&&'deliveredPackage' in from?from:undefined;
-    const originalResult=runFocus?.fromWorkResult,accepted=originalResult?.accepted;
+    const originalResult=runFocus?.fromWorkResult,accepted=originalResult?.accepted,member=runFocus?.fromWorkMember;
     retireWorkResult();
     const originalAnchor=originalResult&&onOpenWork&&originalResult.source.teamRunId===runId&&originalHotCompletedTeam(catalog,runId)?originalResult:null;
     const documentEpoch=bridge.getDocumentEpoch(),resume=object(bridge.getState().view).resumeRevision;
@@ -485,7 +511,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           return inSameVisit()&&shown?.run?.generation===generation&&originalWorkTeamResult(shown,originalAnchor.source)===originalMessage;
         });
       }
-      const entry = from || project || workResultReturn.current || accepted ? 'result' : settled ? teamRunEntrySection(next) : 'progress';
+      const stage=member&&inSameVisit()&&checkStageFocus(next,member)?member:undefined;
+      if(stage)decisionTarget.current={handle:next.viewHandle,focus:{stage}};
+      const entry = stage ? 'progress' : from || project || workResultReturn.current || accepted ? 'result' : settled ? teamRunEntrySection(next) : 'progress';
       setRunSections(old => ({ ...old, [runId]: entry }));
       setComposeOpen(false);
       onRunFocusConsumed?.(requestId);

@@ -16,6 +16,8 @@ type CurrentRead = { status: 'read' | 'not_available'; text?: string; expires: n
 type ReadingVisit = { presentation: string; evidence: string };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const statusLabel = (status: string) => ({ current: '当前仍有效', record_changed: '这条记忆后来已修改', record_removed: '这条记忆已删除', source_forgotten: '原来源已遗忘', superseded: '已被新记忆替代', expired: '已到期', revoked: '原引用已撤回', run_changed: '原执行已变化' } as Record<string, string>)[status] || '原版本当前不可读';
+const selectionReason = (row: Data) => row.selectionReason==='task_query_match'?'当时与原问题相关':
+  row.selectionReason==='owner_core'?'当时的常用记忆':row.selectionReason==='owner_current'?'当时的个人背景':undefined;
 const revised = (row: Data): RevisedVersion | null => row.status==='record_changed' && typeof row.currentReadHandle==='string' && !!row.currentReadHandle &&
   typeof row.id==='string' && !!row.id && Number.isSafeInteger(row.revision) && row.revision>0 && Number.isSafeInteger(row.currentRevision) && row.currentRevision>row.revision
   ? {id:row.id,originalRevision:row.revision,currentRevision:row.currentRevision} : null;
@@ -43,7 +45,17 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
     && visit.presentation === answerPresentation() && visit.evidence === originalMemoryWindow(), []);
   const awaitingSave = savingCorrection.current;
   const receiptVisible = !!receipt && !awaitingSave && sameWindow(readWindow.current) && receipt.answerReadExpiresAt > Date.now();
-  const selected = receiptVisible ? selection : null;
+  const provided = receiptVisible && receipt?.phase === 'provided_to_request';
+  const records = provided ? taskMemoryVisibleRecords(receipt) : [];
+  const commands = bridge.getState().capabilities.commands;
+  const correctionSupported = ['taskMemory.review','taskMemory.confirm'].every(action=>commands.includes(action));
+  const only = records.length === 1 ? records[0] : null;
+  // The owner already opened this answer's receipt. With exactly one proven,
+  // correctable preference, show that record rather than a one-row chooser.
+  const directPreference = !history && receipt?.status==='current' && correctionSupported && only && only.layer==='preference' &&
+    selectionReason(only) && canCorrectProvided(receipt,only) ? only : null;
+  const selected = receiptVisible ? selection ?? directPreference : null;
+  const backToReceipt = !!selected && (!directPreference || !!sourceCursor);
   const closeSession = useCallback(() => { const id = session.current; session.current = ''; if (id) void bridge.command('memoryHistory.close', { handle: id }).catch(() => {}); }, []);
   const clearReading = useCallback(() => {
     generation.current++; reading.current = null; closeSession(); setCorrecting(false); setReceipt(null);
@@ -130,9 +142,9 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
     generation.current++; reading.current = null; setSelected(null); setSource(null); setCurrentRead(null); setSourceCursor(null); setError(''); setBusy(false);
   };
   useEffect(() => {
-    registerBack(() => { if(correctionBack.current?.()) return true; if (selected) returnToMemories(); else onClose(); return true; });
+    registerBack(() => { if(correctionBack.current?.()) return true; if (backToReceipt) returnToMemories(); else onClose(); return true; });
     return () => registerBack(null);
-  }, [selected, registerBack, onClose]);
+  }, [backToReceipt, registerBack, onClose]);
   const readSource = async (index: number, offset = 0, previous: number[] = []) => {
     const visit = readWindow.current;
     if (!selected?.readHandle || reading.current !== null || !session.current || !sameWindow(visit) || receipt?.answerReadExpiresAt <= Date.now()) return;
@@ -147,8 +159,6 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
     } catch (failure) { if (current()) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { if (reading.current === version) reading.current = null; if (current()) setBusy(false); }
   };
-  const provided = receiptVisible && receipt?.phase === 'provided_to_request';
-  const records = provided ? taskMemoryVisibleRecords(receipt) : [];
   // Layer is returned only for the exact still-readable revision. Neither the
   // source text nor today's profile can prove a missing historical category.
   const isPreference = (row: Data) => provided && (receipt?.status === 'current' || receipt?.status === 'invalidated')
@@ -157,11 +167,11 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
   const groups = preferences.length
     ? [{ title: '偏好类记忆', items: preferences }, { title: '同次请求的其他条目', items: records.filter(row => !isPreference(row)) }]
     : [{ title: '', items: records }];
-  const commands=bridge.getState().capabilities.commands;
   const selectedLater=selected&&revised(selected), canReadCurrent=commands.includes('taskMemory.currentRevision');
   const personalCurrent=!history&&canCorrectProvided(receipt,selected);
-  const canCorrect = personalCurrent && ['taskMemory.review','taskMemory.confirm'].every(action=>commands.includes(action));
+  const canCorrect = personalCurrent && correctionSupported;
   const canManage = !!onManage && personalCurrent && commands.includes('profile.memory.get');
+  const preferenceReason = selected && selected.layer==='preference' && personalCurrent ? selectionReason(selected) : undefined;
   const attended=attention.current;
   const finishCorrection=(result:AnswerMemoryCorrectionOutcome)=>{
     if(!live.current||document.hidden||attention.current!==attended||readWindow.current?.presentation!==answerPresentation())return;
@@ -173,7 +183,7 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
   return <Drawer.Root open onOpenChange={open => { if (!open) close(); }} shouldScaleBackground={false}><Drawer.Portal>
     <Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-answer-sources" aria-describedby="provided-memory-description" onCloseAutoFocus={onCloseAutoFocus}>
       <div className="pw-drawer-handle"/><header className="pw-drawer-header">
-        {selected && <IconButton icon={IconChevronLeft} aria-label="返回本次记忆列表" disabled={busy} onClick={returnToMemories}/>}<div><Drawer.Title>{outcome?'这次纠正':selectedLater?'这条记忆的现行版':selected?'这条记忆':provided?'本次提供的记忆':'核对本次记忆'}</Drawer.Title></div>
+        {backToReceipt && <IconButton icon={IconChevronLeft} aria-label={directPreference?'收起原来源':'返回本次记忆列表'} disabled={busy} onClick={returnToMemories}/>}<div><Drawer.Title>{outcome?'这次纠正':selectedLater?'这条记忆的现行版':selected?'这条记忆':provided?'本次提供的记忆':'核对本次记忆'}</Drawer.Title></div>
         <IconButton icon={IconRefresh} aria-label="重新核对原记忆回执" disabled={busy} onClick={() => refreshOriginal()}/><IconButton icon={IconClose} aria-label="返回原回答" onClick={close}/>
       </header>
       <Drawer.Description id="provided-memory-description" className="pw-source-description">{outcome?.kind==='saved'?'这次纠正只更新已保存的记忆；不会改写原回答或当时的提供记录。':selectedLater?`当时提供的是第 ${selectedLater.originalRevision} 版，下面只核对后来保存的同一条。`:!provided?'在这里核对这条回答的原请求，不用现在的设置或新的检索代替。':selected?'这条记忆曾提供给模型。可以对照原来源，但不能据此断定模型读过原文。':'下列记忆条目有原请求的提供回执，不代表模型采用了它们。'}</Drawer.Description>
@@ -194,7 +204,7 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
                 if(later&&receipt&&reading.current===null)void readCurrentVersion(receipt,row,++generation.current);
                 else if(available){setSelected(row);setSource(null);setError('');}
               }}><span className="pw-source-row-copy"><b>{available?row.text:statusLabel(row.status)}</b><small>{later?`当时第 ${later.originalRevision} 版 · 核对现行第 ${later.currentRevision} 版`:
-                `${row.selectionReason==='task_query_match'?'当时与原问题相关':row.selectionReason==='owner_core'?'当时的常用记忆':row.selectionReason==='owner_current'?'当时的个人背景':'原回执未保留选入原因'} · ${statusLabel(row.status)}`}</small></span></Button>;
+                `${selectionReason(row)??'原回执未保留选入原因'} · ${statusLabel(row.status)}`}</small></span></Button>;
             })}</div>
           </section>)}
           <p className="pw-muted">这份回执不列出语言、详略等默认设置。聊天里说“这次简短些”，也不等于改了长期偏好。</p>
@@ -207,8 +217,9 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
         {selected && !selectedLater && <>
           <p className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{selected.text}</p>
           <p className="pw-muted">{selected.source || '原记忆记录'} · {statusLabel(selected.status)}{selected.expiresAt ? ` · 有效至 ${new Date(selected.expiresAt).toLocaleDateString()}` : ''}</p>
+          {preferenceReason && <p className="pw-muted">为何提供：{preferenceReason}</p>}
           {(canCorrect||canManage)&&<div className="pw-action-row">
-            {canCorrect&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>{if(sameWindow(readWindow.current)&&canCorrectProvided(receipt,selected)){setSource(null);setSourceCursor(null);setCorrecting(true);}}}>纠正这条已保存记忆</Button>}
+            {canCorrect&&<Button variant={directPreference?'secondary':'ghost'} size="small" disabled={busy} onClick={()=>{if(sameWindow(readWindow.current)&&canCorrectProvided(receipt,selected)){setSelected(selected);setSource(null);setSourceCursor(null);setCorrecting(true);}}}>纠正这条已保存记忆</Button>}
             {canManage&&onManage&&<Button variant="ghost" size="small" disabled={busy} onClick={()=>{if(sameWindow(readWindow.current)&&canCorrectProvided(receipt,selected))onManage({id:selected.id,revision:selected.revision});}}>管理这条记忆</Button>}
           </div>}
           {rows(selected.sourceRefs).length ? <div className="pw-action-row">{rows(selected.sourceRefs).map((_, index) => <Button key={index} variant="secondary" disabled={busy} onClick={() => void readSource(index)}>查看原来源 {index + 1}</Button>)}</div> : <p className="pw-muted">这条记录未附原文来源；显示的内容是保存的记忆。</p>}
