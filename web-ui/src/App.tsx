@@ -51,6 +51,7 @@ import {OriginalChatReminderReview} from './OriginalChatReminderReview';
 import type {SettingsDirectoryOrigin} from './SettingsDirectory';
 import ProfileWorkspace,{type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings,type ConversationMemoryControls} from './ConversationMemorySettings';
+import {ConversationReferenceShelf} from './ConversationReferenceShelf';
 import {NewConversationMemory} from './NewConversationMemory';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
 import {SetupWorkspace,type SetupDestination,type SetupView} from './SetupWorkspace';
@@ -233,6 +234,18 @@ type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+type ChatReferenceVisit={input:ModelSetupInput;resume:number;navigation:number;trigger:HTMLButtonElement};
+function originalChatReferenceInput(native:ReturnType<typeof bridge.getState>,documentEpoch:number){
+ const input=modelSetupInput(native,documentEpoch),owner=native.state,view=obj(native.view),phone=obj(native.phoneDraft);
+ if(!input?.conversation||input.key!==`conversation:${input.conversation}`||native.host?.ready!==true||
+    view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||owner.conversationReader!==null||
+    owner.filePath!==null||owner.queuedInputsPage!==null||owner.attachmentWorkspace?.open!==false||
+    owner.chatAttachmentPickerOpen!==false||owner.chatSubmitting!==false||phone.phone!==false||phone.channelOrigin!==false||
+    native.composer?.oneMessageLearning?.pending!==false||native.composer.oneMessageLearning.saving===true||
+    !['profile.conversation.read','composer.oneLearning.save','messageShelf.list','messageShelf.read','messageShelf.stage',
+      'messageShelf.dismiss','messageShelf.remove','messageShelf.close'].every(command=>native.capabilities.commands.includes(command)))return null;
+ return {input,resume:Number(view.resumeRevision)};
+}
 function ordinaryChatWorkRow(task:Task|undefined,conversation:string,detail=false){
  const work=ownerWorkIdentity(task),raw=task?.raw,source=obj(raw?.ownerWork);
  return work&&raw?.kind==='assistant'&&raw.executionMode==='capabilities'&&raw.conversationId===conversation&&
@@ -563,6 +576,7 @@ export default function App(){
  const [personalTarget,setPersonalTarget]=useState<PersonalTarget>({view:'home'}),[personalTargetKey,setPersonalTargetKey]=useState(0);
  const [conversationMemoryOpen,setConversationMemoryOpen]=useState(false),[conversationMemoryControls,setConversationMemoryControls]=useState<ConversationMemoryControls|null>(null);
  const conversationMemoryBack=useRef<(()=>boolean)|null>(null);
+ const [chatReferenceVisit,setChatReferenceVisit]=useState<ChatReferenceVisit|null>(null);
  const registerConversationMemoryBack=useCallback((handler:(()=>boolean)|null)=>{conversationMemoryBack.current=handler},[]);
  const [routeReferenceTarget,setRouteReferenceTarget]=useState<RouteReferenceTarget|null>(null);
  const snapshot=usePocketSnapshot() as any;const nativeState:Json=obj(snapshot?.state);const foregroundTurn=foregroundConversationTurn(nativeState);const state:Json={...nativeState,foregroundTurn,chatActiveTurn:foregroundTurn,chatBusy:!!foregroundTurn};const composer:Json=obj(snapshot?.composer);const phoneDraft:Json=obj(snapshot?.phoneDraft);
@@ -2651,6 +2665,41 @@ export default function App(){
   finally{openingBuildCopy.current=false;if(!opened)handledBuildReturn(target);}
  };
  const previewBlocked=!!(searchOriginal||projectWorkReviewOpen||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||phoneViewerExpanded||workOpen||commandOpen||taskOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice);
+ // Keep the old Settings entry wherever the ordinary composer can't offer the same shelf.
+ const referenceInput=route==='chat'&&intent==='chat'&&conversationMemoryReadable&&singleLearningScope&&
+  !draftSwitching&&!reportDraftSwitching?originalChatReferenceInput(snapshot,personalDocumentEpoch):null;
+ const referenceShelfAvailable=!!referenceInput&&!previewBlocked&&!readingDocuments.length&&!deliveredFileVisit;
+ const currentChatReference=useCallback((visit:ChatReferenceVisit)=>{
+  const native=bridge.getState(),doc=bridge.getDocumentEpoch(),current=originalChatReferenceInput(native,doc);
+  return !document.hidden&&visit.trigger.isConnected&&!draftSwitchPending()&&
+   visit.navigation===navigationWindow.current&&visit.resume===current?.resume&&
+   sameModelSetupInput(visit.input,native,doc);
+ },[draftSwitchPending]);
+ const shownChatReference=chatReferenceVisit&&referenceShelfAvailable&&currentChatReference(chatReferenceVisit)?chatReferenceVisit:null;
+ useLayoutEffect(()=>{
+  if(chatReferenceVisit&&!shownChatReference)setChatReferenceVisit(current=>current===chatReferenceVisit?null:current);
+ },[chatReferenceVisit,shownChatReference]);
+ const openChatReference=()=>{
+  const buttons=workspace.current?.querySelectorAll<HTMLButtonElement>('[data-chat-add-content]');
+  const trigger=buttons?.length===1?buttons[0]:undefined;
+  if(!referenceInput||!referenceShelfAvailable||!trigger?.isConnected||chatReferenceVisit)return;
+  const visit:ChatReferenceVisit={...referenceInput,navigation:navigationRevision,trigger};
+  if(!currentChatReference(visit))return;
+  chooseInlinePhoneVisit(null);
+  setVoiceOptionsOpen(false);setChatReferenceVisit(visit);
+ };
+ const closeChatReference=useCallback((visit:ChatReferenceVisit,focus?:'menu'|'draft')=>{
+  setChatReferenceVisit(current=>current===visit?null:current);
+  if(!focus||shownChatReference!==visit)return;
+  const target=focus==='draft'?workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||visit.trigger:visit.trigger;
+  window.requestAnimationFrame(()=>{
+   const active=document.activeElement;
+   if(!currentChatReference(visit)||!target.isConnected||target.matches(':disabled')||!target.getClientRects().length||target.closest('[hidden],[inert],[aria-hidden="true"]')||
+      document.querySelector('[role="dialog"][data-state="open"]')||
+      active!==document.body&&active!==document.documentElement&&active!==visit.trigger)return;
+   target.focus({preventScroll:true});
+  });
+ },[currentChatReference,shownChatReference]);
  const packageReturn=useRef<{target:PackagePreviewTarget;origin:WorkspaceOrigin;epoch:number;navigation:number;projectFocus:ProjectTaskReturn|null;
   originalChatCurrent?:(live:ReturnType<typeof bridge.getState>)=>boolean}|null>(null);
  const returnOriginalArchiveChat=(origin:WorkspaceOrigin)=>{
@@ -2911,7 +2960,7 @@ export default function App(){
  },[state.requestedConnectionRevision,state.requestedConnectionSection,state.requestedReminderNotice?.connectionRevision,navigate,ready,personalDocumentEpoch,route,secondaryPage,taskOpen]);
  const reminderNotice=route==='automation'&&reminderNoticeVisit.current?.navigation===navigationRevision&&
   reminderNoticeVisit.current.documentEpoch===personalDocumentEpoch?reminderNoticeVisit.current:undefined;
- useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
+ useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
   if(deliveredFileRef.current){
    const origin=resultFileReturnFocus.current,frame=bridge.getState().state.attachmentWorkspace;
    const reader=origin&&!('taskId' in origin)?origin.shelf:undefined;
@@ -2929,7 +2978,7 @@ export default function App(){
    }
   }
   if(route==='chat'&&savedHostSession.current){closeSavedHost();return true}
-  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
+  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,shownChatReference,closeChatReference,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{
@@ -6329,7 +6378,10 @@ export default function App(){
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
      contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
-    <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>{intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting||!draftKey||fileAttachmentPickerLaunch.current?.settled===false} onClick={openRegularAttachmentPicker}>添加附件</Button>}{chooseDraftTeam?.kind==='goal'&&<Button variant="ghost" leadingIcon={IconTeam} disabled={chooseDraftTeam.text!==text} onClick={()=>{
+    <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容" data-chat-add-content="true"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>
+    {intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting||!draftKey||fileAttachmentPickerLaunch.current?.settled===false} onClick={openRegularAttachmentPicker}>添加附件</Button>}
+    {referenceShelfAvailable&&<Button variant="ghost" leadingIcon={IconBook} aria-haspopup="dialog" onClick={openChatReference}>引用本对话备忘</Button>}
+    {chooseDraftTeam?.kind==='goal'&&<Button variant="ghost" leadingIcon={IconTeam} disabled={chooseDraftTeam.text!==text} onClick={()=>{
      if(pickTeamForCurrentDraft(chooseDraftTeam))setVoiceOptionsOpen(false);
      else setLocalError('原草稿已变化，未离开这条对话。');
     }}>选择协作编组</Button>}{can('voice.start')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!state.phoneSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'})}}>{isListening?'结束听写':'语音输入'}</Button>}</Popover></PopoverTrigger>
@@ -6337,9 +6389,9 @@ export default function App(){
       (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
    </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
-     <BlankPhoneOriginal enabled={(route==='butler'||route==='chat')&&ready&&intent==='main_screen'&&!taskOpen&&!workOpen&&!commandOpen&&
+     <BlankPhoneOriginal enabled={(route==='butler'||route==='chat')&&ready&&!taskOpen&&!workOpen&&!commandOpen&&
        !preparationTarget&&!phoneReview&&!phoneReviewPending&&!draftSwitching&&!reportDraftSwitching&&!voiceReview&&!isListening}
-       text={text} editorText={phoneText.currentValue} navigation={navigationRevision} navigationCurrent={value=>navigationWindow.current===value}
+       mode={intent==='chat'?null:intent} text={text} editorText={phoneText.currentValue} navigation={navigationRevision} navigationCurrent={value=>navigationWindow.current===value}
        arrived={same=>{if(route==='butler')void navigate('chat',undefined,{stillCurrent:same})}}/>
    </ChatComposer>
    {stageTeamGoal?<ConversationStarters onDraft={stageTeamGoal} purpose="team"/>:route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&!homePhoneAttention.length&&
@@ -7489,7 +7541,11 @@ export default function App(){
   onOpenSaved={skillDraftTarget.chatWork&&can('connections.enter')&&can('skills.get')?openReviewedSkill:undefined}/>}
  {!preparationInline&&preparationDetail}
  {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
- {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
+ {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} showReferenceShelf={!referenceInput} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
+ {shownChatReference&&<ConversationReferenceShelf key={shownChatReference.input.key+':'+shownChatReference.input.epoch}
+   conversationId={shownChatReference.input.conversation} draftKey={shownChatReference.input.key} epoch={shownChatReference.input.epoch}
+   closeLabel="关闭备忘" onClose={()=>closeChatReference(shownChatReference,'menu')}
+   onRetire={()=>closeChatReference(shownChatReference)} onReturnDraft={()=>closeChatReference(shownChatReference,'draft')}/>}
  {memoryDraftTarget&&<MemoryDraftReview key={`${memoryDraftTarget.runId}:${memoryDraftTarget.operationId}`} target={memoryDraftTarget} originalWorkReturn={savedMemoryWorkReturn} onOpenMemory={target=>{setMemoryDraftTarget(null);openPersonalMemory({view:'memory',...target})}} onClose={()=>setMemoryDraftTarget(null)}/>}
  {shownOriginalMemoryDraft&&!memoryDraftTarget&&<MemoryDraftReview key={`answer:${shownOriginalMemoryDraft.source.messageId}`}
   originalReply={shownOriginalMemoryDraft.source} isCurrent={()=>originalMemoryDraftCurrent(shownOriginalMemoryDraft)}

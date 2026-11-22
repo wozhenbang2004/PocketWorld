@@ -2,37 +2,41 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Button } from './forms-library';
 
+type PhoneMode = 'main_screen'|'background';
 type Input = {key:string;epoch:number;revision:number;phoneEpoch:number;phoneRevision:number};
 type Saved = {handle:string;conversation:string;message:string;visit:string};
 const uuid=(id:unknown):id is string=>typeof id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
 const number=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const obj=(value:unknown):Record<string,any>=>value&&typeof value==='object'?value as Record<string,any>:{};
 
-function input(snapshot:PocketSnapshot,text:string):Input|null{
+function input(snapshot:PocketSnapshot,text:string,mode:PhoneMode|null):Input|null{
   const {state,composer}=snapshot,view=obj(snapshot.view),phone=obj(snapshot.phoneDraft);
-  if(view.section!==null||view.taskId!==null||state.conversationId||state.conversationReader||
+  if(!mode||view.section!==null||view.taskId!==null||state.conversationId||state.conversationReader||
      !composer||composer.ready!==true||typeof composer.key!=='string'||!composer.key.startsWith('new:')||composer.conversationId!==''||
-     phone.saveFirstOriginalReady!==true||phone.phone!==true||phone.mode!=='main_screen'||phone.text!==text||
+     phone.saveFirstOriginalReady!==true||phone.phone!==true||phone.mode!==mode||phone.text!==text||
      !text.trim()||text.length>4000||!number(composer.epoch)||!number(composer.revision)||
      !number(phone.epoch)||!number(phone.revision)||!snapshot.capabilities.commands.includes('phone.draft.saveOriginal'))return null;
   return {key:composer.key,epoch:composer.epoch,revision:composer.revision,phoneEpoch:phone.epoch,phoneRevision:phone.revision};
 }
 
-export function BlankPhoneOriginal({enabled,text,editorText,navigation,navigationCurrent,arrived}:{
-  enabled:boolean;text:string;editorText:()=>string;navigation:number;navigationCurrent:(navigation:number)=>boolean;
+export function BlankPhoneOriginal({enabled,mode,text,editorText,navigation,navigationCurrent,arrived}:{
+  enabled:boolean;mode:PhoneMode|null;text:string;editorText:()=>string;navigation:number;navigationCurrent:(navigation:number)=>boolean;
   arrived:(stillHere:()=>boolean)=>void;
 }){
   const alive=useRef(false),flight=useRef(false),visible=useRef(enabled);
   visible.current=enabled;
+  const selection=useRef({mode,revision:0});
+  if(selection.current.mode!==mode)selection.current={mode,revision:selection.current.revision+1};
+  const choice=selection.current;
   const [pending,setPending]=useState(false),[saved,setSaved]=useState<Saved|null>(null);
   const [feedback,setFeedback]=useState<{visit:string;text:string}|null>(null);
   useLayoutEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
-  const snapshot=bridge.getState(),parent=enabled?input(snapshot,text):null,documentId=bridge.getDocumentEpoch();
-  const visitOf=(value:Input|null)=>value?JSON.stringify([documentId,navigation,value]):'';
+  const snapshot=bridge.getState(),parent=enabled?input(snapshot,text,mode):null,documentId=bridge.getDocumentEpoch();
+  const visitOf=(value:Input|null)=>value?JSON.stringify([documentId,navigation,choice,value]):'';
   const visit=visitOf(parent);
   const original=saved?.visit===visit&&visit?saved:null;
-  const here=()=>alive.current&&visible.current&&!document.hidden&&bridge.getDocumentEpoch()===documentId&&navigationCurrent(navigation);
-  const sameInput=()=>here()&&visit!==''&&visit===visitOf(input(bridge.getState(),editorText()));
+  const here=()=>alive.current&&visible.current&&selection.current===choice&&!document.hidden&&bridge.getDocumentEpoch()===documentId&&navigationCurrent(navigation);
+  const sameInput=()=>here()&&visit!==''&&visit===visitOf(input(bridge.getState(),editorText(),mode));
   const commands=snapshot.capabilities.commands;
   const save=async()=>{
     if(!parent||!sameInput()||flight.current)return;
@@ -51,8 +55,9 @@ export function BlankPhoneOriginal({enabled,text,editorText,navigation,navigatio
     if(!original||!sameInput()||flight.current||!bridge.getState().capabilities.commands.includes('conversation.select'))return;
     flight.current=true;setPending(true);setFeedback(null);
     const sameOriginal=()=>{
-      const now=bridge.getState(),view=obj(now.view),messages=now.state.messages;
-      return here()&&view.section===null&&view.taskId===null&&!now.state.conversationReader&&
+      const now=bridge.getState(),view=obj(now.view),messages=now.state.messages,phone=obj(now.phoneDraft);
+      return here()&&phone.phone===true&&phone.mode===mode&&phone.sourceState==='current'&&
+        view.section===null&&view.taskId===null&&!now.state.conversationReader&&
         now.state.conversationId===original.conversation&&now.composer?.conversationId===original.conversation&&
         Array.isArray(messages)&&messages.filter(row=>row?.id===original.message&&row.role==='user'&&row.sourceRevision===1&&row.quoteAvailable===true).length===1;
     };

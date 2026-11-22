@@ -57,10 +57,10 @@ internal class PocketWebPhoneComposer(
 
     @Volatile private var phoneDraftRevision = 0L
     private var phoneIntent = false
-    private var phoneExecutionMode = "background"
+    @Volatile private var phoneExecutionMode = "background"
     private var phoneStartReceipt: JSONObject? = null
     private data class FirstOriginalVisit(val window:PocketWebWindowTicket,val key:String,val ownerEpoch:Int,val ownerRevision:Long,
-                                          val phoneEpoch:Int,val phoneRevision:Long,val originRevision:Long,val sourceRevision:Long,val generation:Long)
+                                          val phoneEpoch:Int,val phoneRevision:Long,val mode:String,val originRevision:Long,val sourceRevision:Long,val generation:Long)
     private data class FirstOriginalOffer(val handle:String,val visit:FirstOriginalVisit,val original:OwnerComposerState.FirstPhoneOriginal)
     private data class FirstDraftScope(val key:String,val phoneRevision:Long,val conversation:String?=null,val message:String?=null)
     @Volatile private var savingFirstOriginal:Any?=null
@@ -112,21 +112,21 @@ internal class PocketWebPhoneComposer(
 
     private fun firstOriginalEligible():Boolean{
         val draft=controller.composerDraft ?: return false
-        return phoneIntent&&phoneExecutionMode=="main_screen"&&phoneDraftRevision>0&&phoneDraft.isNotBlank()&&phoneDraft.length<=4_000&&
+        return phoneIntent&&(phoneExecutionMode=="main_screen"||phoneExecutionMode=="background")&&phoneDraftRevision>0&&phoneDraft.isNotBlank()&&phoneDraft.length<=4_000&&
             picked==null&&!pinLost&&!textElsewhere()&&heldLinkedGoal==null&&phoneStartReceipt==null&&
             firstDraftScope?.let{it.key==draft.key&&(it.conversation==null||it.phoneRevision==phoneDraftRevision)}!=false&&
             controller.firstPhoneOriginalEditorCurrent(draft.key,controller.composerViewEpoch,draft.revision)
     }
     private fun firstOriginalCurrent(visit:FirstOriginalVisit):Boolean=
         !isClosed()&&reviewGeneration==visit.generation&&acceptsOwnerWindow(visit.window)&&firstOriginalEligible()&&phoneDraftRevision==visit.phoneRevision&&presentationEpoch==visit.phoneEpoch&&
-            controller.phoneOriginRevision==visit.originRevision&&controller.conversationSourceRevision==visit.sourceRevision&&
+            phoneExecutionMode==visit.mode&&controller.phoneOriginRevision==visit.originRevision&&controller.conversationSourceRevision==visit.sourceRevision&&
             controller.firstPhoneOriginalEditorCurrent(visit.key,visit.ownerEpoch,visit.ownerRevision)
 
     /** The body comes only from the current native phone editor; the caller supplies no text or destination. */
     fun saveFirstOriginal(args:JSONObject,shown:()->Boolean,reply:(JSONObject?,String?)->Unit){
         require(args.keys().asSequence().toSet()==setOf("key","epoch","revision","phoneEpoch","phoneRevision"))
         val requested=FirstOriginalVisit(captureOwnerWindow(),requiredString(args,"key"),requiredInt(args,"epoch"),requiredLong(args,"revision"),
-            requiredInt(args,"phoneEpoch"),requiredLong(args,"phoneRevision"),controller.phoneOriginRevision,controller.conversationSourceRevision,reviewGeneration)
+            requiredInt(args,"phoneEpoch"),requiredLong(args,"phoneRevision"),phoneExecutionMode,controller.phoneOriginRevision,controller.conversationSourceRevision,reviewGeneration)
         require(shown()&&firstOriginalCurrent(requested)&&savingFirstOriginal==null){"请从同一原手机草稿核对本机保存"}
         // An earlier ordinary review must not start the blank task while this local save settles.
         clearReviews()
@@ -166,8 +166,8 @@ internal class PocketWebPhoneComposer(
                 reply(null,unavailable);publishState();return@verifySavedFirstPhoneOriginal
             }
             firstOriginalOffer=null
-            if(select(pin.conversation)){
-                // Match the usual message-selected review. No fallback to whichever message arrives later.
+            if(select(pin.conversation)&&phoneIntent&&phoneExecutionMode==offer.visit.mode){
+                // Only a later explicit review may start this goal. The saved origin does not change the selected screen.
                 picked=pin;pinLost=false;sourceEditTicket++;clearReviews()
                 reply(JSONObject().put("opened",true).put("conversationId",pin.conversation).put("messageId",pin.message).put("revision",1),null)
             }else reply(null,unavailable)

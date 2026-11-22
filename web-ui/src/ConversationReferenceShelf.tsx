@@ -13,12 +13,14 @@ function row(value:Partial<Entry>):value is Entry{
 const when=(n:number)=>new Date(n).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 
 /** No polling, stored original text or global lookup. The native list issues this view's only row handles. */
-export function ConversationReferenceShelf({conversationId,draftKey,epoch,onClose,onReturnDraft}:{conversationId:string;draftKey:string;epoch:number;onClose:()=>void;onReturnDraft:()=>void}){
+export function ConversationReferenceShelf({conversationId,draftKey,epoch,onClose,onReturnDraft,onRetire=onClose,closeLabel='返回本对话设置'}:{
+  conversationId:string;draftKey:string;epoch:number;onClose:()=>void;onReturnDraft:()=>void;onRetire?:()=>void;closeLabel?:string;
+}){
   const [page,setPage]=useState<Page|null>(null),[preview,setPreview]=useState<Preview|null>(null),[removing,setRemoving]=useState(''),[busy,setBusy]=useState(true),
     [error,setError]=useState(''),[notice,setNotice]=useState('');
   const [stageStatus,setStageStatus]=useState<''|'busy'|'saved'|'unknown'>('');
   const consumed=useRef(''),expectedEdit=useRef<number|null>(null),supportsDraft=bridge.getState().capabilities.commands.includes('messageShelf.stage');
-  const alive=useRef(false),serial=useRef(0),windowId=useRef(''),reading=useRef(false),close=useRef(onClose);close.current=onClose;
+  const alive=useRef(false),serial=useRef(0),windowId=useRef(''),reading=useRef(false),close=useRef(onRetire);close.current=onRetire;
   const closeWindow=useCallback(()=>{const id=windowId.current;windowId.current='';if(id)void bridge.command('messageShelf.close',{shelfWindow:id}).catch(()=>{});},[]);
   const load=useCallback(async()=>{
     if(!alive.current||reading.current)return;
@@ -81,7 +83,7 @@ export function ConversationReferenceShelf({conversationId,draftKey,epoch,onClos
     }catch(e){if(alive.current&&serial.current===ticket){closeWindow();setPage(null);setStageStatus('unknown');setError((e instanceof Error?e.message:String(e))+' 请先核对原草稿，未自动重试。');}}
     finally{if(alive.current&&serial.current===ticket){reading.current=false;setBusy(false);}}
   };
-  return <SettingsDialog isOpen title="本对话备忘" onClose={onClose}>
+  return <SettingsDialog isOpen title="本对话备忘" closeLabel="关闭本对话备忘" onClose={onClose}>
     <p>只列出你从这段私聊亲自保留的原话位置。保留不会把它加入请求或个人记忆；原消息仍按对话本身的规则处理。</p>
     {busy&&!page&&!stageStatus&&<ShimmerText>正在读取这段对话的备忘…</ShimmerText>}
     {page&&!page.entries.length&&<p className="pw-muted">这里还没有备忘。在你发过的消息中打开“引用”，选中原话，再选“留在本对话”。</p>}
@@ -94,6 +96,6 @@ export function ConversationReferenceShelf({conversationId,draftKey,epoch,onClos
     </section>)}
     {stageStatus==='busy'&&<p role="status">正在核对原选区并保存至原草稿…</p>}
     {error&&<p role="alert" className="pw-error">{error}</p>}{notice&&<p role="status">{notice}</p>}
-    <div className="pw-form-actions">{(stageStatus==='saved'||stageStatus==='unknown')&&<Button onClick={onReturnDraft}>返回原草稿</Button>}{error&&!stageStatus&&<Button variant="secondary" disabled={busy} onClick={()=>void load()}>重新读取本对话备忘</Button>}<Button variant="ghost" onClick={onClose}>返回本对话设置</Button></div>
+    <div className="pw-form-actions">{(stageStatus==='saved'||stageStatus==='unknown')&&<Button onClick={onReturnDraft}>返回原草稿</Button>}{error&&!stageStatus&&<Button variant="secondary" disabled={busy} onClick={()=>void load()}>重新读取本对话备忘</Button>}<Button variant="ghost" onClick={onClose}>{closeLabel}</Button></div>
   </SettingsDialog>;
 }

@@ -156,11 +156,17 @@ function originalResearchQuestion(run: Data, item: TeamFollowUp): string {
     message.trim() && message.length <= 4000 ? message : '';
 }
 
-function acceptingOriginalParent(reading: Data | null, tasks: unknown): boolean {
+function currentOriginalTeamParent(reading: Data | null): TeamOwnerWorkLink | null {
   const link = reading?.ownerWorkLink;
   if (!link || link.readOnly !== true || link.currentRun !== true || link.stopping !== false ||
       !label(link.teamTaskId) || link.teamTaskId !== reading?.taskId || link.teamRunId !== reading?.run?.id ||
-      !label(link.taskId) || !label(link.runId) || !label(link.conversationId) || !Number.isSafeInteger(link.epoch) || link.epoch < 1) return false;
+      !label(link.taskId) || !label(link.runId) || !label(link.conversationId) || !Number.isSafeInteger(link.epoch) || link.epoch < 1) return null;
+  return link;
+}
+
+function acceptingOriginalParent(reading: Data | null, tasks: unknown): boolean {
+  const link = currentOriginalTeamParent(reading);
+  if (!link) return false;
   const parents = rows(tasks).filter(row => row?.id === link.taskId), parent = object(parents[0]?.raw);
   return parents.length === 1 && parent.id === link.taskId && parent.actorId === 'owner' && parent.spaceId === 'private' &&
     parent.executionRole === 'owner_work' && parent.cancelRequested !== true && parent.contextAvailable === true &&
@@ -1096,8 +1102,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const pausedMember = ['teams.reviewMember','teams.confirm'].every(command => bridge.getState().capabilities.commands.includes(command))
     ? pausedTeamMemberCandidate(reading, readableDeliveries) : null;
   const pausedMessageRecipient = pausedMember?.memberId === recipient;
+  // The temporary roster is not a saved team. Only the already held original
+  // Work link gives this current research question the same read-only placement.
+  const originalTemporaryQuestionRun = current?.definitionKind === 'one_time' && (current.discussionFormat ?? 'classic') === 'classic' &&
+    !current.discussion && !current.phoneScope && members.length >= 2 && members.length <= 4 &&
+    !!currentOriginalTeamParent(reading) && members.every(member => member.runner === 'model' && member.device === 'phone' && !member.exited);
   const showOriginalQuestions = ordinaryAnswers && workspaceActive && !!reading?.viewHandle && !changed &&
-    !!label(current.teamId).trim() && current.definitionKind == null && !current.nativeWorkProfileModels && current.archived !== true &&
+    !!label(current.teamId).trim() && (current.definitionKind == null || originalTemporaryQuestionRun) && !current.nativeWorkProfileModels && current.archived !== true &&
     ['running', 'paused'].includes(current.status) && members.length > 0 &&
     members.every(member => (member.runner || 'model') === 'model' && (!member.device || member.device === 'phone'));
   const progressByMember = new Map(current ? members.map(member => [String(member.id), teamMemberProgress(current, member, followUps, true)]) : []);

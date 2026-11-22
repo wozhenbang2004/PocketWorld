@@ -12,10 +12,10 @@ function controlsOf(value:unknown,conversationId:string):ConversationMemoryContr
 }
 
 /** Independent, owner-reviewed choices on the same original header. This sheet owns no saved mode. */
-export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,registerBack}:{
+export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,registerBack,showReferenceShelf=true}:{
   conversationId:string;controls:ConversationMemoryControls|null;composer?:Record<string,any>;isOpen:boolean;
   onClose:()=>void;onChanged:(value:ConversationMemoryControls|null)=>void;onManage:()=>void;
-  registerBack:(handler:(()=>boolean)|null)=>void;
+  registerBack:(handler:(()=>boolean)|null)=>void;showReferenceShelf?:boolean;
 }) {
   const [pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [shelf,setShelf]=useState<string|null>(null);
@@ -76,7 +76,7 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
     {single&&(controls?.excludeNewInputs!==true||single.excluded||single.pending||single.confirmed===false)&&<><StretchSwitch label="只让下一条不参与自动整理" description="这条原话不作为后台提炼或对话记忆建议的来源；发送前可撤销，受理后用完。原话仍留在对话，不关闭已有偏好，也不撤回另外保存的内容。" checked={single.excluded===true} disabled={pending||single.saving||single.pending} busy={single.saving} onChange={value=>{void setSingle(value);}}/>
       {single.pending&&single.excluded&&<p className="pw-muted">正在核对原输入，未把单条限制挪给另一条消息。</p>}
       {single.confirmed===false&&!single.saving&&!single.pending&&<Button variant="secondary" disabled={pending} onClick={()=>void setSingle(single.excluded===true)}>重新保存本条选择</Button>}</>}
-    {canShelf&&<Button variant="secondary" disabled={pending||single.pending} onClick={()=>setShelf(shelfVisit)}>本对话备忘</Button>}
+    {showReferenceShelf&&canShelf&&<Button variant="secondary" disabled={pending||single.pending} onClick={()=>setShelf(shelfVisit)}>本对话备忘</Button>}
     {notice&&<p role="status">{notice}</p>}
     <div className="pw-action-row"><Button variant="ghost" disabled={pending} onClick={()=>{void load();}}>读取当前设置</Button><Button variant="ghost" disabled={pending} onClick={()=>{close();onManage();}}>管理我的记忆</Button></div>
   </SettingsDialog>;
