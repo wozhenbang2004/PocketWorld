@@ -10,7 +10,7 @@ import { FluidValueSlider } from './forms-library/uiux/FluidValueSlider';
  */
 import {Fragment,lazy,Suspense,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type ReactNode} from 'react';
 import {motion} from 'motion/react';
-import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconServer, IconSettings, IconShieldCheck, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
+import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalendarCheck, IconChat, IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconClose, IconError, IconFile, IconFolder, IconGrid, IconHistory, IconImage, IconInfo, IconLayers, IconLink, IconMemory, IconMenu, IconModel, IconMonitor, IconMore, IconNewChat, IconNotification, IconPlay, IconQuote, IconRefresh, IconSearch, IconServer, IconSettings, IconShieldCheck, IconSparkles, IconStop, IconTeam, IconTerminal, IconTool } from './icons';
 import {WorkspaceNavigator,type OwnerNavigationMemory} from './WorkspaceNavigator';
 
 import {bridge} from './bridge';
@@ -252,7 +252,7 @@ type PythonSetupSource={position:CheckoutSavedPosition;navigation:number;ownerCu
 type ViteToolsSource={position:ProjectViteToolsPosition;navigation:number;ownerCurrent:(section:'setup'|null)=>boolean};
 type OriginalPhoneModelInput={conversationId:string;key:string;epoch:number;revision:number;phoneEpoch:number;phoneRevision:number;sourceEditTicket:number;resumeRevision:number;preferenceRevision:number;mode:'main_screen'|'background'};
 type OriginalPhoneModelVisit={input:OriginalPhoneModelInput;navigation:number;selectionRevision:number;originDocument:number};
-type WorkspaceOrigin={route:string;label:string;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type BackgroundPhoneDraftVisit={origin:WorkspaceOrigin;pin:PhonePlaceReturn;navigation:number;document:number;afterRevision:number;
  first:{generation:number;setupRevision:number}|null;seenAuthentication:boolean;retired:boolean};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -1950,19 +1950,23 @@ export default function App(){
  const returnFirstHomeModelInput=async(origin:WorkspaceOrigin,choice?:AIChoice)=>{
   const input=origin.modelInput,visit=origin.firstHomeModel,documentEpoch=bridge.getDocumentEpoch();
   if(route!=='model-settings'||origin.route!=='butler'||!input||!visit||input.conversation!==''||
-    taskOpen||taskOpening||setupReturnPending.current||choice?.accountOnly||choice?.target?.kind==='account'||!can('models.snapshot'))return false;
+    taskOpen||taskOpening||setupReturnPending.current||!can('models.snapshot')||
+    !visit.inline&&(choice?.accountOnly||choice?.target?.kind==='account'))return false;
+  // Account settings and API settings own different native sections. Only
+  // this directly launched first input can use exact accounts-section proof.
+  const section=visit.inline&&obj(bridge.getState().view).section==='accounts'?'accounts':'models';
   const expected={key:input.key,epoch:input.epoch,revision:visit.draftRevision};
   const current=(live:ReturnType<typeof bridge.getState>,arrived=false)=>{
    const draft=live.composer,view=obj(live.view),phone=obj(live.phoneDraft);
    return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&openedTaskId.current===null&&
     navigationWindow.current===visit.navigation+(arrived?1:0)&&(arrived||!setupReturnPending.current&&relatedOrigin.current===origin)&&
-    (view.section==='models'||arrived&&view.section===null)&&view.taskId===null&&!live.state.conversationReader&&
+    (view.section===section||arrived&&view.section===null)&&view.taskId===null&&!live.state.conversationReader&&
     !live.state.filePath&&!live.state.conversationId&&!live.state.chatSubmitting&&!live.state.phoneSubmitting&&
     phone.phone===false&&phone.channelOrigin===false&&draft?.ready===true&&draft.conversationId===''&&
     draft.key===expected.key&&draft.epoch===expected.epoch&&draft.revision===expected.revision;
   };
   if(!current(bridge.getState()))return false;
-  const proof=obj(await bridge.command('models.snapshot',{originalHomeInput:expected}).catch(()=>null));
+  const proof=obj(await bridge.command('models.snapshot',{originalHomeInput:{...expected,...(section==='accounts'?{section}:{})}}).catch(()=>null));
   if(proof.originalHomeInputMatched!==true||proof.key!==expected.key||proof.epoch!==expected.epoch||
      proof.revision!==expected.revision||!current(bridge.getState()))return false;
   // The fresh window only admits this navigation. The original input's epoch is never replaced.
@@ -2149,22 +2153,45 @@ export default function App(){
   const now=originalPhoneModelInput(live);
   return !!now&&Object.entries(expected).every(([key,value])=>now[key as keyof OriginalPhoneModelInput]===value);
  };
- const openModelSetup=async()=>{
+ const openModelSetup=async(inlineHome=false)=>{
   if(openingModelSetup.current||!can('setup.read'))return;
-  if(openOriginalChatModelSettings())return;
+  if(!inlineHome&&openOriginalChatModelSettings())return;
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch(),conversation=state.conversationId;
-  const original=bridge.getState(),selection=original.state;
+  const original=bridge.getState(),selection=original.state,modeWindow=phoneWindow.current;
   const phoneInput=route==='chat'&&intent!=='chat'&&!taskOpen&&!taskOpening&&!phoneAction.current&&!phoneReviewLive.current&&
    obj(original.view).section===null&&can('models.snapshot')&&can('connections.leave')?originalPhoneModelInput(original):null;
   const input=isChatSurface&&intent==='chat'&&!taskOpen?modelSetupInput(original,documentEpoch):null;
   const captured=captureWorkspaceOrigin();
   const origin:WorkspaceOrigin=input?{...captured,label:'返回原输入',modelInput:input}:captured;
+  const clicked=original.composer,preference=obj(selection.conversationModel),resume=obj(original.view).resumeRevision;
+  const firstDraft=inlineHome&&route==='butler'&&intent==='chat'&&input&&!input.conversation&&input.key.startsWith('new:')&&
+   clicked&&clicked.saving===false&&typeof clicked.text==='string'&&ordinaryDraftRevision!==null&&clicked.revision===ordinaryDraftRevision&&
+   Number.isSafeInteger(resume)&&resume>=0&&
+   preference.scopeKey==='draft:'+input.key&&Number.isSafeInteger(preference.revision)&&preference.revision>=0&&
+   preference.inherited===true&&preference.target===null&&['connections.enter','connections.leave','models.snapshot'].every(can)
+    ?{input,revision:Number(clicked.revision),text:clicked.text}:null;
+  // Only this explicit button holds the clicked version, never whichever
+  // revision happens to arrive while setup.read is in flight.
+  const firstDraftCurrent=()=>{
+   if(!firstDraft)return false;
+   const now=bridge.getState(),owner=now.state,view=obj(now.view),mode=obj(now.phoneDraft),model=obj(owner.conversationModel),fresh=now.composer;
+   return !document.hidden&&navigationWindow.current===navigation&&openedTaskId.current===null&&!taskOpening&&!draftSwitchPending()&&
+    phoneWindow.current===modeWindow&&!reportDraftFlight.current&&sameModelSetupInput(firstDraft.input,now,bridge.getDocumentEpoch())&&
+    view.section===null&&view.taskId===null&&view.resumeRevision===resume&&
+    !owner.filePath&&!owner.fileLoading&&!owner.fileSaving&&!owner.chatSubmitting&&!owner.phoneSubmitting&&!owner.queuedInputsPage&&
+    !owner.chatAttachmentPickerOpen&&!owner.attachmentImporting&&!owner.attachmentWorkspace?.open&&mode.phone===false&&mode.channelOrigin===false&&
+    fresh!=null&&fresh.saving===false&&fresh.revision===firstDraft.revision&&fresh.text===firstDraft.text&&chatDraft.currentValue()===firstDraft.text&&!fresh.primaryDisplayGate&&
+    fresh.independentReportSourceIndex==null&&fresh.independentReportDiscardEmpty!==true&&
+    owner.modelSelectionBusy===false&&owner.modelSelectionRevision===selection.modelSelectionRevision&&!conversationModelName(owner)&&
+    model.scopeKey===preference.scopeKey&&model.revision===preference.revision&&model.inherited===true&&model.target===null;
+  };
+  if(inlineHome&&!firstDraftCurrent())return;
   openingModelSetup.current=true;setModelSetupOpening(true);
   try{
    const current=await bridge.command('setup.read').then(readSetup,()=>null).catch(()=>null);
    const live=bridge.getState();
    if(document.hidden||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==documentEpoch||live.state.conversationId!==conversation||
-      input&&!sameModelSetupInput(input,live,documentEpoch))return;
+      input&&!sameModelSetupInput(input,live,documentEpoch)||inlineHome&&!firstDraftCurrent())return;
    const pending=current?.preferences.status==='new'||current?.preferences.status==='in_progress';
    // An unconfigured default is not an empty service list. The connection workspace reads both owners.
    const stableSelection=selection.modelSelectionBusy===false&&live.state.modelSelectionBusy===false&&Number.isSafeInteger(selection.modelSelectionRevision)&&
@@ -2181,6 +2208,12 @@ export default function App(){
       now.state.modelSelectionBusy===false&&now.state.modelSelectionRevision===visit.selectionRevision&&sameOriginalPhoneModelInput(phoneInput,now);
     };
     if(stillCurrent()){await navigate('model-settings',()=>{relatedOrigin.current=scoped},{keepOrigin:true,stillCurrent});return;}
+   }
+   if(unconfigured&&firstDraft){
+    // Skipped or finished onboarding is not a reason to detour through Setup.
+    const firstHomeModel={navigation:navigation+1,draftRevision:firstDraft.revision,inline:true as const};
+    await navigate('model-settings',()=>{relatedOrigin.current={...origin,firstHomeModel}},{keepOrigin:true,stillCurrent:firstDraftCurrent});
+    return;
    }
    if(pending&&unconfigured){
     const draft=live.composer,view=obj(live.view),phone=obj(live.phoneDraft);
@@ -2238,7 +2271,7 @@ export default function App(){
  const returnOriginalModelInput=firstModelOrigin?.modelInput?async(choice:AIChoice)=>{
   const origin=firstModelOrigin, input=origin.modelInput!;
   if(origin.originalChatModel)return returnOriginalChatModelInput(origin,choice);
-  if(origin.firstHomeModel&&bridge.getDocumentEpoch()!==input.document)return returnFirstHomeModelInput(origin,choice);
+  if(origin.firstHomeModel&&(origin.firstHomeModel.inline||bridge.getDocumentEpoch()!==input.document))return returnFirstHomeModelInput(origin,choice);
   const navigation=navigationWindow.current;
   const stillOriginal=()=>!document.hidden&&navigationWindow.current===navigation&&
    sameModelSetupInput(input,bridge.getState(),bridge.getDocumentEpoch());
@@ -7077,6 +7110,15 @@ export default function App(){
    if(current())setLocalError(error instanceof Error?error.message:'编组关联尚未确认。原工作和草稿保留，尚未发送。');
   }
  };
+ const draftModelPreference=obj(state.conversationModel);
+ // The first private draft has one connection entry, not an empty model picker
+ // and a second connection action. Retained conversations keep scoped selection.
+ const firstDraftConnect=ready&&route==='butler'&&intent==='chat'&&!state.conversationId&&!composerModelName&&
+  !composer.primaryDisplayGate&&!displayStagePending&&!setupFeedback&&composer.ready===true&&composer.conversationId===''&&
+  phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&
+  draftKey.startsWith('new:')&&draftModelPreference.scopeKey==='draft:'+draftKey&&draftModelPreference.inherited===true&&draftModelPreference.target===null&&
+  composer.independentReportSourceIndex==null&&composer.independentReportDiscardEmpty!==true&&
+  ['setup.read','models.snapshot','connections.enter','connections.leave'].every(can);
  const composerRegion=<div className="pw-composer-region">
    {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context">
     <Button variant="ghost" size="small" leadingIcon={homeHostMessage?IconServer:IconChat} onClick={homeHostMessage?continueSavedHostFromHome:foregroundTurn&&!pendingHere?returnToForegroundReply:()=>void navigate('chat')} aria-label={homeHostMessage?`${continueSavedHostLabel}：${currentConversation?.title||'原交办'}`:pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}>
@@ -7105,7 +7147,12 @@ export default function App(){
     <Button variant="ghost" size="small" leadingIcon={IconTeam} onClick={()=>void attachCarriedRoster(carriedTeamRoster)}>也关联这次用的编组</Button>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
-     contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
+     contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={firstDraftConnect?
+       <Button variant="secondary" size="small" className="min-h-11" leadingIcon={IconModel} data-workspace-entry="connect-model"
+        disabled={modelSetupOpening||state.modelSelectionBusy||state.modelSaving||state.modelTesting||draftSwitching||reportDraftSwitching||
+          state.chatSubmitting||registration.waiting||firstHostSaving||composer.saving===true||ordinaryDraftRevision===null}
+        aria-busy={modelSetupOpening||undefined} onClick={()=>void openModelSetup(true)}>{modelSetupOpening?'正在核对…':'连接模型'}</Button>
+       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容" data-chat-add-content="true"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>
     {intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting||!draftKey||fileAttachmentPickerLaunch.current?.settled===false} onClick={openRegularAttachmentPicker}>添加附件</Button>}
     {referenceShelfAvailable&&<Button variant="ghost" leadingIcon={IconBook} aria-haspopup="dialog" onClick={openChatReference}>引用本对话备忘</Button>}
@@ -8274,7 +8321,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')} onOpen={(task,alreadyOpen=false,report,stillOriginal,returnWorkFocus)=>{
     if(report){homeReport.current=report;homeWorkReturn.current=null;taskReading.current.delete(`${task.id}:homeReport`);
      openTask(task.id,'homeReport',alreadyOpen,undefined,undefined,undefined,()=>homeReport.current===report&&currentHomeReport(report),undefined,undefined,
       returnWorkFocus?()=>{homeWorkReturn.current={taskId:task.id,report,focus:returnWorkFocus}}:undefined);return}

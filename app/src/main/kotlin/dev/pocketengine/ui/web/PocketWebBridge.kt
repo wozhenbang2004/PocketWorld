@@ -3398,7 +3398,10 @@ internal class PocketWebBridge(
     /** Navigation evidence only. No model catalogue, selection, or return handle survives this reply. */
     private fun readOriginalHomeModelInput(id: String, args: JSONObject) {
         checkedPayload(args, setOf("originalHomeInput"))
-        val expected = checkedPayload(args.getJSONObject("originalHomeInput"), setOf("key", "epoch", "revision"))
+        val expected = checkedPayload(args.getJSONObject("originalHomeInput"), setOf("key", "epoch", "revision", "section"))
+        val source = if (expected.has("section")) requiredString(expected, "section").also {
+            require(it == "accounts") { "原账号设置窗口尚未核对。" }
+        } else "models"
         val key = requiredString(expected, "key")
         val epoch = requiredInt(expected, "epoch")
         val revision = requiredLong(expected, "revision")
@@ -3406,9 +3409,11 @@ internal class PocketWebBridge(
         val document = documentId
         val draft = controller.composerDraft
         val state = controller.state
-        check(document != null && document == documentId && acceptsWindow(window) && section == "models" &&
+        check(document != null && document == documentId && acceptsWindow(window) && section == source &&
             taskViewId == null && controller.conversationReader == null && controller.webPrivateOwnerVisible() &&
             state.filePath == null && state.conversationId == null && !state.chatSubmitting && !state.phoneSubmitting &&
+            (source != "accounts" || controller.queuedInputsPage == null && !controller.attachmentOutcomes.state.open &&
+                !state.chatAttachmentPickerOpen && !state.attachmentImporting && !state.fileLoading && !state.fileSaving) &&
             !phoneComposer.intent && !controller.hasChannelPhoneOrigin && key.startsWith("new:") &&
             draft != null && draft.key == key && draft.conversationId.isEmpty() && draft.revision == revision &&
             controller.composerViewEpoch == epoch) { "原输入尚未核对，未打开另一份草稿。" }

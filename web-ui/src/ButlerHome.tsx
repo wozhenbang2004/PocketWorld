@@ -304,7 +304,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const showProjectImport = empty && active && !localDisplayDraft && !stagingLocal && !firstHostSave && !!onImportProject;
   const nextHint=showLocal?(stagingLocal?'正在填入问题…':'只填入问题，按发送才读取。不用模型。'):
     firstHostSave?.hint||(showSetup&&!workFirst?'可以先写好草稿，连接后再发送。':'');
-  const nextSteps=(showLocal||showSetup||showProjectImport||showFiles)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
+  const nextSteps=(showLocal||showSetup&&!!(modelSetup||firstHostSave)||showProjectImport||showFiles||!!nextHint)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
     {showLocal&&<Button className="pw-butler-try" variant="ghost" leadingIcon={IconPhone} trailingIcon={IconChevronRight} disabled={stagingLocal} aria-describedby={nextNote} onClick={onTryLocal}>查这台手机的屏幕信息</Button>}
     {showProjectImport&&<Button variant="ghost" leadingIcon={IconFolder} onClick={onImportProject}>导入本机工程</Button>}
     {showSetup&&modelSetup}
