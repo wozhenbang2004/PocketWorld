@@ -6,13 +6,30 @@ import './media-workspace.css';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
-type Panel = 'library' | 'create' | 'task';
+type Panel = 'library' | 'create' | 'task' | 'edit-result';
+type SavedImageOrigin = { taskId: string; runId: string; epoch: number; operationId: string; configurationRevision: string; fileId: string; sha256: string };
+type SavedImageEdit = { origin: SavedImageOrigin; name: string; size: number; mimeType: string; text: string; preparation?: string | true };
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const submissions = new Set(['generateImage', 'generateVideo', 'editImage', 'synthesizeSpeech', 'submitWorkflow']);
 const taskState = (value: string) => ({ awaiting_user: '等待确认输入', running: '正在处理', preparing: '正在准备', needs_confirmation: '成果待核对', completed: '已完成', failed: '未完成', reconciling: '原效果待核对', interrupted: '已中断', cancelled: '已停止' } as Data)[value] || value || '状态待核对';
 const unknownReceipt = (receipt: Data) => !receipt.status || ['unknown', 'prepared', 'submitting', 'not_found', 'host_receipt_unavailable'].includes(receipt.status);
 const inputText = (input: Data) => input.prompt || input.text || (input.workflow ? JSON.stringify(input.workflow, null, 2) : '原输入暂不可读取');
+const originalImageId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+function savedImageEdit(reading: Data | null): SavedImageEdit | null {
+  const source = object(reading?.savedImageEditOrigin), files = rows(reading?.savedFiles), file = files[0];
+  if (reading?.taskId !== source.taskId || reading?.fileListComplete !== true || files.length !== 1 ||
+      ![source.taskId,source.runId,source.operationId,source.fileId].every(id => typeof id==='string' && originalImageId.test(id)) ||
+      typeof source.sha256!=='string' || !/^[a-f0-9]{64}$/.test(source.sha256) || !Number.isSafeInteger(source.epoch) || source.epoch<1 ||
+      typeof source.configurationRevision!=='string' || !source.configurationRevision ||
+      file.id!==source.fileId || file.sha256!==source.sha256 || typeof file.name!=='string' || !file.name ||
+      !Number.isSafeInteger(file.size) || file.size<1 || file.size>4*1024*1024 ||
+      !['image/png','image/jpeg','image/webp'].includes(file.mimeType)) return null;
+  const {taskId,runId,epoch,operationId,configurationRevision,fileId,sha256}=source;
+  return {origin:{taskId,runId,epoch,operationId,configurationRevision,fileId,sha256}, name:file.name,size:file.size,mimeType:file.mimeType,text:''};
+}
+const sameSavedImage = (a: SavedImageEdit | null, b: SavedImageEdit | null) => !!a && !!b &&
+  (Object.keys(a.origin) as (keyof SavedImageOrigin)[]).every(key => a.origin[key]===b.origin[key]);
 
 /** BoardUI source controls and the retained attachment-row composition.
  * The native media owner holds every operation and exact source identity. */
@@ -23,6 +40,7 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   const [acknowledged, setAcknowledged] = useState(false), [busy, setBusy] = useState(false), [panel, setPanel] = useState<Panel>('library');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [kind, setKind] = useState('image'), [text, setText] = useState(''), [graph, setGraph] = useState('');
   const [imageId, setImageId] = useState(''), [maskId, setMaskId] = useState(''), [observe, setObserve] = useState(true), [mediaFilter, setMediaFilter] = useState('all');
+  const [imageEdit, setImageEdit] = useState<SavedImageEdit | null>(null);
   const [preparedTask, setPreparedTask] = useState(''), [submittedTask, setSubmittedTask] = useState(''), [submissionUnknown, setSubmissionUnknown] = useState(false);
   const [speechInput, setSpeechInput] = useState<{view:string;hash:string;text:string}|null>(null);
   const returnFile = useRef<{task:string;id:string;sha:string;opened:boolean;trigger:HTMLElement}|null>(null);
@@ -32,7 +50,8 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   const root = useRef<HTMLElement>(null), positions = useRef<Record<string, number>>({}), focuses = useRef<Record<string, HTMLElement | null>>({}), previous = useRef('library');
   const latest = useRef({ state, panel, settingsOpen, settings, submittedTask }); latest.current = { state, panel, settingsOpen, settings, submittedTask }; selected.current = reading; reviewRef.current = review;
   const config = object(snapshot.configuration), comfy = config.provider === 'comfyui';
-  const presentation = panel === 'task' ? 'task:' + (reading?.taskId || '') : panel;
+  const presentation = panel === 'task' ? 'task:' + (reading?.taskId || '') :
+    panel === 'edit-result' ? 'edit-result:' + (imageEdit?.origin.fileId || '') : panel;
   const fileOpen = () => object(latest.current.state.attachmentWorkspace).open === true;
   const available = () => alive.current && !pending.current && !backgrounded.current && !latest.current.state.webWorkspaceTaskOpen && !fileOpen();
   const release = (value: Data | null, key: string) => { if (value?.[key]) void run('media.closeReading', { [key]: value[key] }).catch(() => {}); };
@@ -101,6 +120,7 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
     if (!available()) return;
     if (reviewRef.current) { closeReview(); return; }
     if (settingsOpen) { closeSettings(); return; }
+    if (panel === 'edit-result' && imageEdit && selected.current?.taskId === imageEdit.origin.taskId) { move('task'); return; }
     if (panel !== 'library') { if (panel === 'task') clearView(); move('library'); }
   };
   const invalidate = () => {
@@ -136,7 +156,7 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   useEffect(() => {
     registerTransientBack(() => { if (busy || review || settingsOpen || panel !== 'library') { goBack(); return true; } return false; });
     return () => registerTransientBack(null);
-  }, [busy, review, settingsOpen, panel, reading, registerTransientBack]);
+  }, [busy, review, settingsOpen, panel, reading, imageEdit?.origin.taskId, registerTransientBack]);
   useLayoutEffect(() => {
     if (presentation === previous.current || busy) return;
     const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
@@ -154,17 +174,76 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
   const visibleMedia = mediaTasks.filter(task => mediaFilter==='all'||mediaFilter==='review'&&mediaNeedsReview(task)||mediaFilter==='running'&&mediaIsRunning(task)||mediaFilter==='ended'&&mediaEnded(task));
   const mediaGroups = [{id:'review',label:'待你核对',items:visibleMedia.filter(mediaNeedsReview)},{id:'running',label:'正在处理',items:visibleMedia.filter(mediaIsRunning)},{id:'records',label:'其他记录',items:visibleMedia.filter(task=>!mediaNeedsReview(task)&&!mediaIsRunning(task))}];
   const images = rows(object(object(state.features).attachments).attachments).filter(file => ['image/png', 'image/jpeg', 'image/webp'].includes(file.mimeType) && file.size > 0 && file.size <= 4 * 1024 * 1024);
+  const editResult = panel === 'edit-result' ? imageEdit : null;
+  const composeKind = editResult ? 'edit' : kind, composeText = editResult ? editResult.text : text;
+  const originalImage = savedImageEdit(reading);
+  const editVersionCurrent = (source: SavedImageEdit) => snapshotReady && snapshot.configured === true &&
+    snapshot.imageEditingSupported === true && source.origin.configurationRevision === snapshot.configurationRevision &&
+    images.filter(file => file.id === source.origin.fileId && file.sha256 === source.origin.sha256 &&
+      file.size === source.size && file.mimeType === source.mimeType).length === 1;
+  const startFromImage = () => {
+    const current = savedImageEdit(selected.current);
+    if (!available() || latest.current.panel !== 'task' || !selected.current?.viewHandle ||
+        latest.current.settingsOpen || reviewRef.current || submissionUnknown ||
+        !current || !sameSavedImage(current, originalImage) || !editVersionCurrent(current) ||
+        imageEdit && !sameSavedImage(imageEdit,current) && (imageEdit.text.trim() || imageEdit.preparation)) return;
+    // The normal composer can still hold the previous prompt or another unsent draft.
+    // This temporary editor changes neither that draft nor the stored image.
+    setImageEdit(sameSavedImage(imageEdit,current) ? imageEdit : current);
+    setError(''); setNotice(''); move('edit-result');
+  };
+  const editReadingCurrent = !!reading?.viewHandle && sameSavedImage(editResult,originalImage);
+  const recheckEditImage = () => {
+    if (!available() || latest.current.panel !== 'edit-result' || !editResult || editResult.preparation ||
+        selected.current?.taskId !== editResult.origin.taskId || reviewRef.current || latest.current.settingsOpen) return;
+    const id = editResult.origin.taskId;
+    void invoke('media.readTask', {taskId:id}, value => {
+      if (fileOpen() || latest.current.panel !== 'edit-result' || selected.current?.taskId !== id ||
+          !sameSavedImage(editResult,savedImageEdit(value))) {
+        releaseReading(value); throw new Error('没有核对到这张原图。编辑文字仍保留，不会换图。');
+      }
+      acceptReading(value,id);
+      setNotice('');
+    });
+  };
   const kindOptions = [{ id: 'image', label: '生成图片' }, ...(comfy ? [{ id: 'workflow', label: '运行 ComfyUI API 图' }, ...(config.hasVideoWorkflow ? [{ id: 'video', label: '生成视频' }] : [])] : [{ id: 'speech', label: '生成语音文件' }, ...(snapshot.imageEditingSupported ? [{ id: 'edit', label: '编辑原图' }] : [])])];
-  const kindAvailable = kindOptions.some(option => option.id === kind);
-  const inputLimit = Number(object(snapshot.inputLimits)[kind === 'speech' ? 'speechTextChars' : 'imagePromptChars']);
-  const draftValid = kindAvailable && (kind === 'workflow' ? graph : text).trim() && !(kind !== 'workflow' && inputLimit > 0 && text.length > inputLimit)
-    && !(comfy && kind === 'image' && !config.hasWorkflow) && (kind !== 'edit' || images.some(file => file.id === imageId) && (!maskId || images.some(file => file.id === maskId && file.mimeType === 'image/png')));
+  const kindAvailable = kindOptions.some(option => option.id === composeKind);
+  const inputLimit = Number(object(snapshot.inputLimits)[composeKind === 'speech' ? 'speechTextChars' : 'imagePromptChars']);
+  const draftValid = kindAvailable && (composeKind === 'workflow' ? graph : composeText).trim() &&
+    !(composeKind !== 'workflow' && inputLimit > 0 && composeText.length > inputLimit) &&
+    !(comfy && composeKind === 'image' && !config.hasWorkflow) &&
+    (editResult ? !editResult.preparation && editReadingCurrent && editVersionCurrent(editResult) :
+      kind !== 'edit' || images.some(file => file.id === imageId) && (!maskId || images.some(file => file.id === maskId && file.mimeType === 'image/png')));
   const prepare = () => {
-    if (!available() || latest.current.panel !== 'create' || reviewRef.current || latest.current.settingsOpen || !snapshotReady || !snapshot.configured || !draftValid || submissionUnknown) return;
+    if (!available() || latest.current.panel !== (editResult ? 'edit-result' : 'create') || reviewRef.current ||
+        latest.current.settingsOpen || !snapshotReady || !snapshot.configured || !draftValid || submissionUnknown) return;
     try {
-      const args: Data = { kind, observeUntilComplete: observe, ...(kind === 'workflow' ? { workflow: JSON.parse(graph) } : { text }) };
-      if (kind === 'edit') { args.imageId = imageId; if (maskId) args.maskId = maskId; }
-      void invoke('media.prepare', args, value => { receiveReview(value); setPreparedTask(value.input.taskId); });
+      const args: Data = { kind:composeKind, observeUntilComplete: editResult ? false : observe, ...(composeKind === 'workflow' ? { workflow: JSON.parse(graph) } : { text:composeText }) };
+      const sourceViewHandle = editResult ? selected.current?.viewHandle : undefined;
+      if (editResult) {
+        if (!sourceViewHandle || sourceViewHandle!==reading?.viewHandle || !sameSavedImage(editResult,savedImageEdit(selected.current))) return;
+        args.fromSavedImage = editResult.origin;
+        args.sourceViewHandle = sourceViewHandle;
+        setImageEdit({...editResult,preparation:true});
+      } else if (kind === 'edit') { args.imageId = imageId; if (maskId) args.maskId = maskId; }
+      void invoke('media.prepare', args, value => {
+        if (editResult && value.originalImageReadRequired===true && value.prepared===false) {
+          if (latest.current.panel==='edit-result' && selected.current?.viewHandle===sourceViewHandle) {
+            clearView();
+            setImageEdit(current=>current && sameSavedImage(current,editResult) && current.preparation===true ?
+              {...current,preparation:undefined} : current);
+            setNotice('原图读取已过期或关闭。没有准备编辑，也没有请求服务。');
+          }
+          return;
+        }
+        if (editResult && (value.command!=='editImage' || value.input?.imageId!==editResult.origin.fileId ||
+            value.input?.imageSha256!==editResult.origin.sha256 || value.input?.configurationRevision!==editResult.origin.configurationRevision ||
+            typeof value.input?.taskId!=='string' || !originalImageId.test(value.input.taskId) || value.input.taskId===editResult.origin.taskId)) {
+          release(value,'reviewHandle'); throw new Error('未核对到这张原图的编辑准备回执。');
+        }
+        receiveReview(value); setPreparedTask(value.input.taskId);
+        if (editResult) setImageEdit({...editResult,preparation:value.input.taskId});
+      });
     } catch { setError('请填写有效的 API 工作流 JSON，没有准备或提交请求。'); }
   };
   const openSettings = () => {
@@ -197,7 +276,10 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
       if (original.command === 'configure') { acceptSnapshot(object(value.result)); setSettings(null); setSettingsOpen(false); setNotice('媒体服务配置已保存；是否可用仍以实际调用为准。'); return; }
       setNotice(value.result?.message || '已收到原服务回执，请核对原任务与产物。');
       const id = original.input.taskId || selected.current?.taskId;
-      if (id) { remember(); await refreshReading(id); }
+      if (id) {
+        remember(); await refreshReading(id);
+        if (original.command==='editImage') setImageEdit(value => value?.preparation===id ? null : value);
+      }
     });
   };
   const operate = (action: string) => {
@@ -269,6 +351,8 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
     : '当前回执没有完整的输出清单，不能据此判断是否保存过文件。可回原任务核对。';
   const serviceName = snapshot.configured ? comfy ? 'ComfyUI' : '兼容媒体服务' : snapshotReady ? '尚未配置媒体服务' : '媒体服务待读取';
   const reviewInput = object(review?.input), submissionReview = !!review && submissions.has(review.command);
+  const reviewImageName = review?.command==='editImage' && imageEdit && imageEdit.preparation===reviewInput.taskId &&
+    imageEdit.origin.fileId===reviewInput.imageId && imageEdit.origin.sha256===reviewInput.imageSha256 ? imageEdit.name : undefined;
   const reviewStale = submissionReview && !!reviewInput.configurationRevision && reviewInput.configurationRevision !== snapshot.configurationRevision;
   const openCreate = () => { if (!available() || reviewRef.current || latest.current.settingsOpen) return; if (panel === 'task') clearView(); move('create'); };
   const hasMediaCollection = mediaTasks.length > 0 || mediaFilter !== 'all';
@@ -290,16 +374,27 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
       <div className="pw-media-library-utilities">{serviceDetails}<Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={busy} onClick={refresh}>重新读取记录</Button></div>
     </div>
 
-    <div data-media-panel="create" hidden={panel !== 'create'} className="pw-media-work-surface">
-      <Button variant="ghost" className="pw-media-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={goBack}>返回媒体任务</Button>
-      <div className="pw-media-panel-heading pw-media-compose-heading"><h3 tabIndex={-1} data-media-heading>新建媒体</h3><Button disabled={busy || !snapshotReady || !snapshot.configured || !draftValid || submissionUnknown} onClick={prepare}>准备并核对输入</Button></div>
-      <div className="pw-media-compose-fields"><SelectField label="创作类型" value={kind} onChange={setKind} options={kindAvailable ? kindOptions : [...kindOptions, { id: kind, label: '原草稿类型（当前服务不可用）', disabled: true }]} isDisabled={busy} />
-        {!kindAvailable && <p role="alert">当前服务不支持原草稿类型，请选择可用类型；输入仍保留。</p>}
-        {kind === 'edit' && <div className="pw-media-image-inputs"><div className="pw-media-field-pair"><SelectField label="已导入的原图" value={imageId} onChange={setImageId} options={images.map(file => ({ id: file.id, label: `${file.name} · ${formatFileSize(file.size)}` }))} isDisabled={busy} /><SelectField label="透明 PNG mask（可选）" value={maskId} onChange={setMaskId} options={[{ id: '', label: '不使用 mask' }, ...images.filter(file => file.mimeType === 'image/png').map(file => ({ id: file.id, label: file.name }))]} isDisabled={busy} /></div><p className="pw-media-note">确认后上传完整原图与选定 mask；原件保留，新结果单独保存。原图与 mask 需满足原服务的尺寸限制。</p>{!images.length && <p className="pw-media-note">请先在附件库导入 PNG、JPEG 或 WebP 原图，单个不超过 4 MB。</p>}</div>}
-        <TextAreaField label={kind === 'workflow' ? 'ComfyUI API 工作流 JSON' : kind === 'speech' ? '要合成为语音的文字' : kind === 'edit' ? '描述对原图的修改' : '描述要生成的内容'} value={kind === 'workflow' ? graph : text} onChange={kind === 'workflow' ? setGraph : setText} isDisabled={busy} rows={5} />
-        {kind !== 'workflow' && inputLimit > 0 && <p className="pw-media-note">{text.length.toLocaleString()} / {inputLimit.toLocaleString()} 字符{text.length > inputLimit ? ' · 超出原服务输入上限，请缩短后核对。' : ''}</p>}
-        {comfy && kind === 'image' && !config.hasWorkflow && <p role="alert">生图需要先配置图片模板与提示词节点，也可以选择运行完整 API 图。</p>}
-        {comfy && <Accordion className="pw-media-disclosures"><AccordionItem id="media-observe" title="结果续查" description={observe ? '已开启有限续查' : '按需查询同一服务任务'}><CheckboxField isSelected={observe} onChange={setObserve} isDisabled={busy}>应用存活期间继续查询这项原任务</CheckboxField><p className="pw-media-note">仅查询已确认的原服务任务，最多 60 次／5 分钟，仍受原授权期限限制。</p></AccordionItem></Accordion>}
+    <div data-media-panel={editResult ? 'edit-result' : 'create'} hidden={panel !== 'create' && !editResult} className="pw-media-work-surface">
+      <Button variant="ghost" className="pw-media-back" leadingIcon={IconArrowLeft} disabled={busy} onClick={goBack}>{editResult?'返回原媒体任务':'返回媒体任务'}</Button>
+      <div className="pw-media-panel-heading pw-media-compose-heading"><h3 tabIndex={-1} data-media-heading>{editResult?'继续编辑原图':'新建媒体'}</h3>
+        {typeof editResult?.preparation==='string'?<Button disabled={busy || submissionUnknown} onClick={()=>readTask(String(editResult.preparation))}>核对已准备的编辑</Button>:
+          <Button disabled={busy || !snapshotReady || !snapshot.configured || !draftValid || submissionUnknown} onClick={prepare}>准备并核对输入</Button>}</div>
+      <div className="pw-media-compose-fields">{editResult ?
+        <><p className="pw-media-note"><bdi>{editResult.name}</bdi> · {formatFileSize(editResult.size)}。只用这张已保存的图片；确认后才上传，新结果不会覆盖原图。</p>
+          {(!editReadingCurrent || !editVersionCurrent(editResult)) && <p role="status">尚未核对到这张原图或原服务。输入仍保留，不会换图或改用其他服务。</p>}
+          {!editReadingCurrent && !editResult.preparation && <Button variant="ghost" leadingIcon={IconRefresh} disabled={busy}
+            onClick={recheckEditImage}>重新核对原图</Button>}
+          {editResult.preparation===true && !busy && <p role="status">编辑准备尚待核对。可返回媒体任务查看原记录，不会再次准备或提交。</p>}</> :
+        <><SelectField label="创作类型" value={kind} onChange={setKind} options={kindAvailable ? kindOptions : [...kindOptions, { id: kind, label: '原草稿类型（当前服务不可用）', disabled: true }]} isDisabled={busy} />
+        {!kindAvailable && <p role="alert">当前服务不支持原草稿类型，请选择可用类型；输入仍保留。</p>}</>}
+        {!editResult && kind === 'edit' && <div className="pw-media-image-inputs"><div className="pw-media-field-pair"><SelectField label="已导入的原图" value={imageId} onChange={setImageId} options={images.map(file => ({ id: file.id, label: `${file.name} · ${formatFileSize(file.size)}` }))} isDisabled={busy} /><SelectField label="透明 PNG mask（可选）" value={maskId} onChange={setMaskId} options={[{ id: '', label: '不使用 mask' }, ...images.filter(file => file.mimeType === 'image/png').map(file => ({ id: file.id, label: file.name }))]} isDisabled={busy} /></div><p className="pw-media-note">确认后上传完整原图与选定 mask；原件保留，新结果单独保存。原图与 mask 需满足原服务的尺寸限制。</p>{!images.length && <p className="pw-media-note">请先在附件库导入 PNG、JPEG 或 WebP 原图，单个不超过 4 MB。</p>}</div>}
+        <TextAreaField label={composeKind === 'workflow' ? 'ComfyUI API 工作流 JSON' : composeKind === 'speech' ? '要合成为语音的文字' : composeKind === 'edit' ? '描述对原图的修改' : '描述要生成的内容'}
+          value={composeKind === 'workflow' ? graph : composeText}
+          onChange={editResult ? value=>setImageEdit(current=>current && sameSavedImage(current,editResult) && !current.preparation ? {...current,text:value} : current) : kind === 'workflow' ? setGraph : setText}
+          isDisabled={busy || !!editResult?.preparation} rows={5} />
+        {composeKind !== 'workflow' && inputLimit > 0 && <p className="pw-media-note">{composeText.length.toLocaleString()} / {inputLimit.toLocaleString()} 字符{composeText.length > inputLimit ? ' · 超出原服务输入上限，请缩短后核对。' : ''}</p>}
+        {!editResult && comfy && kind === 'image' && !config.hasWorkflow && <p role="alert">生图需要先配置图片模板与提示词节点，也可以选择运行完整 API 图。</p>}
+        {!editResult && comfy && <Accordion className="pw-media-disclosures"><AccordionItem id="media-observe" title="结果续查" description={observe ? '已开启有限续查' : '按需查询同一服务任务'}><CheckboxField isSelected={observe} onChange={setObserve} isDisabled={busy}>应用存活期间继续查询这项原任务</CheckboxField><p className="pw-media-note">仅查询已确认的原服务任务，最多 60 次／5 分钟，仍受原授权期限限制。</p></AccordionItem></Accordion>}
       </div>
       <div className="pw-media-compose-footer"><p className="pw-media-note">准备不会发送生成请求。确认后输入会发往上方服务，可能产生费用。</p></div>
       {!snapshot.configured && <p className="pw-media-note">先打开服务配置，保存并读取真实配置后再准备输入。</p>}
@@ -321,6 +416,10 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
             <span className="pw-media-row-copy"><strong>{file.name||kind}</strong><small>{kind} · {formatFileSize(file.size)} · 查看这份原件</small></span>
           </Button>;
         })}</div>}
+        {originalImage && reading.viewHandle && editVersionCurrent(originalImage) && !submissionUnknown &&
+          (!imageEdit || sameSavedImage(imageEdit,originalImage) || !imageEdit.text.trim() && !imageEdit.preparation) &&
+          <div className="pw-form-actions"><Button variant="secondary" size="small" leadingIcon={IconImage} disabled={busy}
+            onClick={startFromImage}>以此图继续编辑</Button></div>}
       </section>
       {speech&&operation.operationId&&<section className="pw-media-receipt" aria-label="语音合成原文"><h4>合成原文</h4>
         <p className="pw-media-note">这次输入是文字，不是原声录音或通话转录。{!reading.speechInputHash&&'当前记录没有可核对的原文版本。'}</p>
@@ -354,7 +453,7 @@ export function MediaWorkspace({ state, run, registerTransientBack }: { state: D
         <div className="pw-media-review-identity"><strong>{review.command === 'configure' ? '将保存的服务' : '这一次原操作'}</strong>{reviewInput.taskId && <small>原任务 · {reviewInput.taskId}</small>}{reviewInput.operationId && <small>原服务操作 · {reviewInput.operationId}</small>}{reviewInput.configurationRevision && <small>配置版本 · {reviewInput.configurationRevision}</small>}</div>
         {review.command === 'configure' ? <><p>{reviewInput.provider} · {reviewInput.baseUrl}</p>{review.replacesSavedTemplates && <p role="alert">这次配置会替换已保存的模板；留空的模板会清除。</p>}<AIAnswer text={JSON.stringify(reviewInput, null, 2)} /></> : review.command === 'cancelJob' ? <p>仅针对这项原服务任务。原服务不支持定向取消时会明确拒绝；本地停止不代表远端已经停止。</p> : review.command === 'confirmResultDownload' ? <><p>只从原响应地址 GET 一次，不重新生成。</p><p>原服务：{review.downloadReview?.providerOrigin}<br />结果来源：{review.downloadReview?.resultOrigin}</p><small>原响应 SHA-256 · {review.downloadReview?.providerResponseSha256}</small><small>原结果地址 SHA-256 · {review.downloadReview?.resultUrlSha256}</small></> : <>
           <p>输入将发送到已配置服务，可能产生费用。回执未知时只查询同一原任务。</p><p>{reviewStale ? '服务配置已变化或尚未重新读取，请返回原任务重新核对。' : `${serviceName} · ${config.baseUrl || '服务地址待核对'}`}</p>
-          {review.command === 'editImage' && <div className="pw-media-review-identity"><p>会上传选定原图与可选 mask 的完整原字节。</p><small>原图 · {reviewInput.imageId} · {reviewInput.imageSha256}</small>{reviewInput.maskId && <small>Mask · {reviewInput.maskId} · {reviewInput.maskSha256}</small>}</div>}
+          {review.command === 'editImage' && <div className="pw-media-review-identity"><p>{reviewImageName?<>会上传 <bdi>{reviewImageName}</bdi> 的完整原字节。新结果不会覆盖原图。</>:'会上传选定原图与可选 mask 的完整原字节。'}</p><small>原图 · {reviewInput.imageId} · {reviewInput.imageSha256}</small>{reviewInput.maskId && <small>Mask · {reviewInput.maskId} · {reviewInput.maskSha256}</small>}</div>}
           <AIAnswer text={inputText(reviewInput)} />{comfy && reviewInput.observeUntilComplete && <p className="pw-media-note">本次输入保留原任务的有限只读续查选择，不续期原授权，不重新生成。</p>}
         </>}
         <CheckboxField isSelected={acknowledged} onChange={value => { acknowledgement.current = value; setAcknowledged(value); }} isDisabled={busy || reviewStale}>已核对本次输入、服务与操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => closeReview()}>返回</Button><Button disabled={busy || !acknowledged || reviewStale} onClick={confirm}>确认这一次操作</Button></div>

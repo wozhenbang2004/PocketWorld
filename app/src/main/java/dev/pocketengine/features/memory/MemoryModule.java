@@ -137,6 +137,16 @@ public final class MemoryModule implements EngineModule {
     JSONObject originalSavedPersonalRecord(String id,long savedRevision)throws Exception {
         return book.originalSavedPersonalRecord(id,savedRevision);
     }
+    /** Separate exact native Book observation, not an engine/model command. */
+    boolean hasOriginalConversationAcceptance(String candidateId,long candidateRevision)throws Exception {
+        return book.hasOriginalConversationAcceptance(candidateId,candidateRevision);
+    }
+    MemoryBook.OriginalConversationAcceptance originalConversationAcceptance(String candidateId,long candidateRevision)throws Exception {
+        return book.originalConversationAcceptance(candidateId,candidateRevision);
+    }
+    long originalConversationDisplayUntil(MemoryBook.OriginalConversationAcceptance accepted)throws Exception {
+        return book.originalConversationDisplayUntil(accepted);
+    }
     /** Host-only read; intentionally not exposed through handle() or model tools. */
     public boolean isSourceForgotten(JSONObject authenticatedScope,SourceRef ref)throws Exception {
         return book.isSourceForgotten(authenticatedScope,ref);

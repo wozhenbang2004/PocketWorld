@@ -441,6 +441,55 @@ public final class MemoryBook {
     public synchronized JSONObject getCandidate(JSONObject authenticatedScope,String id)throws Exception {
         return copy(requireCandidate(learningScope(authenticatedScope),id));
     }
+    record OriginalConversationAcceptance(JSONObject candidate,JSONObject record) {}
+    synchronized boolean hasOriginalConversationAcceptance(String id,long revision)throws Exception {
+        JSONObject candidate=learningCandidates.get(id);
+        return candidate!=null&&scopeOwnsAcceptance(new Scope("owner","private"),candidate,revision);
+    }
+    /** Exact, read-only snapshot for an original owner proposal. No history, retrieval or source body reads. */
+    synchronized OriginalConversationAcceptance originalConversationAcceptance(String id,long revision)throws Exception {
+        Scope owner=new Scope("owner","private");
+        JSONObject candidate=learningCandidates.get(id);
+        if(candidate==null||!id.equals(candidate.opt("id"))||!scopeOwnsAcceptance(owner,candidate,revision))return null;
+        String acceptedId=candidate.getString("acceptedRecordId");
+        JSONObject record=records.get(acceptedId);
+        if(!acceptedId.matches("[a-f0-9-]{36}")||record==null||!owner.matches(record)||!id.equals(record.opt("learningCandidateId"))
+                ||SourceRef.integer(record,"createdAt",1)!=SourceRef.integer(candidate,"updatedAt",1)
+                ||recordVersionForgotten(owner,acceptedId,SourceRef.integer(record,"revision",1)))return null;
+        return new OriginalConversationAcceptance(copy(candidate),copy(record));
+    }
+    private static boolean scopeOwnsAcceptance(Scope owner,JSONObject candidate,long revision)throws Exception {
+        return revision>0&&owner.matches(candidate)&&"accepted".equals(candidate.opt("status"))&&!candidate.has("appKnowledge")
+                &&!candidate.has("recordRefs")&&SourceRef.integer(candidate,"acceptedFromRevision",1)==revision
+                &&SourceRef.integer(candidate,"revision",1)==Math.addExact(revision,1);
+    }
+    /** Not a replacement for activeInspection. Only the sole, original direct assertion can
+     * be proven current here. A potential same-key peer means no current body, not a guessed winner. */
+    synchronized long originalConversationDisplayUntil(OriginalConversationAcceptance accepted)throws Exception {
+        JSONObject expected=accepted.record(),expectedCandidate=accepted.candidate();
+        String id=expected.getString("id");JSONObject record=records.get(id),candidate=learningCandidates.get(expectedCandidate.getString("id"));
+        if(record==null||candidate==null||records.size()>MAX_RECORDS||!MemoryArchive.canonical(expected).equals(MemoryArchive.canonical(record))
+                ||!MemoryArchive.canonical(expectedCandidate).equals(MemoryArchive.canonical(candidate)))return 0;
+        Scope owner=new Scope("owner","private");
+        if(!owner.matches(record)||record.getLong("revision")!=1||record.optBoolean("archiveOnly")||!record.isNull("supersededAt")
+                ||record.has("appKnowledge")||record.has("identityParentIds")||record.getJSONArray("sourceIds").length()!=0)return 0;
+        JSONObject assertion=record.getJSONObject("assertion");
+        if(!PersonalMemorySemantics.ownerAssertion(assertion))return 0;
+        long now=System.currentTimeMillis(),until=Math.min(now+600_000L,expiryTime(record.opt("expiresAt")));
+        if(!assertion.isNull("validTo"))until=Math.min(until,assertion.getLong("validTo"));
+        if(until<=now)return 0;
+        String key=MemoryAssertion.key(record),fenceKey=MemoryAssertion.keyDigest(record);JSONObject fence=assertionFences.get(fenceKey);
+        if(fence==null||!"current".equals(MemoryAssertion.statuses(List.of(record),Set.of(id),now,Map.of(fenceKey,fence)).get(id)))return 0;
+        for(JSONObject other:records.values()){
+            if(other==record||!owner.matches(other)||other.optBoolean("archiveOnly")||expiryTime(other.opt("expiresAt"))<=now)continue;
+            JSONObject app=other.optJSONObject("appKnowledge");
+            if(app!=null&&"trial".equals(app.opt("stage"))&&id.equals(app.opt("baseId")))return 0;
+            if(other.has("assertion")&&key.equals(MemoryAssertion.key(other)))return 0; // Metadata only, never check a contender's sources/body.
+        }
+        // The caller already matched this row's native source refs to the original proposal. No other source is resolved.
+        if(!externalActive(record)||!retrievalSourcesLive(record,new LinkedHashMap<>()))return 0;
+        return Math.min(until,MemoryAssertion.nextFenceChangeAt(fence,now));
+    }
     /** Partial edits preserve host evidence and the original retry key. Only pending drafts can change. */
     public synchronized JSONObject editCandidate(JSONObject authenticatedScope,String id,long revision,JSONObject changes,long now)throws Exception {
         checkLearningTime(now);Scope scope=learningScope(authenticatedScope);JSONObject old=requireCandidate(scope,id);requirePending(old,revision);

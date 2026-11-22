@@ -66,8 +66,8 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                     require((it is Int || it is Long) && (it as Number).toLong() > 0) { "请重新核对原记忆版本" }; (it as Number).toLong()
                 }
             } else { if (originalReply == null) selection(args); null }
-            val foregroundConversation = if (savedRecord) controller.state.conversationId else null
-            val memoryRevision = if (savedRecord) controller.state.memoryRefreshRevision else -1L
+            val foregroundConversation = if (savedRecord || originalReply != null) controller.state.conversationId else null
+            val memoryRevision = if (savedRecord || originalReply != null) controller.state.memoryRefreshRevision else -1L
             val sourceRevision = if (savedRecord) controller.conversationSourceRevision else -1L
             fun checkedSelector(input: JSONObject): JSONObject {
                 val digest = text(input, "proposalDigest", 64); require(digest.matches(Regex("[a-f0-9]{64}")))
@@ -97,11 +97,18 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                         else host.queryForOwner(task, run, epoch, operation)
                     check(row.getJSONObject("proposal").getString("proposalDigest") == digest) { "原提案内容已变化" }
                     val out = if (action == "memoryDraft.open" && row.getJSONObject("apply").getString("status") == "pending_owner") {
-                        acquired = host.reviewForOwner(task, run, epoch, operation, digest)
-                        val view = acquired!!.view()
-                        if (view.opt("dismissOnly") == true) JSONObject().put("proposal", JSONObject().put("action", row.getJSONObject("proposal").getString("action")))
-                            .put("apply", JSONObject().put("status", "pending_owner")).put("review", view)
-                        else presentation(row).put("review", view)
+                        val savedElsewhere = if (originalReply != null && foregroundConversation != null &&
+                            row.getJSONObject("proposal").opt("action") == "create")
+                            runCatching { host.originalConversationAcceptanceForOwner(task, run, epoch, operation, digest, foregroundConversation) }.getOrNull()
+                        else null
+                        if (savedElsewhere != null) JSONObject().put("savedElsewhere", savedElsewhere)
+                        else {
+                            acquired = host.reviewForOwner(task, run, epoch, operation, digest)
+                            val view = acquired!!.view()
+                            if (view.opt("dismissOnly") == true) JSONObject().put("proposal", JSONObject().put("action", row.getJSONObject("proposal").getString("action")))
+                                .put("apply", JSONObject().put("status", "pending_owner")).put("review", view)
+                            else presentation(row).put("review", view)
+                        }
                     } else presentation(row)
                     if (originalReply != null) out.put("originalTarget", selector)
                     out
@@ -112,6 +119,11 @@ internal class PocketWebMemoryDrafts(private val controller: PocketWorldControll
                     busy = false
                     if (!originalReadCurrent()) {
                         acquired?.close(); control.cancel(); done(null, "原私人回答窗口已变化，没有打开其他提案"); return@post
+                    }
+                    val adopted = answer.getOrNull()?.optJSONObject("savedElsewhere")
+                    if (adopted != null && (controller.state.memoryRefreshRevision != memoryRevision ||
+                            System.currentTimeMillis() >= adopted.getLong("readExpiresAt"))) {
+                        control.cancel(); done(null, "个人记忆已变化，请在原回答重新核对"); return@post
                     }
                     if (savedRecord && (controller.state.conversationId != foregroundConversation || controller.state.memoryRefreshRevision != memoryRevision ||
                             controller.conversationSourceRevision != sourceRevision ||

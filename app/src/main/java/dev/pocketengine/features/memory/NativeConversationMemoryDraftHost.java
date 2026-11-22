@@ -372,6 +372,52 @@ public final class NativeConversationMemoryDraftHost {
         return "owner".equals(row.optString("ownerId"))&&"private".equals(row.optString("spaceId"))
                 &&PersonalMemorySemantics.ownerAssertion(row.optJSONObject("assertion"));
     }
+    /** Read-only in the exact original private reply, and only while its own apply was never entered.
+     * Profile can accept the same Book candidate without touching this operation's journal. */
+    public JSONObject originalConversationAcceptanceForOwner(String task,String run,int epoch,String operation,String expectedDigest,String conversation)throws Exception {
+        JSONObject original=checkedOwnerRow(task,run,epoch,operation,expectedDigest),proposal=original.getJSONObject("proposal");
+        if(!"create".equals(proposal.getString("action"))||!conversation.equals(original.getString("conversationId"))
+                ||!unenteredMemoryAcceptance(original)||!Boolean.FALSE.equals(proposal.opt("formalMemorySaved"))
+                ||!Boolean.FALSE.equals(proposal.opt("executionAuthorized")))return null;
+        JSONObject pin=proposal.getJSONObject("candidate");
+        String id=pin.getString("id");long revision=positive(pin,"revision");
+        if(!id.matches("[a-f0-9-]{36}")||!memory.hasOriginalConversationAcceptance(id,revision))return null;
+        JSONArray selected=original.getJSONObject("arguments").getJSONArray("sources"),refs=tasks.preparedMemoryProposalRefs(task,run,epoch,selected);
+        String registered=refsDigest(proposal.getJSONArray("sourceRefs"));
+        if(!registered.equals(refsDigest(refs)))return null;
+        return sources.withCurrentUserSources(refs,()->tasks.withMemoryProposalSourceCurrent(task,run,epoch,conversation,selected,()->{
+            JSONObject current=checkedOwnerRow(task,run,epoch,operation,expectedDigest);
+            if(!unenteredMemoryAcceptance(current)||!digest(proposal).equals(digest(current.getJSONObject("proposal"))))return null;
+            var acceptance=memory.originalConversationAcceptance(id,revision);
+            if(acceptance==null)return null;
+            JSONObject candidate=acceptance.candidate(),record=acceptance.record();
+            if(!id.equals(candidate.getString("id"))||!ownerPersonalRecord(candidate)||!ownerPersonalRecord(record)||record.has("appKnowledge")
+                    ||!pin.getString("digest").equals(candidatePin(candidate).getString("digest"))
+                    ||!registered.equals(refsDigest(candidate.getJSONArray("sourceRefs"))))return null;
+            long now=System.currentTimeMillis(),recordRevision=positive(record,"revision");
+            JSONObject shown=new JSONObject().put("format","pocketworld.original-conversation-memory-acceptance.v1")
+                    .put("readExpiresAt",now+600_000L).put("executionAuthorized",false).put("replayAllowed",false);
+            if(record.optBoolean("archiveOnly")||!record.isNull("supersededAt")||!record.isNull("expiresAt")&&positive(record,"expiresAt")<=now)
+                return shown.put("status","past_only");
+            if(recordRevision>1)return shown.put("status","changed").put("revision",recordRevision);
+            if(!"reviewed_learning".equals(record.opt("formation"))||record.getJSONArray("sourceIds").length()!=0
+                    ||!registered.equals(refsDigest(record.getJSONArray("sourceRefs"))))return null;
+            for(String field:new String[]{"text","layer","confidence","applicability","assertion","expiresAt"})
+                if(!MemoryArchive.canonical(record.opt(field)).equals(MemoryArchive.canonical(candidate.opt(field))))return null;
+            String text=record.getString("text");
+            if(!text.equals(bounded(record,"text",1,4000)))return null;
+            long until;
+            try{until=memory.originalConversationDisplayUntil(acceptance);}catch(Exception unavailable){return shown.put("status","past_only");}
+            if(until<=System.currentTimeMillis())return shown.put("status","past_only");
+            return shown.put("status","same_version").put("id",record.getString("id")).put("revision",recordRevision)
+                    .put("text",text).put("readExpiresAt",Math.min(shown.getLong("readExpiresAt"),until));
+        }));
+    }
+    private static boolean unenteredMemoryAcceptance(JSONObject row)throws Exception {
+        JSONObject apply=row.getJSONObject("apply"),undo=row.getJSONObject("undo");
+        return apply.length()==2&&"pending_owner".equals(apply.opt("status"))&&Boolean.FALSE.equals(apply.opt("replayAllowed"))
+                &&undo.length()==2&&"not_requested".equals(undo.opt("status"))&&Boolean.FALSE.equals(undo.opt("replayAllowed"));
+    }
     /** An accepted original candidate is a native receipt. A coincidentally matching text or
      * absent target does not prove this particular correction/forget, so those stay unknown. */
     public JSONObject queryForOwner(String task,String run,int epoch,String operation)throws Exception {

@@ -14,17 +14,27 @@ import java.util.UUID
 /** MediaWorkflowHost owns durable submissions and recovery. These handles retain only owner readings. */
 internal class PocketWebMedia(private val controller: PocketWorldController) {
     private data class Review(val command: String, val input: String, val expires: Long)
-    private data class Reading(val task: String, val expires: Long)
+    private data class Reading(val task: String, val expires: Long, val foreground: Long)
     private var generation = 0L
+    private var imageReadSerial = 0L
+    @Volatile private var activeSavedImageRead: String? = null
     private var snapshot = JSONObject()
     private val reviews = linkedMapOf<String, Review>()
     private val readings = linkedMapOf<String, Reading>()
     private val preparedTasks = linkedSetOf<String>()
     companion object {
+        private val editImageTypes = setOf("image/png", "image/jpeg", "image/webp")
+        private val savedImageFields = arrayOf("taskId", "runId", "epoch", "operationId", "configurationRevision", "fileId", "sha256")
         val COMMANDS = setOf("media.snapshot", "media.reviewConfiguration", "media.prepare", "media.readTask", "media.confirm",
             "media.query", "media.fetchResults", "media.reviewDownload", "media.reviewCancel", "media.stopWaiting", "media.openResult", "media.readSpeechInput", "media.closeReading")
     }
-    fun clear() { generation++; snapshot = JSONObject(); reviews.clear(); readings.clear(); preparedTasks.clear() }
+    fun clear() { activeSavedImageRead = null; generation++; snapshot = JSONObject(); reviews.clear(); readings.clear(); preparedTasks.clear() }
+    private fun imageReadCurrent(handle: String, foreground: Long) =
+        activeSavedImageRead == handle && controller.displayedPhoneWindowAlive(foreground)
+    private fun discardReading(handle: String) {
+        if (activeSavedImageRead == handle) activeSavedImageRead = null
+        readings.remove(handle)
+    }
     private fun fields(args: JSONObject, vararg names: String) { require(args.keys().asSequence().all { it in names }) { "媒体操作包含不适用的字段" } }
     private fun text(args: JSONObject, key: String, max: Int = 128, optional: Boolean = false): String {
         val value = args.opt(key)
@@ -74,22 +84,47 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
             receipt.optString("operationId") == operationId && receipt.optString("taskId") == taskId && receipt.optString("runId") == run &&
             receipt.optString("status") in setOf("response_received", "failed", "cancelled"))
     }
+    /** A presentation pin for one ordinary, completed local image import. It grants no new reads or submissions. */
+    private fun savedImageEditOrigin(task: JSONObject, op: JSONObject?, outputs: OutputFiles): JSONObject? {
+        val operation = op ?: return null
+        val receipt = operation.optJSONObject("receipt") ?: return null
+        val input = operation.optJSONObject("arguments") ?: return null
+        val image = outputs.files.singleOrNull() ?: return null
+        val run = operation.optString("runId")
+        val epoch = task.optInt("coordinatorEpoch", -1)
+        val configuration = receipt.optString("configurationRevision")
+        if (!outputs.complete || !MediaOwnerUi.isTask(task) || task.opt("conversationId") != "" ||
+            task.optJSONObject("origin") != null || task.opt("cancelRequested") != false ||
+            task.opt("runId") != run || epoch < 1 ||
+            operation.opt("tool") !in setOf("media_generate_image", "media_edit_image") || operation.opt("state") != "receipt" ||
+            input.opt("actorId") != "owner" || input.opt("spaceId") != "private" || input.optString("approvalId").isBlank() ||
+            receipt.opt("provider") != "openai_compatible" || receipt.opt("status") != "response_received" ||
+            receipt.opt("resultStatus") != "saved" || configuration.isBlank() || input.opt("configurationRevision") != configuration ||
+            image.mimeType !in editImageTypes || image.size !in 1..4L * 1024 * 1024) return null
+        return JSONObject().put("taskId", task.getString("id")).put("runId", run).put("epoch", epoch)
+            .put("operationId", operation.getString("operationId")).put("configurationRevision", configuration)
+            .put("fileId", image.id).put("sha256", image.sha256)
+    }
     private fun speechInputHash(task: JSONObject, operation: JSONObject?): String? {
         val original = operation ?: return null
         if (task.optString("actorId") != "owner" || task.optString("spaceId") != "private" ||
             task.optJSONObject("origin")?.optString("kind") == "group" || original.optString("tool") != "media_synthesize_speech") return null
         return original.optJSONObject("arguments")?.optString("requestHash")?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
     }
-    private fun view(task: JSONObject): JSONObject {
-        readings.entries.removeAll { it.value.expires <= SystemClock.elapsedRealtime() }
-        while (readings.size >= 16) readings.remove(readings.keys.first())
+    private fun view(task: JSONObject, readSerial: Long): JSONObject {
+        val now = SystemClock.elapsedRealtime()
+        readings.filterValues { it.expires <= now }.keys.forEach(::discardReading)
+        while (readings.size >= 16) discardReading(readings.keys.first())
         val handle = UUID.randomUUID().toString()
-        readings[handle] = Reading(task.toString(), SystemClock.elapsedRealtime() + 120_000)
+        readings[handle] = Reading(task.toString(), now + 120_000, controller.displayedPhoneWindowVersion())
         val operation = MediaOwnerUi.operation(task)
         val outputs = outputFiles(task, operation)
+        val editOrigin = if (readSerial == imageReadSerial) savedImageEditOrigin(task, operation, outputs) else null
+        if (editOrigin != null) activeSavedImageRead = handle
         return JSONObject().put("viewHandle", handle).put("taskId", task.getString("id")).put("task", public(task))
             .put("savedFiles", JSONArray().also { list -> outputs.files.forEach { list.put(PocketWebState.attachment(it)) } })
             .put("fileListComplete", outputs.complete).put("speechInputHash", speechInputHash(task, operation))
+            .put("savedImageEditOrigin", editOrigin)
             .put("operation", operation?.let(::public) ?: JSONObject.NULL)
             .put("receipt", operation?.optJSONObject("receipt")?.let(::public) ?: task.optJSONObject("evidence")?.let(::public) ?: JSONObject())
     }
@@ -98,7 +133,9 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
         val originalGeneration = generation; val window = controller.webWindowTicket()
         fun current() = generation == originalGeneration && window == controller.webWindowTicket() && controller.webPrivateOwnerVisible()
         val deliver: (JSONObject?, String?) -> Unit = { value, error -> if (current()) done(value, error) }
-        fun feature(command: String, payload: JSONObject, failed: ((String) -> Unit)? = null, receive: (JSONObject) -> JSONObject = { JSONObject().put("confirmed", true).put("command", command).put("result", public(it)) }) {
+        fun feature(command: String, payload: JSONObject, failed: ((String) -> Unit)? = null,
+                    admission: (() -> Boolean)? = null,
+                    receive: (JSONObject) -> JSONObject = { JSONObject().put("confirmed", true).put("command", command).put("result", public(it)) }) {
             fun reject(reason: String) { if (failed != null) failed(reason) else deliver(null, reason) }
             val reply: (JSONObject?, String?) -> Unit = { result, error ->
                 if (current()) {
@@ -106,7 +143,8 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
                     else try { deliver(receive(result), null) } catch (failure: Exception) { reject(failure.message ?: "原媒体回执待核对") }
                 }
             }
-            if (command == "getPreparedSubmission") controller.requestWebFeatureReceipt("media", command, payload, ::current, reply)
+            if (admission != null) controller.requestWebFeatureReceipt("media", command, payload, admission, reply)
+            else if (command == "getPreparedSubmission") controller.requestWebFeatureReceipt("media", command, payload, ::current, reply)
             else controller.requestFeatureReceipt("media", command, payload, reply)
         }
         when (action) {
@@ -119,7 +157,11 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
                     }
                 }
             }
-            "media.closeReading" -> { fields(args, "viewHandle", "reviewHandle"); readings.remove(args.optString("viewHandle")); reviews.remove(args.optString("reviewHandle")); deliver(JSONObject().put("closed", true), null) }
+            "media.closeReading" -> {
+                fields(args, "viewHandle", "reviewHandle")
+                discardReading(args.optString("viewHandle")); reviews.remove(args.optString("reviewHandle"))
+                deliver(JSONObject().put("closed", true), null)
+            }
             "media.reviewConfiguration" -> {
                 fields(args, "provider", "baseUrl", "apiKey", "imageModel", "ttsModel", "voice", "legacyImageBase64", "allowResultUrls", "comfyJobsApi", "workflow", "promptNodeId", "promptInput", "videoWorkflow", "videoPromptNodeId", "videoPromptInput")
                 check(snapshot.optString("configurationRevision").isNotBlank()) { "请先读取媒体服务配置" }
@@ -132,7 +174,7 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
                 deliver(review("configure", frozen, JSONObject().put("replacesSavedTemplates", snapshot.optJSONObject("configuration")?.optBoolean("hasWorkflow") == true || snapshot.optJSONObject("configuration")?.optBoolean("hasVideoWorkflow") == true)), null)
             }
             "media.prepare" -> {
-                fields(args, "kind", "text", "workflow", "observeUntilComplete", "imageId", "maskId")
+                fields(args, "kind", "text", "workflow", "observeUntilComplete", "imageId", "maskId", "fromSavedImage", "sourceViewHandle")
                 require(snapshot.optBoolean("configured")) { "请先保存并读取真实媒体服务配置" }
                 val command = when (text(args, "kind", 24)) { "image" -> "generateImage"; "speech" -> "synthesizeSpeech"; "video" -> "generateVideo"; "edit" -> "editImage"; "workflow" -> "submitWorkflow"; else -> error("请选择已接入的媒体类型") }
                 val payload = JSONObject().put("configurationRevision", snapshot.getString("configurationRevision"))
@@ -140,17 +182,62 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
                 payload.put("observeUntilComplete", args.getBoolean("observeUntilComplete"))
                 if (command == "submitWorkflow") { require(args.opt("workflow") is JSONObject); require(args.getJSONObject("workflow").toString().length <= 512 * 1024); payload.put("workflow", args.getJSONObject("workflow")) }
                 else payload.put(if (command == "synthesizeSpeech") "text" else "prompt", text(args, "text", snapshot.getJSONObject("inputLimits").getInt(if (command == "synthesizeSpeech") "speechTextChars" else "imagePromptChars")).trim())
+                val saved = args.optJSONObject("fromSavedImage")
+                require(if (args.has("fromSavedImage")) saved != null && command == "editImage" &&
+                    !args.has("imageId") && !args.has("maskId") else !args.has("sourceViewHandle")) { "只能选择这项媒体任务的同一份原图" }
+                var sourceAdmission: (() -> Boolean)? = null
+                var sourceStillReading: (() -> Boolean)? = null
                 if (command == "editImage") {
-                    fun image(key: String, prefix: String) {
-                        val id = text(args, key)
+                    fun image(id: String, prefix: String, expected: UiChatAttachment? = null) {
                         val file = controller.state.feature("attachments").optJSONArray("attachments").objects().singleOrNull { it.optString("id") == id
-                            && it.optString("mimeType") in (if (prefix == "mask") setOf("image/png") else setOf("image/png", "image/jpeg", "image/webp")) && it.optLong("size") in 1..4L * 1024 * 1024 }
+                            && it.optString("mimeType") in (if (prefix == "mask") setOf("image/png") else editImageTypes) && it.optLong("size") in 1..4L * 1024 * 1024 }
                             ?: error("请选择本机已导入的原图版本")
+                        if (expected != null) check(file.opt("sha256") == expected.sha256 && file.opt("mimeType") == expected.mimeType &&
+                            file.optLong("size", -1L) == expected.size) { "原图版本已变化，没有准备其他图片" }
                         payload.put(prefix + "Id", file.getString("id")).put(prefix + "Sha256", file.getString("sha256"))
                     }
-                    image("imageId", "image"); if (args.optString("maskId").isNotBlank()) image("maskId", "mask")
+                    if (saved == null) {
+                        image(text(args, "imageId"), "image")
+                        if (args.optString("maskId").isNotBlank()) image(text(args, "maskId"), "mask")
+                    } else {
+                        fields(saved, *savedImageFields)
+                        val handle = text(args, "sourceViewHandle")
+                        val held = readings[handle]
+                        if (held == null || !imageReadCurrent(handle, held.foreground) || held.expires <= SystemClock.elapsedRealtime()) {
+                            // Definitively declined here, before entering the durable preparation path.
+                            deliver(JSONObject().put("originalImageReadRequired", true).put("prepared", false), null)
+                            return
+                        }
+                        val heldTask = JSONObject(held.task)
+                        val heldOperation = MediaOwnerUi.operation(heldTask)
+                        val heldOutputs = outputFiles(heldTask, heldOperation)
+                        val original = savedImageEditOrigin(heldTask, heldOperation, heldOutputs)
+                            ?: error("读取窗口不是这次原保存图片")
+                        check(savedImageFields.all { original.opt(it) == saved.opt(it) }) { "读取窗口不是这次原保存图片" }
+                        val taskId = original.getString("taskId")
+                        val task = controller.state.tasks.singleOrNull { it.id == taskId }?.raw ?: error("原媒体任务未核对")
+                        val operation = MediaOwnerUi.operation(task)
+                        val outputs = outputFiles(task, operation)
+                        val latest = savedImageEditOrigin(task, operation, outputs)
+                        val exactImage = heldOutputs.files.single()
+                        val liveImage = outputs.files.singleOrNull()
+                        check(current() && !controller.attachmentOutcomes.state.open && snapshot.opt("imageEditingSupported") == true &&
+                            latest != null && savedImageFields.all { latest.opt(it) == original.opt(it) } &&
+                            latest.opt("configurationRevision") == payload.opt("configurationRevision") &&
+                            liveImage?.mimeType == exactImage.mimeType && liveImage?.size == exactImage.size) {
+                            "原保存图片或原服务已变化，没有准备其他图片"
+                        }
+                        image(exactImage.id, "image", exactImage)
+                        // FeatureHost may queue this explicit gesture. Its admission probe only sees
+                        // immutable scalars and the volatile same-reading/foreground identity.
+                        val foreground = held.foreground
+                        val expires = held.expires
+                        sourceStillReading = { imageReadCurrent(handle, foreground) }
+                        sourceAdmission = { imageReadCurrent(handle, foreground) && SystemClock.elapsedRealtime() < expires }
+                    }
                 }
-                feature("prepareSubmission", JSONObject().put("submissionCommand", command).put("arguments", payload)) { result ->
+                feature("prepareSubmission", JSONObject().put("submissionCommand", command).put("arguments", payload), admission = sourceAdmission) { result ->
+                    check(sourceStillReading?.invoke() != false) { "原媒体读取已关闭，请在原媒体任务核对准备状态" }
                     check(result.opt("dispatched") == false && result.optString("status") == "awaiting_owner_submission" && result.optString("submissionCommand") == command
                         && result.optString("configurationRevision") == payload.getString("configurationRevision") && result.optString("requestHash") == TaskStore.capabilityFingerprint(payload)) { "媒体准备回执与本次输入不一致" }
                     val task = result.getString("taskId"); require(task.matches(Regex("[a-f0-9-]{36}"))); preparedTasks.add(task)
@@ -160,12 +247,14 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
             "media.readTask" -> {
                 fields(args, "taskId"); val id = text(args, "taskId")
                 require(id in preparedTasks || controller.state.tasks.any { it.id == id && MediaOwnerUi.isTask(it.raw) }) { "请先读取这项原媒体任务" }
+                val readSerial = ++imageReadSerial
+                activeSavedImageRead = null
                 controller.readTaskForOpen(id, ::current) { task, error ->
                     if (current()) {
                         if (error != null || task == null) deliver(null, error ?: "原媒体任务暂不可读取")
                         else try {
                             require(MediaOwnerUi.isTask(task.raw)) { "原任务不是媒体工作" }
-                            val reading = view(task.raw)
+                            val reading = view(task.raw, readSerial)
                             if (MediaOwnerUi.operation(task.raw) != null) deliver(reading, null)
                             else feature("getPreparedSubmission", JSONObject().put("taskId", id), failed = {
                                 deliver(reading.put("originalInputUnavailable", true), null)
@@ -209,6 +298,8 @@ internal class PocketWebMedia(private val controller: PocketWorldController) {
                     val id = text(args, "fileId"); val sha = text(args, "sha256")
                     val file = outputFiles(task, operation).files.singleOrNull { it.id == id && it.sha256 == sha } ?: error("本次读取未列出该输出版本")
                     check(outputFiles(latest, MediaOwnerUi.operation(latest)).files.any { it.id == id && it.sha256 == sha && it.mimeType == file.mimeType && it.size == file.size }) { "输出版本已变化，请重新读取" }
+                    // Browsing the bytes does not keep the edit lease alive behind the separate reader.
+                    if (activeSavedImageRead == handle) activeSavedImageRead = null
                     // Open the private canonical reader, not ACTION_VIEW. Closing returns to the still-mounted media record.
                     controller.attachmentOutcomes.openFile(PocketWebState.attachment(file), taskId, showOriginal = true, fromWorkResult = false)
                     deliver(JSONObject().put("openingOriginal", true).put("taskId", taskId).put("fileId", id).put("sha256", sha), null)

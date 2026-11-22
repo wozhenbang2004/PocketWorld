@@ -125,6 +125,15 @@ public final class MemoryAssertion {
         return kept;
     }
     private static long fenceOrder(JSONArray rows,long now)throws Exception{long order=Long.MIN_VALUE;for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(row.getLong("effectiveAt")<=now)order=Math.max(order,row.getLong("eventOrder"));}return order;}
+    /** An already stored fence can advance without a Book mutation or a refresh event. */
+    static long nextFenceChangeAt(JSONObject fence,long now)throws Exception {
+        long next=Long.MAX_VALUE;
+        for(String field:fence.has("fenceVersion")?List.of("legacyVersions","versions","reviewedVersions","literalVersions"):List.of("versions")){
+            JSONArray versions=fence.getJSONArray(field);
+            for(int i=0;i<versions.length();i++){long at=versions.getJSONObject(i).getLong("effectiveAt");if(at>now){next=Math.min(next,at);break;}}
+        }
+        return next;
+    }
     static long protectedFloor(JSONObject fence,long now)throws Exception {
         return fence==null||!fence.has("fenceVersion")?Long.MIN_VALUE:Math.max(fenceOrder(fence.getJSONArray("reviewedVersions"),now),fenceOrder(fence.getJSONArray("literalVersions"),now));
     }
