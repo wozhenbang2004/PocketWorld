@@ -96,9 +96,9 @@ public final class TeamResearchContext implements AutoCloseable {
                 // Source checks and coordinator feedback stay outside SQL callbacks.
                 // Preserve the native Runner turn alongside the original parent-pool
                 // reservation. Neither identity replaces or recreates the other.
-                return InferenceCapture.withAdmission(tasks.teamResearchInferenceTarget(binding,purpose,reservation.getString("reservationId"),site),()->{
+                return call.bindReviewedReceiver(InferenceCapture.withAdmission(tasks.teamResearchInferenceTarget(binding,purpose,reservation.getString("reservationId"),site),()->{
                     fence.metadata();call.budgetChanged(tasks.teamBudgetSnapshot(call.teamRunId));
-                });
+                }),purpose);
             }
         };
         CompactionJournal nativeCompaction=tasks.compactionJournal(binding.taskId(),binding.runId(),binding.epoch(),original,raw,()->captured);

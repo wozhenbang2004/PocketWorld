@@ -35,7 +35,7 @@ public final class TeamsModule implements EngineModule {
         @Override public JSONObject complete(dev.pocketengine.core.ModelConfig config,JSONArray messages,JSONArray tools,dev.pocketengine.core.RunControl control,TeamCoordinator.InferenceCall call)throws Exception{
             call.checkCurrent();InferenceFactory factory=inferenceFactory;
             var target=factory==null?dev.pocketengine.runtime.usage.InferenceCapture.unattributed():factory.forCall(call,control);
-            return ModelGateway.complete(config,messages,tools,control,dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(target,call::checkSourcesCurrent));
+            return ModelGateway.complete(config,messages,tools,control,call.bindReviewedReceiver(dev.pocketengine.runtime.usage.InferenceCapture.withAdmission(target,call::checkSourcesCurrent)));
         }
     },event->context.emit("teams",event));}
     /** Native host wiring only. A model or installed declaration cannot supply this factory. */
@@ -176,15 +176,15 @@ public final class TeamsModule implements EngineModule {
         if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
         return coordinator.confirmOwnerWorkReport(tasks,report,completed,feedback,current);
     }
-    public TeamCoordinator.OwnerPausedMemberReview reviewPausedOwnerMember(dev.pocketengine.store.TaskStore tasks,JSONObject exact,
+    public TeamCoordinator.OwnerStoppedMemberReview reviewStoppedOwnerMember(dev.pocketengine.store.TaskStore tasks,JSONObject exact,boolean failed,
             java.util.function.BooleanSupplier current)throws Exception {
         context.requireExecutionEnabled();if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
-        return coordinator.reviewPausedOwnerMember(tasks,exact,current,context.settings::matchesApiCatalogRoute);
+        return coordinator.reviewStoppedOwnerMember(tasks,exact,failed,current,context.settings::matchesApiCatalogRoute);
     }
-    public JSONObject confirmPausedOwnerMember(dev.pocketengine.store.TaskStore tasks,TeamCoordinator.OwnerPausedMemberReview review,
+    public JSONObject confirmStoppedOwnerMember(dev.pocketengine.store.TaskStore tasks,TeamCoordinator.OwnerStoppedMemberReview review,
             java.util.function.BooleanSupplier current)throws Exception {
         if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
-        return coordinator.confirmPausedOwnerMember(tasks,review,()->context.executionAllowed()&&current.getAsBoolean(),context.settings::matchesApiCatalogRoute);
+        return coordinator.confirmStoppedOwnerMember(tasks,review,()->context.executionAllowed()&&current.getAsBoolean(),context.settings::matchesApiCatalogRoute);
     }
     /** Foreground owner receipt recovery only; not exposed by handle() or any model tool. */
     public JSONObject recoverOwnerOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{

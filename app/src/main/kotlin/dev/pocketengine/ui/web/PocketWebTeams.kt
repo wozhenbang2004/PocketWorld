@@ -81,7 +81,7 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
     }
     private data class Review(val command: String, val input: String, val expires: Long, val phonePage: TeamPhoneHost.Page? = null, val phoneReview: TeamPhoneHost.Review? = null, val productionSources: String? = null,
         val workItem: PocketWebTeamWorkReturn? = null, val failedHandoff:PocketWebTeamFailedHandoff?=null, val ownerReading: Reading? = null, val proposal: TaskStoreTeamWriteHost.WorkPlanPage.ParentProposalReview? = null,
-        val pausedMember: TeamCoordinator.OwnerPausedMemberReview? = null) {
+        val stoppedMember: TeamCoordinator.OwnerStoppedMemberReview? = null) {
         fun close() { runCatching { phonePage?.close() }; runCatching { workItem?.close() }; runCatching { failedHandoff?.close() }; runCatching { proposal?.close() } }
     }
     private data class PhonePage(val original: TeamPhoneHost.Page, val definition: String, val input: String, val expires: Long)
@@ -935,18 +935,19 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "viewHandle", "action", "memberId", "name", "avatarShape", "role", "assignment", "model", "newLeaderId")
                 val handle = text(args, "viewHandle")
                 val run = reading(handle, "run")
-                if (args.opt("action") == "resumePaused") {
+                val failed = args.opt("action") == "resumeFailed"
+                if (failed || args.opt("action") == "resumePaused") {
                     fields(args, "viewHandle", "action", "memberId")
                     val owner=readings[handle] ?: error("原分工窗口已关闭")
                     val exact=reviewedTeamCollaborationAction(run,teamCollaborationStamp(run),"resume",text(args,"memberId",64))
                     val teams=controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主不可用")
                     val tasks=controller.nativeTokenBudgetHost().tasks
-                    var prepared: TeamCoordinator.OwnerPausedMemberReview?=null
-                    hostWork(work={teams.reviewPausedOwnerMember(tasks,exact,{currentWindow()&&owner.live})
+                    var prepared: TeamCoordinator.OwnerStoppedMemberReview?=null
+                    hostWork(work={teams.reviewStoppedOwnerMember(tasks,exact,failed,{currentWindow()&&owner.live})
                         .also{prepared=it}.preview()},accept={shown->
                         check(readings[handle]===owner&&owner.live) { "原分工窗口已关闭" }
-                        val result=review("resumePausedMember",JSONObject());val token=result.getString("reviewHandle")
-                        reviews[token]=reviews.getValue(token).copy(ownerReading=owner,pausedMember=checkNotNull(prepared))
+                        val result=review(if(failed) "resumeFailedMember" else "resumePausedMember",JSONObject());val token=result.getString("reviewHandle")
+                        reviews[token]=reviews.getValue(token).copy(ownerReading=owner,stoppedMember=checkNotNull(prepared))
                         deliver(result.put("viewHandle",handle).put("view",PocketWebState.publicValue(shown)),null)
                     })
                     return
@@ -1181,14 +1182,14 @@ internal class PocketWebTeams(private val controller: PocketWorldController) {
                 fields(args, "reviewHandle")
                 val captured = reviews.remove(text(args, "reviewHandle")) ?: error("原操作审阅已使用或关闭，请先核对原回执")
                 if (captured.expires <= SystemClock.elapsedRealtime()) { captured.close(); error("原操作审阅已过期") }
-                if(captured.pausedMember!=null){
-                    val original=captured.pausedMember;val owner=captured.ownerReading ?: error("原分工审阅已关闭")
+                if(captured.stoppedMember!=null){
+                    val original=captured.stoppedMember;val owner=captured.ownerReading ?: error("原分工审阅已关闭")
                     val teams=controller.webPluginFeatureHost().module("teams") as? TeamsModule ?: error("原团队宿主不可用")
                     val tasks=controller.nativeTokenBudgetHost().tasks
-                    hostWork(work={teams.confirmPausedOwnerMember(tasks,original){currentWindow()&&owner.live}},accept={result->
+                    hostWork(work={teams.confirmStoppedOwnerMember(tasks,original){currentWindow()&&owner.live}},accept={result->
                         val shown=original.preview()
                         check(owner.live&&result.optString("id")==shown.getString("runId")) { "原分工是否已排队待核对，请刷新，不要重发" }
-                        deliverReceipt(JSONObject().put("confirmed",true).put("command","resumePausedMember")
+                        deliverReceipt(JSONObject().put("confirmed",true).put("command",captured.command)
                             .put("memberId",shown.getString("memberId")).put("reading",view("run",result)))
                     })
                     return

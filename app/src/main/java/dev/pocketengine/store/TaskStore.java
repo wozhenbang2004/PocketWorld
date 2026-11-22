@@ -10451,7 +10451,8 @@ public final class TaskStore {
         if(!id.matches("[a-f0-9-]{36}"))throw new SecurityException("研究child缺少原稳定编号");
         TeamResearchWakeAdmission committedWake=null;
         db.beginTransaction();try{
-            JSONObject task=read(id);if(task==null){JSONObject identity=new JSONObject(who.toString()).put("materialScope",materials);identity.remove("member");identity.remove("ownerContinuation");identity.remove("executionTurnId");identity.remove("runGeneration");identity.remove("memberGeneration");
+            JSONObject task=read(id);call.requireReviewedPrior(task);
+            if(task==null){JSONObject identity=new JSONObject(who.toString()).put("materialScope",materials);identity.remove("member");identity.remove("ownerContinuation");identity.remove("executionTurnId");identity.remove("runGeneration");identity.remove("memberGeneration");
                 task=base(id,call.goal(),"assistant","capabilities").put("teamResearchDerivedSources",call.sourcePlan().view()).put("conversationId","").put("parentTaskId",team.getString("id")).put("teamResearch",identity).put("origin",new JSONObject().put("kind","team_research").put("teamRunId",call.teamRunId).put("memberId",call.memberId).put("researchTaskId",id));write(task);
                 JSONArray links=team.optJSONArray("relatedTasks");if(links==null)links=new JSONArray();if(links.length()>=32)throw new IllegalStateException("原团队已保留32个真实child；旧历史未丢弃");links.put(new JSONObject().put("taskId",id).put("feature","team_research").put("memberId",call.memberId).put("round",who.getInt("round")));team.put("relatedTasks",links);write(team);
             }
@@ -20061,7 +20062,7 @@ public final class TaskStore {
         }
     }
     /** Current stopped-child and retained-output metadata only. Neither an output read nor a continuation grant. */
-    public synchronized JSONObject ownerPausedTeamMemberSource(JSONObject input,String retainedMember,JSONObject retainedStage,JSONObject oldTurn)throws Exception {
+    public synchronized JSONObject ownerStoppedTeamMemberSource(JSONObject input,String retainedMember,JSONObject retainedStage,JSONObject oldTurn,boolean failed)throws Exception {
         String teamId=input.getString("runId"),member=input.getString("memberId");
         JSONObject team=requireOriginalReviewedResearchTeam(teamId,input),scope=team.getJSONObject("teamResearchParentScope");
         JSONObject owner=teamBudgetOwner(team),pool=teamBudget(owner);
@@ -20073,7 +20074,7 @@ public final class TaskStore {
         JSONObject retained=ownerTeamResearchOutputReference(teamId,teamId,retainedMember,1,retainedStage,links);
         if(retained==null)throw new SecurityException("没有这次原协作已保存的成员答复，没有继续");
         String task=oldTurn.getString("taskId");
-        JSONObject child=boundedHostWorkCore(task);if(child==null)throw new SecurityException("没有这项暂停分工的原执行记录，没有继续");
+        JSONObject child=boundedHostWorkCore(task);if(child==null)throw new SecurityException("没有这项分工的原执行记录，没有继续");
         requirePrivateOwner(child);
         String run=child.getString("runId"),status=child.getString("status");int epoch=child.getInt("coordinatorEpoch");
         JSONObject identity=child.getJSONObject("teamResearch"),attempt=child.getJSONObject("teamResearchNativeRun"),origin=child.getJSONObject("origin");
@@ -20081,21 +20082,23 @@ public final class TaskStore {
         for(int i=0;i<links.length();i++){
             JSONObject link=links.getJSONObject(i);if(!task.equals(link.opt("taskId")))continue;
             if(!"team_research".equals(link.opt("feature"))||!member.equals(link.opt("memberId"))||link.optInt("round")!=1)
-                throw new SecurityException("原暂停执行不属于此分工，没有继续");
+                throw new SecurityException("原执行不属于此分工，没有继续");
             linked++;
         }
         if(linked!=1||!task.equals(child.opt("id"))||!teamId.equals(child.opt("parentTaskId"))||!"team_research".equals(origin.opt("kind"))
                 ||!member.equals(origin.opt("memberId"))||!teamId.equals(origin.opt("teamRunId"))||!task.equals(origin.opt("researchTaskId"))
-                ||!TeamResearchReplyExecution.uuid(run)||epoch<1||!status.matches("cancelled|interrupted")
+                ||!TeamResearchReplyExecution.uuid(run)||epoch<1||(failed?
+                        !("failed".equals(status)&&run.equals(oldTurn.opt("runId"))&&epoch==oldTurn.optInt("epoch",-1)):
+                        !status.matches("cancelled|interrupted"))
                 ||child.optBoolean("cancelRequested")||hasUnresolved(task)||!teamId.equals(identity.opt("teamRunId"))
                 ||!member.equals(identity.opt("memberId"))||!task.equals(identity.opt("researchTaskId"))||identity.optInt("round")!=1
                 ||identity.optInt("identityRevision")!=identityRevision||!run.equals(attempt.opt("runId"))||epoch!=attempt.optInt("coordinatorEpoch")
                 ||!oldTurn.getString("turnId").equals(attempt.opt("executionTurnId"))||attempt.optInt("runGeneration",-1)!=input.getInt("expectedGeneration")
-                ||attempt.optInt("memberGeneration",-1)!=before||(long)before+1!=input.getInt("expectedMemberGeneration"))
-            throw new SecurityException("原暂停执行未取得同一分工的确定停止回执，没有继续");
+                ||attempt.optInt("memberGeneration",-1)!=before||(long)before+(failed?0:1)!=input.getInt("expectedMemberGeneration"))
+            throw new SecurityException("没有取得这项原分工的确定停止回执，没有继续");
         try(Cursor row=db.rawQuery("SELECT status,epoch FROM runs WHERE task_id=? AND run_id=?",new String[]{task,run})){
             if(!row.moveToFirst()||!status.equals(row.getString(0))||epoch!=row.getInt(1))
-                throw new SecurityException("原暂停执行尚未真实结束，没有继续");
+                throw new SecurityException("原分工尚未真实结束，没有继续");
         }
         return new JSONObject().put("parentTaskId",scope.getString("parentTaskId")).put("parentRunId",scope.getString("parentRunId"))
                 .put("parentEpoch",scope.getInt("parentEpoch")).put("taskId",task).put("runId",run).put("epoch",epoch)

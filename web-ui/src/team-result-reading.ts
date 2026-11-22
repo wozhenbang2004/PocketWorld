@@ -216,29 +216,44 @@ export function teamMemberProgress(run: Data, member: Data, followUps: TeamFollo
 }
 
 type ReadableMemberDelivery = { memberId: string; round: number; taskId: string; key: string };
-/** Discover the original B row, not whether this device can yet resume it. Native checks that on the explicit review. */
-export function pausedTeamMemberCandidate(reading: Data | null, delivered: readonly ReadableMemberDelivery[]) {
+/** Discover one saved and one stopped original leg. The held native review checks execution authority. */
+export function stoppedTeamMemberCandidate(reading: Data | null, delivered: readonly ReadableMemberDelivery[]) {
   const run = reading?.run, link = reading?.ownerWorkLink, members = rows(run?.members);
   if (reading?.kind !== 'run' || !reading.viewHandle || !text(run?.id) || run.mode !== 'collaborate' || run.rounds !== 1 ||
-      run.status !== 'paused' || run.phase !== 'waiting_member' || run.workPlan || run.productionScope || run.nativeWorkProfileModels ||
+      run.workPlan || run.productionScope || run.nativeWorkProfileModels ||
       run.researchExecutionFormat !== 'pocketworld.team-research-agent.v1' || (run.discussionFormat ?? 'classic') !== 'classic' ||
       link?.readOnly !== true || link.currentRun !== true || link.stopping !== false || link.teamRunId !== run.id ||
-      !text(reading.taskId) || link.teamTaskId !== reading.taskId || !Array.isArray(reading.attention) || reading.attention.length !== 0 ||
+      !text(reading.taskId) || link.teamTaskId !== reading.taskId || !Array.isArray(reading.attention) ||
       members.length !== 2 || !members.every(slot => text(slot?.id) && slot.runner === 'model' && slot.device === 'phone' && !slot.exited) ||
       members[0].id === members[1].id) return null;
+  const failed = (run.status === 'partial' || run.status === 'failed') && run.phase === run.status;
+  if (failed ? reading.attention.length !== 1 : !(run.status === 'paused' && run.phase === 'waiting_member' && !reading.attention.length)) return null;
   const a = members.find(slot => slot.status === 'completed' && slot.paused === false);
-  const b = members.find(slot => slot.status === 'paused' && slot.paused === true && slot.parentPause == null);
+  const stopped = failed ? 'failed' : 'paused';
+  const b = members.find(slot => slot.status === stopped && slot.paused === !failed && slot.parentPause == null);
   if (!a || !b) return null;
-  const stage = rows(b.roundStates).find(row => row.round === 1 && row.status === 'paused' && text(row.researchTaskId));
+  const stage = rows(b.roundStates).find(row => row.round === 1 && row.status === stopped && text(row.researchTaskId));
   const completed = rows(a.roundStates).find(row => row.round === 1 && row.status === 'completed');
   const source = delivered.filter(row => row.memberId === a.id && row.round === 1 && row.taskId === completed?.researchTaskId);
-  const event = rows(run.board?.activity).filter(row => row?.type !== 'member_completed' || row.memberId !== a.id).at(-1);
-  if (!stage || source.length !== 1 || event?.type !== 'paused' || event.memberId !== b.id) return null;
+  if (!stage || source.length !== 1) return null;
+  let failureKey = '';
+  if (failed) {
+    const [item] = teamFollowUps(run, reading.attention), child = stage.researchTask;
+    if (!item || item.status !== 'failed' || item.locator.memberId !== b.id ||
+        item.locator.childKind || item.locator.assignmentId || item.locator.workItemId || item.locator.questionId ||
+        !currentMemberPhase(run, b, stage) || child?.inspectOnly !== false || child.status !== 'failed' ||
+        !text(child.runId) || !Number.isSafeInteger(child.coordinatorEpoch) || child.coordinatorEpoch < 1) return null;
+    failureKey = item.key;
+  } else {
+    const event = rows(run.board?.activity).filter(row => row?.type !== 'member_completed' || row.memberId !== a.id).at(-1);
+    if (event?.type !== 'paused' || event.memberId !== b.id) return null;
+  }
   return { runId: run.id as string, generation: run.generation as number, revision: run.revision as number, memberId: b.id as string,
-    memberGeneration: b.generation as number, retainedMemberId: a.id as string, childTaskId: stage.researchTaskId as string, retainedDelivery: source[0].key };
+    memberGeneration: b.generation as number, retainedMemberId: a.id as string, childTaskId: stage.researchTaskId as string,
+    retainedDelivery: source[0].key, failureKey };
 }
 
-export type PausedTeamMemberCandidate = NonNullable<ReturnType<typeof pausedTeamMemberCandidate>>;
+export type StoppedTeamMemberCandidate = NonNullable<ReturnType<typeof stoppedTeamMemberCandidate>>;
 
 const stoppedMemberStage = (value: unknown) => value === 'failed' || value === 'interrupted';
 
