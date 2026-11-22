@@ -384,7 +384,10 @@ internal class PocketWebProjectDevelopment(
         }
         if (action in PocketWebCheckoutFiles.COMMANDS) {
             check(review == null && !busy) { "请先完成或关闭原项目审阅" }
-            files.dispatch(action, args, original.project, { current(original) }, done); return
+            files.dispatch(action, args, original.project, { current(original) }, done) { checkout ->
+                current(original) && restoreFailure == null && review == null && directReview == null &&
+                    dependencyReview == null && dependencyCopyReview == null && shownCheckout(original, checkout, allowSole = false)
+            }; return
         }
         if (action in setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, LOCAL_DEPENDENCY_COPY, "projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
             check(restoreFailure == null) { restoreFailure ?: "本机项目输入引用不可用" }

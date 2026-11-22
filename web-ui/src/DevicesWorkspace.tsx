@@ -45,6 +45,54 @@ function waitingGoalWindow() {
   return document.visibilityState === 'visible' && view?.section === 'devices' && !view.taskId && Number.isSafeInteger(view.resumeRevision)
     ? JSON.stringify([bridge.getDocumentEpoch(), view.resumeRevision]) : '';
 }
+const directReceivedText = 'pocketworld.original-phone-allocation.owner-reviewed-text.v1';
+const nativeUuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+const receivedId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 240;
+const plainTextScope = (value: Data | undefined) => value?.screenMode === 'capabilities' && Object.keys(value).length === 1;
+type ReceivedPickup = { taskId: string; window: string; reviewId: string; sourceId: string; operationId: string; parentTaskId: string;
+  grantId: string; authorizationEpoch: number; localDeviceId: string; localInstanceId: string; fingerprint: string };
+function samePickupOrigin(origin: Data | undefined, pick: ReceivedPickup) {
+  return origin?.kind === 'paired_device' && origin.textReturnContract === directReceivedText &&
+    origin.callerDeviceId === pick.sourceId && origin.originDeviceId === pick.sourceId && origin.targetDeviceId === pick.localDeviceId &&
+    origin.remoteOperationId === pick.operationId && origin.parentTaskId === pick.parentTaskId &&
+    origin.rootTaskId === pick.parentTaskId && origin.traceId === pick.parentTaskId && /^ba1_[a-f0-9]{64}$/.test(origin.remoteLocalTaskId || '') &&
+    origin.grantId === pick.grantId && origin.authorizationEpoch === pick.authorizationEpoch;
+}
+/** Capture only the exact owner-reviewed direct text goal, never its body or a future rule. */
+function receivedPickupFromReview(view: Data, local: Data): ReceivedPickup | undefined {
+  const window = waitingGoalWindow(), origin = view.origin;
+  if (!window || bridge.getDocumentEpoch() < 1 || !receivedId(view.taskId) || !nativeUuid(view.reviewId) ||
+    view.executionAuthorized !== false || view.source !== 'local_api' || view.toolBudget !== 0 ||
+    !Number.isSafeInteger(view.modelBudget) || view.modelBudget < 1 || view.modelBudget > 3 || !plainTextScope(view.resourceBinding) ||
+    !origin || !receivedId(origin.callerDeviceId) || !deviceChoiceCode(origin.callerDeviceId) || !deviceChoiceCode(local.deviceId) ||
+    origin.callerDeviceId === local.deviceId || !receivedId(local.instanceId) || !/^[a-f0-9]{64}$/.test(local.certificateFingerprint || '') ||
+    !receivedId(origin.remoteOperationId) || !receivedId(origin.parentTaskId) || origin.remoteOperationId === origin.parentTaskId ||
+    !receivedId(origin.grantId) || !Number.isSafeInteger(origin.authorizationEpoch) || origin.authorizationEpoch < 1) return;
+  const pick = { taskId: view.taskId, window, reviewId: view.reviewId, sourceId: origin.callerDeviceId, operationId: origin.remoteOperationId,
+    parentTaskId: origin.parentTaskId, grantId: origin.grantId, authorizationEpoch: origin.authorizationEpoch,
+    localDeviceId: local.deviceId, localInstanceId: local.instanceId, fingerprint: local.certificateFingerprint };
+  if (samePickupOrigin(origin, pick)) return pick;
+}
+const pickupHere = (pick: ReceivedPickup, local: Data) => pick.window === waitingGoalWindow() && local.deviceId === pick.localDeviceId &&
+  local.instanceId === pick.localInstanceId && local.certificateFingerprint === pick.fingerprint;
+function observedReceivedFirstRun(pick: ReceivedPickup, state: Data, local: Data) {
+  if (!pickupHere(pick, local)) return;
+  const matches = rows(state.tasks).filter(task => task.id === pick.taskId);
+  if (matches.length !== 1 || unreadSource(matches[0])) return;
+  const raw = matches[0].raw, scope = raw?.deviceExecutionScope, model = raw?.deviceModelSelection;
+  if (raw?.id !== pick.taskId || raw.taskProjection !== 'detail_window' || raw.taskCoreReadLimited !== false || raw.contextWithdrawn === true ||
+    raw.actorId !== `paired_device:${pick.sourceId}` || raw.spaceId !== `device:${pick.sourceId}` || raw.deviceNativeInstanceId !== pick.localInstanceId ||
+    raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.deviceExecutionKind !== 'GOAL' ||
+    !samePickupOrigin(raw.origin, pick) || scope?.reviewedTextOnly !== true || scope.toolLimit !== 0 || !plainTextScope(scope.resourceBinding) ||
+    !nativeUuid(raw.runId) || raw.coordinatorEpoch !== 1 || raw.deviceAcceptedRunId !== raw.runId || raw.deviceAcceptedExecutorEpoch !== 1 ||
+    model?.taskId !== pick.taskId || model.reviewId !== pick.reviewId || model.source !== 'local_api' || model.toolBudget !== 0 ||
+    model.ownerApprovedLocalModel !== true || model.pairedDeviceIdentityRetained !== true || model.executionAuthorized !== true ||
+    !samePickupOrigin(model.origin, pick)) return;
+  // The native registration stays the same in a fast terminal state; this is not a verdict about the result.
+  const { taskId, reviewId, sourceId, operationId, parentTaskId, grantId, authorizationEpoch, localDeviceId, localInstanceId, fingerprint } = pick;
+  return { taskId, expectedReceivedFirstRun: { runId: raw.runId, epoch: 1, reviewId, sourceId, operationId, parentTaskId, grantId,
+    authorizationEpoch, localDeviceId, localInstanceId, localFingerprint: fingerprint } };
+}
 type PhoneArchiveRead = 'devices.queryHistory' | 'devices.queryPhoneGoalResult';
 const sentPhoneRead = (row: Data): PhoneArchiveRead | undefined => row.targetRunRecorded === true ? 'devices.queryPhoneGoalResult'
   : (Number.isSafeInteger(row.targetAcceptedAt) && row.targetAcceptedAt > 0 || row.sourceSendPhase === 'write_claimed') ? 'devices.queryHistory' : undefined;
@@ -220,6 +268,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const [address, setAddress] = useState(''), [inviteId, setInviteId] = useState(''), [host, setHost] = useState(''), [port, setPort] = useState(''), [recoveryAddresses, setRecoveryAddresses] = useState<string[]>([]);
   const [invitation, setInvitation] = useState<ShownPairingInvitation|null>(null), [review, setReview] = useState<Data | null>(null), [ack, setAck] = useState(false), [future, setFuture] = useState(false);
   const [workBusy, setWorkBusy] = useState(false), [controlBusy, setControlBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [receivedPickup, setReceivedPickup] = useState<ReceivedPickup | null>(null);
   const [taskDetails, setTaskDetails] = useState<Record<string, Data>>({}), [historyReceipt, setHistoryReceipt] = useState<Data | null>(null), [historyStopSubmitted, setHistoryStopSubmitted] = useState(false);
   const [lastWindowsRead, setLastWindowsRead] = useState<LastWindowsRead | null>(null);
   const [windowsReadFailure, setWindowsReadFailure] = useState<{ windowKey: string; message: string } | null>(null);
@@ -314,7 +363,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (phoneArchive?.archiveHandle) void run('devices.discard', { archiveHandle: phoneArchive.archiveHandle }).catch(() => {});
     closeOwnText();setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
     closeReview(); // Retire pending review handles before changing the list/detail scope.
-    setNotice(''); setError(''); setTaskDetails({}); setManualFocus(undefined);
+    setNotice(''); setReceivedPickup(null); setError(''); setTaskDetails({}); setManualFocus(undefined);
     setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');
     focusReturnedPeer.current = false;
     placeRead.current = true;
@@ -324,9 +373,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     selectedPeer.current = next;
     setPeerId(next);
   };
-  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
+  const acceptReview = (value: Data) => { const actual = deviceReview(value); handle.current = actual.viewHandle; setReview(actual); setReceivedPickup(null); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setRaw(''); setForm(''); setInvitation(null); };
   const clearSensitive = (enabled = false, keepPairEntry = false) => {
-    setLocalRead(undefined); setManualFocus(undefined); addressRepair.current = undefined;
+    setLocalRead(undefined); setManualFocus(undefined); setReceivedPickup(null); addressRepair.current = undefined;
     autoReadSource.current = ''; // Restored native windows never retain the previous local archive handle.
     placeRead.current = !peerPlace.current;
     setFirstPair(null);setDesktopOpen(false); setDiscoveryAck(false); setAdvertise(false); setDiscoveryPeer('');setClosedInbox(null);setClosedDraft('');setClosedReceipt(null);closeOwnText(); setModelReturnFocus(undefined); setPhoneArchive(null); setArchiveFind({key:'',text:''}); setWaitingPhones(null);
@@ -695,6 +744,18 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     }
     if(original.kind==='result'&&original.view.canRecordDecision!==true){setError('这份原候选现在只能在本机查看。');return;}
     if (repair?.originalPhone) addressRepair.current = undefined;
+    const pickup = original.kind === 'goal' && !future && !sourceFocus && !selectedPeer.current && supported('devices.openTask')
+      ? receivedPickupFromReview(original.view, local) : undefined;
+    if (pickup && handle.current !== original.viewHandle) return;
+    const clearPendingPage = () => {
+      setWaitingPhones(page=>!page?.resultOnly&&rows(page?.rows).some(r=>r.taskId===original.view.taskId)?null:page);
+      setWaitingBlock(null);
+    };
+    const continuePickup = () => {
+      if (pickup && !selectedPeer.current && pickupHere(pickup, local)) {
+        setReceivedPickup(pickup); setNotice('');
+      }
+    };
     handle.current = ''; setReview(null);
     void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, (value, actual) => {
       if (value.nativeCallReturned !== true || value.kind !== original.kind) throw new Error('原设备操作尚未取得匹配回执，请刷新核对。');
@@ -713,8 +774,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       }
       if(original.kind==='goal'||original.kind==='action'&&original.view.operation==='task.cancelPending'){
         // A confirmed choice changed this local record. Invalidate the page; never infer a run or refetch a peer.
-        setWaitingPhones(page=>!page?.resultOnly&&rows(page?.rows).some(r=>r.taskId===original.view.taskId)?null:page);
-        setWaitingBlock(null);
+        clearPendingPage();
+        if (pickup) { continuePickup(); return; }
       }
       if (original.kind === 'result') setWaitingPhones(page => page && (page.resultOnly || page.startedOnly) ? { ...page,
         rows: rows(page.rows).filter(row => row.taskId !== original.view.taskId || row.reviewRecordedAt !== original.view.recordedAt ||
@@ -733,7 +794,21 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         return;
       }
       setNotice(original.kind === 'resume' ? extra.approved === true ? '已处理这次原执行的恢复请求，实际进展以原任务回执为准。' : '已拒绝这次恢复请求，原任务未因本次拒绝而继续。' : original.kind === 'action' && original.view.operation?.startsWith('task.') ? '已发出原任务控制请求。实际暂停、继续或停止以原任务回执为准。' : '原生处理已返回，请核对下方实际状态。');
-    }, original.kind === 'resume' || original.kind === 'action' && original.view.operation?.startsWith('task.') ? 'control' : 'work');
+    }, original.kind === 'resume' || original.kind === 'action' && original.view.operation?.startsWith('task.') ? 'control' : 'work',
+    pickup ? message => { clearPendingPage(); continuePickup(); setError(message); } : undefined);
+  };
+  const samePickup = receivedPickup && !sourceFocus && !peerId && !review && !form && pickupHere(receivedPickup, local) ? receivedPickup : null;
+  const registeredPickup = samePickup && observedReceivedFirstRun(samePickup, state, local);
+  const openRegisteredPickup = () => {
+    if (!samePickup || !registeredPickup || busy || selectedPeer.current || !supported('devices.openTask')) return;
+    const fresh = observedReceivedFirstRun(samePickup, bridge.getState().state, local);
+    if (!fresh || fresh.expectedReceivedFirstRun.runId !== registeredPickup.expectedReceivedFirstRun.runId) {
+      setError('这次本机接手记录已变化，未打开其他工作。请从本机记录核对。'); return;
+    }
+    void invoke('devices.openTask', fresh, value => {
+      if (value.taskId !== fresh.taskId || value.readOnly !== true || value.executionAuthorized !== false)
+        throw new Error('没有取得这份原工作的打开回执。请回本机记录核对。');
+    });
   };
   const openHistory = (taskId: string, link: Data) => {
     const selected = selectedPeer.current;
@@ -1486,6 +1561,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               <Button variant={waitingPage?.resultOnly ? 'primary' : 'secondary'} disabled={busy} onClick={() => readWaiting(undefined,'results')}>待核对成果</Button>
               {supported('devices.readReviewedPhoneInbox')&&<Button variant={localInbox?'primary':'secondary'} disabled={busy} onClick={()=>readClosedInbox()}>核对过的工作</Button>}
             </>} />
+            {samePickup && <div className="pw-device-history-entry">
+              <p role="status">{registeredPickup ? '本机已登记接手。这份工作只允许使用你核对的本机模型处理文字。请在原工作查看进展。' :
+                '暂未核对到这次本机接手登记。请查看本机原工作记录，不要重复接手。'}</p>
+              {registeredPickup && <Button variant="primary" disabled={busy} onClick={openRegisteredPickup}>打开这份原工作</Button>}
+            </div>}
             {localInbox&&<><form className="pw-form-actions" onSubmit={e=>{e.preventDefault();if(closedDraft.trim())readClosedInbox(undefined,closedDraft);}}>
               <SearchField aria-label="在本机原目标和已确认的结果中查找" placeholder="查找原目标或已确认的文字" value={closedDraft} isDisabled={busy}
                 onChange={value=>setClosedDraft(Array.from(value).slice(0,64).join(''))}/>

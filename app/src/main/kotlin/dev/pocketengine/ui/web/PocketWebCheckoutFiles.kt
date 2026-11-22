@@ -306,7 +306,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         } else value.remove("priorSavedFile")
         return value
     }
-    fun dispatch(action: String, args: JSONObject, project: String, parentCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+    fun dispatch(action: String, args: JSONObject, project: String, parentCurrent: () -> Boolean, done: (JSONObject?, String?) -> Unit,
+                 selectedPythonCheckout: (String) -> Boolean) {
         require(action in COMMANDS)
         if (action == "projects.development.files.close") {
             fields(args, "viewHandle", "filesHandle")
@@ -543,7 +544,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     text(args, "pythonTaskId").also { require(it.matches(Regex("[a-f0-9-]{36}"))) }
                 } else null
                 val setupSha = if(args.has("expectedPythonSha256")){
-                    check(original.sourcePath==null && original.opened==null && !busy && OwnerPythonRun.supportsPath(path)) {
+                    check(original.sourcePath==null && original.opened==null && !busy &&
+                        selectedPythonCheckout(original.checkout) && OwnerPythonRun.supportsPath(path)) {
                         "请返回原普通副本的原脚本"
                     }
                     text(args,"expectedPythonSha256").also { require(it.matches(Regex("[a-f0-9]{64}"))) }
@@ -552,13 +554,19 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
                     original.opened?.let { store.release(it.draft) }; original.opened = null
                 }
-                work(original, done) {
+                observe(original, done, { value: JSONObject ->
+                    check(setupSha==null || selectedPythonCheckout(original.checkout)) { "原副本选择已变化，未打开其他文件。" }
+                    value
+                }) {
                     val gitSha=gitStatus?.let { original.git.shaForEditor(it,path) }
                     val script=pythonTask?.let {
                         controller.nativeButlerHost().tasks.ownerPythonEditorPositionForOwner(it).also { position ->
                             check(current(original) && original.opened == null && position.projectId()==original.project &&
                                 position.checkoutId()==original.checkout && position.path()==path) { "没有打开其他项目或脚本" }
                         }
+                    }
+                    if(setupSha!=null)check(selectedPythonCheckout(original.checkout) && original.opened==null) {
+                        "原副本或编辑窗口已变化，未读取其他文件。"
                     }
                     val actual = controller.projectDevelopmentForWeb().fileForOwner(original.project, original.checkout, path)
                     if(saved!=null)check(original.savedEdit===saved&&actual.opt("deleted")==false&&actual.opt("expectedHash")==saved.savedHash&&
@@ -606,6 +614,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                             "原脚本版本已变化。只显示同一副本的文件清单，未打开其他文件。"
                         }
                         val prior = store.open(original.project, original.checkout, path, actual.optBoolean("deleted"))
+                        if(setupSha!=null)check(!prior.creating && !prior.dirty() && !prior.conflict()) {
+                            "原脚本已有保留草稿。未打开或覆盖草稿，只显示同一副本的文件清单。"
+                        }
                         val observed = if (original.sourcePath == null && current(original))
                             prior.observeRecoveredOrdinaryFile(actual) else prior.observe(actual)
                         if(listed!=null)check(current(original) && original.opened==null) { "原副本清单已关闭，未替换草稿。" }

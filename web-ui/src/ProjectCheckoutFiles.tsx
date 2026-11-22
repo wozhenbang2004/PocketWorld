@@ -300,8 +300,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         throw new Error('未核对到先前确认保存的版本，没有打开其他版本。');
       if (pythonTaskId && value.pythonTaskId!==pythonTaskId)
         throw Error('未核对到本次运行保存的原脚本，没有打开其他文件。');
-      if (expectedPythonSha256 && value.matchedPythonSetupSha256!==expectedPythonSha256)
-        throw Error('未核对到原脚本的同一已保存版本。只显示同一副本的文件清单。');
+      if (expectedPythonSha256 && (value.matchedPythonSetupSha256!==expectedPythonSha256 ||
+          value.baseHash!==expectedPythonSha256 || value.dirty!==false || value.conflict!==false ||
+          value.saveUnknown!==false || value.text!==value.latest?.content || interfaceDrafts.has(keyFor(path))))
+        throw Error('未核对到原脚本的干净已保存版本。只显示同一副本的文件清单。');
       if (position && value.latest.expectedHash !== position.savedHash)
         throw new Error(priorSavedFileId?'此路径已不是先前确认保存的版本，没有切换到其他版本。':'此路径当前字节不再是上次保存的版本，没有切换到其他版本。');
       if(sourceEntry && value.latest.expectedHash!==sourceEntry.sha256)
@@ -330,7 +332,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       !sourceMember&&!hostFile&&!resume&&!entry&&!buildResume&&!pythonResume&&
       pythonSetupResume?.projectId===projectId&&pythonSetupResume.checkoutId===checkoutId&&
       savedPythonPath(pythonSetupResume.path)&&fileHash(pythonSetupResume.savedHash)?pythonSetupResume:undefined;
-    const priorTarget=resumeBuild||resumeSetup;
+    const priorTarget=resumeBuild;
     let resumeReadId:string|undefined;
     if(resumeBuild)attemptedBuildResume.current=true;
     if(resumeSetup)attemptedPythonSetupResume.current=true;
@@ -361,13 +363,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       const {directoryPage:_,...list}=value;
       if(priorTarget){
         const saved=list.priorSavedFile;
-        if(list.readOnly===true&&(!resumeBuild||list.sourceDigest===resumeBuild.sourceDigest)&&
+        if(list.readOnly===true&&list.sourceDigest===priorTarget.sourceDigest&&
           saved?.format==='pocketworld.owner-checkout-file-save-position.v1'&&saved.projectId===projectId&&saved.checkoutId===checkoutId&&
           saved.path===priorTarget.path&&saved.sha256===priorTarget.savedHash&&
           typeof saved.readId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(saved.readId)){
           resumeReadId=saved.readId;
           delete list.priorSavedFile; // The exact list token is consumed by the native read, never reused by a fallback.
-        }else if(!resumeSetup)setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
+        }else setError('未核对到本轮构建前保存的文件。这里只显示同一副本的文件清单，未打开其他文件。');
       }
       handle.current = value.filesHandle; setListing(list);
     });
@@ -377,11 +379,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       return;
     }
     if(resumeSetup){
-      // Opening an existing unchanged script may never have produced a recent Save token.
-      // The native selector checks the known original SHA before attaching an editor.
+      // Use only the native Python return check, even if the ordinary list also
+      // contains a prior save bookmark. No new read when unsent editor text exists.
       if(result?.readOnly===true && result.projectId===projectId && result.checkoutId===checkoutId &&
-        handle.current===result.filesHandle && live(generation.current))
-        await readFile(resumeSetup.path,{position:resumeSetup,expectedPythonSha256:resumeSetup.savedHash});
+        handle.current===result.filesHandle && live(generation.current)){
+        if(interfaceDrafts.has(keyFor(resumeSetup.path)))setError('原脚本有保留的未保存文字。没有打开或覆盖草稿。');
+        else await readFile(resumeSetup.path,{position:resumeSetup,expectedPythonSha256:resumeSetup.savedHash});
+      }
       return;
     }
     if (pythonResume && result && !pin && !hostFile && !resume && !checkedEntry &&

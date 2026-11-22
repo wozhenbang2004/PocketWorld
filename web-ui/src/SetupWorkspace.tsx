@@ -26,6 +26,7 @@ export type SetupWorkspaceProps = {
   onViewChange?: (view: SetupView) => void;
   onClose: () => void;
   onReviewOriginalVite?: (runtimeIdentity:string) => void;
+  originalPython?: {path:string; onReturn:(foregroundEpoch:number)=>void};
   registerBackHandler?: (handler: (() => boolean) | null) => void;
 };
 
@@ -45,17 +46,21 @@ function SetupRow({ title, status, children, action }: { title: string; status: 
 }
 
 /** One native preparation operation; polling observes it and never starts one. */
-function useRuntimePreparation(enabled: boolean, can: (action: string) => boolean, resumeRevision: unknown, run: SetupCommand, runtimeTaskId?: string) {
+function useRuntimePreparation(enabled: boolean, can: (action: string) => boolean, resumeRevision: unknown, run: SetupCommand, runtimeTaskId?: string, pythonEpoch?:number) {
   const [view, setView] = useState<SetupRuntime | null>(null), [review, setReview] = useState<SetupRuntimeReview | null>(null);
   const [reading, setReading] = useState(false), [working, setWorking] = useState(''), [error, setError] = useState('');
   const [log, setLog] = useState(''), [logTrimmed, setLogTrimmed] = useState(false), [needsRead, setNeedsRead] = useState(false);
   const alive = useRef(false), generation = useRef(0), pending = useRef(false), readingRef = useRef(false);
   const current = useRef(view), cursor = useRef(0), logOwner = useRef(''); current.current = view;
   const currentReview = useRef(review); currentReview.current = review;
-  const latest = useRef({ enabled, can, run }); latest.current = { enabled, can, run };
+  const reviewEpoch = useRef<number|undefined>(undefined), requestedReadEpoch = useRef<number|undefined>(undefined);
+  const readProof = useRef<{view:SetupRuntime; epoch:number}|undefined>(undefined);
+  const latest = useRef({ enabled, can, run, pythonEpoch }); latest.current = { enabled, can, run, pythonEpoch };
   const dismissReview = () => {
-    const original = currentReview.current; currentReview.current = null; setReview(null);
-    if (original && latest.current.can('setup.runtime.dismiss')) void latest.current.run('setup.runtime.dismiss', { reviewHandle: original.reviewHandle }).catch(() => {});
+    const original = currentReview.current, epoch=reviewEpoch.current;
+    currentReview.current = null; reviewEpoch.current=undefined; setReview(null);
+    if (original && (latest.current.pythonEpoch===undefined || epoch===bridge.getDocumentEpoch()) &&
+        latest.current.can('setup.runtime.dismiss')) void latest.current.run('setup.runtime.dismiss', { reviewHandle: original.reviewHandle }).catch(() => {});
   };
   const apply = (value: unknown, requestedTaskId?: string) => {
     const next = readSetupRuntime(value);
@@ -73,13 +78,15 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
     current.current = next; setView(next); setNeedsRead(false); return next;
   };
   const read = async (preserveActionError = false) => {
-    if (!alive.current || !latest.current.can('setup.runtime.read') || readingRef.current || pending.current) return false;
+    if (!alive.current || !latest.current.can('setup.runtime.read') || readingRef.current || pending.current || document.hidden) return false;
     const ticket = generation.current, epoch = bridge.getDocumentEpoch(); readingRef.current = true; setReading(true);
+    requestedReadEpoch.current=epoch;
     try {
       const taskId = current.current?.operation?.taskId || runtimeTaskId;
       const result = await latest.current.run('setup.runtime.read', { ...(taskId ? { taskId } : {}), afterSequence: cursor.current, maxBytes: 32768 });
       if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch) return false;
-      apply(result, taskId); if (!preserveActionError) setError(''); return true;
+      readProof.current={view:apply(result,taskId),epoch};
+      if (!preserveActionError) setError(''); return true;
     } catch (failure) { if (alive.current && generation.current === ticket) { setError(failureText(failure)); setNeedsRead(true); } return false; }
     finally { if (generation.current === ticket) { readingRef.current = false; if (alive.current) setReading(false); } }
   };
@@ -93,6 +100,13 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   const readable = can('setup.runtime.read');
   useEffect(() => { if (enabled && readable) void readRef.current(); }, [enabled, readable, resumeRevision]);
   useEffect(() => {
+    if (pythonEpoch===undefined || !enabled || !readable || document.hidden) return;
+    // A foreground token change leaves the install intact, but not its old review
+    // or readiness observation. Only read the current/retained native install.
+    if (currentReview.current && reviewEpoch.current!==pythonEpoch) dismissReview();
+    if (!reading && !working && requestedReadEpoch.current!==pythonEpoch) void readRef.current();
+  }, [enabled,readable,pythonEpoch,reading,working]);
+  useEffect(() => {
     if (!enabled || !runtimePreparing(view) || needsRead || document.hidden) return;
     const timer = window.setTimeout(() => { void readRef.current(); }, 1500);
     return () => window.clearTimeout(timer);
@@ -103,20 +117,29 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
     try {
       const result = await latest.current.run(command, args);
       if (!alive.current || ticket !== generation.current || bridge.getDocumentEpoch() !== epoch) return;
-      if (command === 'setup.runtime.review') setReview(readSetupRuntimeReview(result));
-      else { setReview(null); if (setupObject(result).format === 'pocketworld.runtime-setup-view.v1') apply(result); }
+      if (command === 'setup.runtime.review') { const next=readSetupRuntimeReview(result); reviewEpoch.current=epoch; setReview(next); }
+      else { reviewEpoch.current=undefined; setReview(null); if (setupObject(result).format === 'pocketworld.runtime-setup-view.v1') apply(result); }
     } catch (failure) { if (alive.current && ticket === generation.current) { setReview(null); setError(failureText(failure)); setNeedsRead(true); } }
     finally {
       if (ticket === generation.current) { pending.current = false; if (alive.current) { setWorking(''); if (command !== 'setup.runtime.review') void readRef.current(true); } }
     }
   };
-  return { view, review, reading, working, error, log, logTrimmed, needsRead, read, dismissReview,
-    reviewPreparation: () => action('setup.runtime.review', { mode: view?.ready ? 'repair' : 'prepare' }),
+  const liveReview=pythonEpoch===undefined||reviewEpoch.current===pythonEpoch?review:null;
+  const readEpoch=readProof.current?.view===view?readProof.current?.epoch:undefined;
+  const needsForegroundRead=()=>pythonEpoch!==undefined&&readEpoch!==bridge.getDocumentEpoch();
+  return { view, review:liveReview, readEpoch, reading, working, error, log, logTrimmed, needsRead, read, dismissReview,
+    reviewPreparation: () => needsForegroundRead()?read():action('setup.runtime.review', { mode: view?.ready ? 'repair' : 'prepare' }),
     start: () => {
-      if (!review || review.review.expiresAt <= Date.now()) { dismissReview(); setError('这份准备说明已过期，请重新查看后开始。'); return; }
-      return action('setup.runtime.start', { reviewHandle: review.reviewHandle });
+      if (!liveReview || liveReview.review.expiresAt <= Date.now() ||
+          pythonEpoch!==undefined&&reviewEpoch.current!==bridge.getDocumentEpoch()) {
+        dismissReview(); setError('这份准备说明已过期，请重新查看后开始。'); return;
+      }
+      return action('setup.runtime.start', { reviewHandle: liveReview.reviewHandle });
     },
-    cancel: () => { if (view) { try { return action('setup.runtime.cancel', runtimeCancelInput(view)); } catch (failure) { setError(failureText(failure)); } } },
+    cancel: () => {
+      if(needsForegroundRead())return read();
+      if (view) { try { return action('setup.runtime.cancel', runtimeCancelInput(view)); } catch (failure) { setError(failureText(failure)); } }
+    },
   };
 }
 
@@ -180,7 +203,7 @@ function RuntimePreparation({ preparation, can, blocked, projectReview }: { prep
 /** The approved Affect task body/review/footer and BoardUI settings rows now
  * serve one preparation purpose at a time. Guide preferences remain separate
  * from real permissions, model availability and runtime operation receipts. */
-export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, initialView, runtimeTaskId, returnLabel, originGoal, onNavigate, onViewChange, onClose, onReviewOriginalVite, registerBackHandler }: SetupWorkspaceProps) {
+export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, initialView, runtimeTaskId, returnLabel, originGoal, onNavigate, onViewChange, onClose, onReviewOriginalVite, originalPython, registerBackHandler }: SetupWorkspaceProps) {
   const [data, setData] = useState<SetupRead | null>(null), [view, setView] = useState<SetupView>(initialCapability || initialView || (mode === 'onboarding' ? 'model' : 'overview'));
   const [loading, setLoading] = useState(false), [working, setWorking] = useState('');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [needsRead, setNeedsRead] = useState(false);
@@ -219,9 +242,21 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const textVerified = modelStateCurrent && modelSelected && !!data?.model.tested && !textTesting;
   const focused = !!initialCapability, onboarding = mode === 'onboarding';
   const resumeRevision = setupObject(snapshot.view).resumeRevision;
-  const preparation = useRuntimePreparation(entered && !!data && (view === 'tools' || view === 'overview'), can, resumeRevision, run, runtimeTaskId);
+  const pythonEpoch=originalPython?bridge.getDocumentEpoch():undefined;
+  const preparation = useRuntimePreparation(entered && !!data && (view === 'tools' || view === 'overview'), can, resumeRevision, run, runtimeTaskId, pythonEpoch);
   const readyRuntime = preparation.view;
   const runtime = setupObject(readyRuntime?.runtime), tools = Array.isArray(runtime.tools)?runtime.tools.map(setupObject):[];
+  const python=tools.filter(tool=>tool.name==='python3'), preparationReceipt=setupObject(readyRuntime?.operation?.receipt);
+  const pythonReadyEpoch=pythonEpoch!==undefined && preparation.readEpoch===pythonEpoch && focused && !onboarding && view==='tools' &&
+    !locked && !preparation.reading && !preparation.working && !preparation.review && !preparation.needsRead &&
+    readyRuntime?.status==='ready' && readyRuntime.ready===true && !readyRuntime.operation?.error &&
+    (!readyRuntime.operation || preparationReceipt.status==='completed' && preparationReceipt.receiptReceived===true &&
+      preparationReceipt.resourcesReleased===true && preparationReceipt.ownedWorkerLive===false &&
+      preparationReceipt.preparedEnvironmentIdentity===runtime.identity) &&
+    runtime.runtimeId==='managed_process_v1' && runtime.canExecute===true &&
+    typeof runtime.identity==='string' && /^[a-f0-9]{64}$/.test(runtime.identity) &&
+    python.length===1 && python[0].installed===true && (python[0].probeVerified===true || python[0].hashVerified===true)
+    ? pythonEpoch:undefined;
   const viteReady = !!onReviewOriginalVite && focused && !onboarding && view==='tools' &&
     !locked && !preparation.reading && !preparation.working && !preparation.review && !preparation.needsRead &&
     readyRuntime?.status==='ready' && readyRuntime.ready===true && !readyRuntime.operation?.error &&
@@ -375,7 +410,10 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   </section>;
   const capabilityBody = (id: SetupCapability) => {
     if (!data) return null;
-    if (id === 'tools') return <RuntimePreparation preparation={preparation} can={can} blocked={locked} projectReview={!!viteReady}/>;
+    if (id === 'tools') return <>
+      {originalPython && <p className="pw-setup-copy">准备完成后可返回 <bdi>{originalPython.path}</bdi>。不会自动运行。</p>}
+      <RuntimePreparation preparation={preparation} can={can} blocked={locked} projectReview={!!viteReady || pythonReadyEpoch!==undefined}/>
+    </>;
     if (id === 'phone') return <>
       <p className="pw-setup-copy">聊天、查资料和生成文件可以直接在 App 内使用。需要操作手机界面时，再开启下面的权限。</p>
       <section className="pw-setup-purpose-group"><SetupRow title="界面读取与主屏控制" status={permissionLabel(data.permissions.accessibility)} action={permissionAction('accessibility', data.permissions.accessibility)}/><p className="pw-setup-copy">用手机主屏执行时，开启无障碍并保持手机解锁、亮屏。主屏模式免配对。</p>
@@ -424,11 +462,14 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
         {(error || needsRead || notice) && <div className="pw-setup-feedback">{error && <p role="alert" className="pw-setup-error">{error}</p>}{needsRead && readable && <Button variant="secondary" disabled={loading || !!working} onClick={() => void load()}>刷新并核对</Button>}{notice && <p role="status" className="pw-setup-notice">{notice}</p>}</div>}
       </div>
       <footer className="pw-setup-footer">
-        <Button className="pw-setup-next" variant={viteReady?'primary':!onboarding?'secondary':canRecordProgress&&optionalTest?'primary':'ghost'}
+        <Button className="pw-setup-next" variant={viteReady||pythonReadyEpoch!==undefined?'primary':!onboarding?'secondary':canRecordProgress&&optionalTest?'primary':'ghost'}
           disabled={!!working || !!preparation.working} onClick={() => {
-            if(viteReady&&onReviewOriginalVite)onReviewOriginalVite(viteReady);
+            if(pythonReadyEpoch!==undefined&&originalPython){
+              if(!document.hidden&&bridge.getDocumentEpoch()===pythonReadyEpoch)originalPython.onReturn(pythonReadyEpoch);
+              else void preparation.read();
+            }else if(viteReady&&onReviewOriginalVite)onReviewOriginalVite(viteReady);
             else void close();
-          }}>{viteReady?'返回原项目核对网页构建':working==='save'?'正在保存…':leaveLabel}</Button>
+          }}>{pythonReadyEpoch!==undefined?'返回原脚本':viteReady?'返回原项目核对网页构建':working==='save'?'正在保存…':leaveLabel}</Button>
       </footer>
     </>}
   </section>;

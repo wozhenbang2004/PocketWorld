@@ -14,7 +14,7 @@ export type PhoneReviewDisplay={
   ownerPickedMessage?:boolean;message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
   conditions?:PhoneConditions;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;readCurrentOnce?:true;
 };
-type Live={reviewHandle:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;ownerPickedMessage?:boolean;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;readCurrentOnce?:true};
+type Live={reviewHandle:string;mode:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;originalDraft?:{composer:string;conversation:string};ownerPickedMessage?:boolean;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;readCurrentOnce?:true};
 
 const privatePlace = (mode:string) => mode==='background'?'后台独立屏':mode==='main_screen'?'手机主屏':undefined;
 const readinessLine = (condition:Pick<Condition,'state'|'message'>|undefined, ready:string) => {
@@ -97,12 +97,17 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
     !!shown.conversationId&&shown.conversationId===live.conversationId&&hasNotification&&hasSlot&&screen?.state==='ready';
   const issue=!hasNotification?notification:screen?.state!=='ready'?screen:undefined;
   const retry=!!conditions&&(expired||!canSubmit||screen?.state!=='ready');
-  const controls={error,onReject:live&&!pending?onClose:undefined,pending,
-    onApprove:live&&onStart&&!unknown&&canSubmit&&!expired?()=>{
-      if(!current())return;
-      if(inspection)onStart(true,undefined,true);
-      else onStart(undefined,backgroundWatch&&watchNow.current===handle?handle:undefined);
-    }:undefined};
+  // This is a stock Settings remedy on the original linked draft, not proof that a particular permission is off.
+  const original=live?.originalDraft;
+  const mainSettingsFirst=!!handle&&canSubmit&&!inspection&&shown.mode==='main_screen'&&live?.mode==='main_screen'&&
+    !!shown.conversationId&&shown.conversationId===live.conversationId&&!!original?.composer&&original.conversation===shown.conversationId&&
+    screen?.state==='blocked'&&screen.settings==='accessibility'&&!!onSettings&&!!onCheck&&!!onStart;
+  const submit=live&&onStart&&!unknown&&canSubmit&&!expired?()=>{
+    if(!current())return;
+    if(inspection)onStart(true,undefined,true);
+    else onStart(undefined,backgroundWatch&&watchNow.current===handle?handle:undefined);
+  }:undefined;
+  const controls={error,onReject:live&&!pending?onClose:undefined,pending,onApprove:mainSettingsFirst?undefined:submit};
   // No private original/conditions in a channel review. Retain that flow unchanged.
   if(!conditions)return <PermissionReview {...controls} title={shown.goal} context={'在'+(shown.mode==='background'?'后台独立屏':'手机主屏')+'执行'}
     reason={[shown.message,shown.screenDisclosure].filter(Boolean).join(' ')} approveLabel="开始这次任务"
@@ -117,7 +122,9 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
     </AccordionItem></Accordion>
     {error&&<p role="alert" className="pw-error">{error}</p>}
   </div>;
-  const decision=pending?{title:'正在等待回执',detail:'暂不能确认这一步的结果，请勿重复提交。'}:privateDecision(conditions,expired,planned,inspection,canInspect);
+  const decision=pending?{title:'正在等待回执',detail:'暂不能确认这一步的结果，请勿重复提交。'}:
+    mainSettingsFirst&&!expired?{title:'先准备手机主屏',detail:'原目标保留。查看设置后请回来重新核对，不会自动提交。仍可先提交让模型处理；若之后需要用屏但主屏仍不可用，任务可能停住。'}:
+    privateDecision(conditions,expired,planned,inspection,canInspect);
   const target=issue?.state==='blocked'&&!expired?issue.settings:undefined;
   const system=target==='notifications'||planned&&target==='accessibility'?target:undefined;
   const taskChannel=shown.mode==='main_screen'&&system==='notifications'&&notification?.settingsDetail==='phone_task_channel';
@@ -132,15 +139,16 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
         <div><dt>{planned||'原屏幕'}准备</dt><dd>{planned?readinessLine(screen,'满足原屏幕准备条件'):'未核实原屏幕'}</dd></div>
       </dl>}
       {retry&&<div className="pw-phone-review-remedies">
-        {system&&onSettings&&<Button variant={canSubmit?'secondary':'primary'} disabled={!live||pending}
+        {system&&onSettings&&<Button variant={canSubmit&&!mainSettingsFirst?'secondary':'primary'} disabled={!live||pending}
           onClick={()=>{if(!handle||!current())return;invalidate(handle);onSettings(handle,system)}}>
-          {taskChannel?'查看「手机任务」通知类别':system==='notifications'?'查看任务通知设置':'查看无障碍设置'}
+          {taskChannel?'查看「手机任务」通知类别':system==='notifications'?'查看任务通知设置':mainSettingsFirst?'核对主屏设置':'查看无障碍设置'}
         </Button>}
         {place&&onPlace&&<Button variant="secondary" disabled={!live||pending} onClick={()=>{
           if(!handle||!current())return;onPlace(handle,place);
         }}>{place==='background_setup'?'查看独立屏准备':'回原草稿选择执行位置'}</Button>}
         {onCheck&&<Button variant={!system&&!place&&(expired||!canSubmit)?'primary':'ghost'} disabled={!live||pending}
           onClick={()=>{if(handle&&!pending&&!document.hidden){invalidate(handle);onCheck(handle)}}}>重新核对</Button>}
+        {mainSettingsFirst&&submit&&<Button variant="secondary" disabled={pending} onClick={submit}>仍提交，需用屏时再核对</Button>}
       </div>}
       {taskChannel&&onSettings&&<p className="pw-field-hint">若只打开应用通知设置，请在其中选择「手机任务」。返回后重新核对原目标。</p>}
       {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}

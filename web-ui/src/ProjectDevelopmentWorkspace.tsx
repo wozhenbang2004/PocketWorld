@@ -778,14 +778,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       original.position.projectId!==projectId||busy||entered.current)return;
     const {position}=original,incoming=view.draft||{};
     const copies=rows(view.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===position.checkoutId);
+    if(!original.take())return;
     if(fileCheckout||returnTarget||buildReturn||importedEditor||localFilesIntent||activeReview.current||previewOpen.current||
       sourceConflict||!canEditImportedCheckout(latest.current.can)||view.executionAuthorized!==false||view.commandsAuthorized!==false||
       view.draftRecoveryRequired!==false||incoming.projectId!==projectId||unresolved(incoming.submission)||
       incoming.copyRequestId&&incoming.copyStatus!=='ready'||incoming.checkoutId!==position.checkoutId||
       draft.current.checkoutId!==position.checkoutId||copies.length!==1||copies[0].draftWorkingCopy!==false||
-      !savedPythonPath(position.path)||!sourceHash(position.savedHash)||!original.take())return;
-    // Wait for the existing Work inspection to release the page before taking the one-use return.
-    // The ordinary list opens first. Returning to the file still requires a fresh native byte match.
+      !savedPythonPath(position.path)||!sourceHash(position.savedHash)){
+      setImportEditorNotice('无法确认仍在原项目的同一所选副本。没有打开其他文件。');return;
+    }
+    // The fresh project read matched the saved choice. The ordinary list opens
+    // first; attaching the original editor still requires the native byte match.
+    setImportEditorNotice('');
     setFileWindow({checkoutId:position.checkoutId,pythonSetupResume:position});
   },[active,pythonSetupReturn,view,projectId,busy,fileCheckout,returnTarget,buildReturn,importedEditor,localFilesIntent,sourceConflict]);
 

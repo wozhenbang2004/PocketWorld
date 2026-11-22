@@ -46,6 +46,8 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
     @Volatile private var phoneArchive: PhoneArchive? = null
     private data class SavedPeerPlace(val local:DirectedWorkspaceTarget,val peer:DirectedWorkspaceTarget,val pairing:Long)
     internal data class SavedPeerWorkOpen(val task:String,val run:String,val epoch:Int,val peer:DirectedWorkspaceTarget)
+    internal data class ReceivedGoalFirstRunOpen(val task:String,val run:String,val epoch:Int,
+        val current:()->Boolean,val verify:(JSONObject)->Unit)
     private data class SavedPeerWorkPage(val handle:String,val window:Host.Window,val generation:Long,val place:SavedPeerPlace,
         val next:String,val rows:Map<String,SavedPeerWorkOpen>)
     @Volatile private var savedPeerWork:SavedPeerWorkPage?=null
@@ -379,6 +381,48 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
             .put("instanceId",source.instance).put("sourceId",source.source).put("targetId",source.here)
             .put("parentTaskId",origin.getString("parentTaskId")).put("grantId",origin.getString("grantId")).put("epoch",origin.getLong("authorizationEpoch"))
             .also { if(source.activeRun.isNotEmpty())it.put("runId",source.activeRun).put("executorEpoch",source.activeEpoch);if(source.failed)it.put("failedOriginalRun",true) }
+    }
+    /** Only an already visible receiver row. Receipt fields identify a local read, not permission to start or resume. */
+    fun receivedGoalFirstRunForNavigation(args:JSONObject):ReceivedGoalFirstRunOpen {
+        fields(args,"taskId","expectedReceivedFirstRun")
+        val pick=args.getJSONObject("expectedReceivedFirstRun")
+        fields(pick,"runId","epoch","reviewId","sourceId","operationId","parentTaskId","grantId","authorizationEpoch","localDeviceId","localInstanceId","localFingerprint")
+        val original=requireNotNull(window());val generationAtOpen=generation.get();current(original,generationAtOpen)
+        val task=text(args,"taskId");val run=text(pick,"runId");val epoch=integer(pick,"epoch",1,1).toInt()
+        val reviewId=text(pick,"reviewId");val sourceId=DeviceProtocol.deviceId(pick.opt("sourceId"),"sourceId");val operation=text(pick,"operationId")
+        val parent=text(pick,"parentTaskId");val grant=text(pick,"grantId");val grantEpoch=integer(pick,"authorizationEpoch",1,DeviceProtocol.MAX_SAFE_INTEGER)
+        val here=DeviceProtocol.deviceId(pick.opt("localDeviceId"),"localDeviceId");val instance=text(pick,"localInstanceId")
+        val fingerprint=text(pick,"localFingerprint",64)
+        val uuid=Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+        require(uuid.matches(run) && uuid.matches(reviewId) && fingerprint.matches(Regex("[a-f0-9]{64}")))
+        fun requirePlace(){
+            current(original,generationAtOpen)
+            val local=latest.getJSONObject("local")
+            require(local.opt("deviceId")==here && local.opt("instanceId")==instance && local.opt("certificateFingerprint")==fingerprint)
+        }
+        fun visibleRow()=controller.state.tasks.singleOrNull { it.id==task && isDeviceWorkspaceTask(it) }?.raw
+            ?:error("本机当前没有这份原接手记录，未打开其他工作")
+        requirePlace()
+        val raw=visibleRow();val origin=raw.getJSONObject("origin")
+        val source=ReceiptOrigin(task,operation,sourceId,here,instance,DeviceProtocol.sha256(DeviceProtocol.canonicalBytes(origin)),
+            "capabilities",activeRun=run,activeEpoch=epoch)
+        fun verify(actual:JSONObject){
+            requirePlace()
+            val seen=checkedReceivedSource(source,actual,false)
+            val actualOrigin=actual.getJSONObject("origin");val model=actual.getJSONObject("deviceModelSelection")
+            require(actual.opt("taskProjection")=="detail_window" && actual.opt("taskCoreReadLimited")==false &&
+                actual.opt("contextAvailable")!=false && actual.opt("contextWithdrawn")!=true && actual.opt("sourceCurrentReadRequired")!=true &&
+                actual.opt("deviceAcceptedRunId")==run && actual.opt("deviceAcceptedExecutorEpoch")==epoch &&
+                actualOrigin.opt("textReturnContract")==DeviceProtocol.ANDROID_TEXT_RETURN && actualOrigin.opt("remoteOperationId")==operation &&
+                actualOrigin.opt("targetDeviceId")==here && seen.opt("parentTaskId")==parent && seen.opt("grantId")==grant && seen.getLong("epoch")==grantEpoch &&
+                model.opt("taskId")==task && model.opt("reviewId")==reviewId && model.opt("source")=="local_api" && model.opt("toolBudget")==0 &&
+                model.opt("ownerApprovedLocalModel")==true && model.opt("pairedDeviceIdentityRetained")==true && model.opt("executionAuthorized")==true &&
+                DeviceProtocol.canonical(model.getJSONObject("origin"))==DeviceProtocol.canonical(actualOrigin)) {
+                "未能核对本机接手的原轮次，未打开另一项工作"
+            }
+        }
+        verify(raw)
+        return ReceivedGoalFirstRunOpen(task,run,epoch,{ runCatching { verify(visibleRow()) }.isSuccess },::verify)
     }
     private fun prepareModelPlace(args:JSONObject,original:Host.Window,epoch:Long):JSONObject{
         val local=latest.getJSONObject("local");val held:Review?;val raw:JSONObject;val source:ReceiptOrigin

@@ -2131,6 +2131,18 @@ internal class PocketWebBridge(
             }
             if (action == "devices.openTask") {
                 requireSection("devices")
+                if (args.has("expectedReceivedFirstRun")) {
+                    require(taskViewId == null && controller.webPrivateOwnerVisible())
+                    val selected = devicePages.receivedGoalFirstRunForNavigation(args)
+                    val sourceCurrent = { section == "devices" && taskViewId == null && selected.current() }
+                    val verifySource: (JSONObject) -> Unit = { raw ->
+                        require(sourceCurrent()) { "本机接手记录或原页面已变化，未打开其他工作" }
+                        selected.verify(raw)
+                    }
+                    openOriginalTask(id, selected.task, true, "devices", expectedRunId = selected.run, expectedEpoch = selected.epoch,
+                        sourceWindowCurrent = sourceCurrent, verifySourceBeforeMerge = verifySource, checkReaderInput = { verifySource(it.raw) })
+                    return
+                }
                 if (args.has("savedPeerWorkHandle")) {
                     val selected=devicePages.savedPeerWorkForNavigation(args)
                     val sourceCurrent={
