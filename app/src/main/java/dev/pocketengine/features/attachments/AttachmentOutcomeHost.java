@@ -373,6 +373,21 @@ public final class AttachmentOutcomeHost {
                     throw new SecurityException("原答复固定文档已不可用");},
                 (destination,c)->{throw new SecurityException("请在原工作内选择其他文件操作");});
     }
+    /** Only the exact committed native TXT selected on the producing reply, never a Book list or reuse grant. */
+    public OwnerFilePreviewSource originalReplyText(OriginalReplyDocument.Target target,RunControl control)throws Exception{
+        control.checkpoint();
+        OriginalReplyText pin=tasks.originalReplyTextForOwner(target);
+        if(pin==null)throw new SecurityException("未能核对这条原答复保存的 TXT");
+        JSONObject row=repository.book.get(pin.id());
+        if(!pin.matchesBook(row,target.task(),target.run())||!pin.equals(tasks.originalReplyTextForOwner(target)))
+            throw new SecurityException("原答复 TXT 已变化，没有打开其他文件");
+        control.checkpoint();
+        return new OwnerFilePreviewSource("attachments",row,
+                c->repository.book.verifiedBytes(pin.id(),pin.sha256(),c),
+                c->{if(!pin.equals(tasks.originalReplyTextForOwner(target))||!pin.matchesBook(repository.book.get(pin.id()),target.task(),target.run()))
+                    throw new SecurityException("原答复 TXT 或其来源已不可用");},
+                (destination,c)->{throw new SecurityException("原答复 TXT 仅供本机查看");});
+    }
     /** The existing verified reply reader picked this immutable file. Recheck just its
      * native reply and its canonical index row; do not open bytes or enumerate Book. */
     public JSONObject originalReplyAttachmentRow(OriginalReplyDocument.Target target,RunControl control)throws Exception{

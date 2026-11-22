@@ -19,7 +19,7 @@ const batchSize=4;
 const itemKey=({source,file}:Item)=>JSON.stringify([source.messageId,source.revision,file.id,file.sha256]);
 const time=(value:number)=>new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(value);
 export const replyDocumentFileLabel=(file:DeliveredReplyDocumentFile)=>!file.checkFirst?file.name:
- file.mimeType==='application/pdf'?'核对原答复 PDF':file.mimeType?'核对原答复 Word':'核对原答复文档';
+ file.mimeType==='text/plain'?'核对原答复 TXT':file.mimeType==='application/pdf'?'核对原答复 PDF':file.mimeType?'核对原答复 Word':'核对原答复文档';
 
 /** Only after an explicit visit/check: batch the already-visible original replies.
  * No history body, global inventory or guessed output name is requested here. */

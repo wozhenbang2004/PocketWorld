@@ -3,6 +3,7 @@ package dev.pocketengine.store;
 import dev.pocketengine.features.assistant.OwnerSourceReferences;
 import dev.pocketengine.features.automation.PlanArtifactVerifier;
 import dev.pocketengine.features.attachments.OriginalReplyDocument;
+import dev.pocketengine.features.attachments.OriginalReplyText;
 import dev.pocketengine.features.attachments.creation.NativeDocumentCreation;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery;
 import dev.pocketengine.features.local.project.OriginalNodeCompilerOutput;
@@ -668,23 +669,35 @@ public final class TaskStore {
     public synchronized OriginalReplyDocument originalReplyDocumentForOwner(OriginalReplyDocument.Target target)throws Exception {
         if(conversationRepository==null||db.inTransaction())throw new SecurityException("请在原私人答复核对文档");
         db.beginTransactionNonExclusive();try{
-            JSONObject header=TaskJobProjection.ownerHeader(db,target.task());
-            if(!OwnerWorkTask.isButlerSource(header)||header.optBoolean("metadataLimited")||header.optBoolean("cancelRequested")
-                    ||!target.conversation().equals(header.opt("conversationId"))||!target.run().equals(header.opt("runId"))
-                    ||target.epoch()!=OriginalReplyDocument.integer(header.opt("coordinatorEpoch"))
-                    ||!header.optString("status").matches("completed|needs_confirmation")||hasUnresolvedOperations(target.task(),null))return null;
-            try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",
-                    new String[]{target.task(),target.run(),Integer.toString(target.epoch())})){
-                if(!run.moveToFirst())return null;
-                String taskStatus=header.getString("status"),runStatus=run.getString(0);
-                if(!taskStatus.equals(runStatus)&&!("completed".equals(taskStatus)&&"needs_confirmation".equals(runStatus)
-                        &&originalReplyDocumentOwnerConfirmed(target)))return null;
-            }
+            if(!settledOriginalReplyFile(target))return null;
             OriginalReplyDocument pin=conversationRepository.originalReplyDocument(target);
             if(pin==null||!target.file().equals(pin.id())||!target.sha().equals(pin.sha256())||!pin.publication(target.task(),target.run())
                     ||!pin.equals(originalReplyDocumentReceipt(target.task(),target.run(),pin.operationId())))return null;
             db.setTransactionSuccessful();return pin;
         }finally{db.endTransaction();}
+    }
+    public synchronized OriginalReplyText originalReplyTextForOwner(OriginalReplyDocument.Target target)throws Exception {
+        if(conversationRepository==null||db.inTransaction())throw new SecurityException("请在原私人答复核对 TXT");
+        db.beginTransactionNonExclusive();try{
+            if(!settledOriginalReplyFile(target))return null;
+            OriginalReplyText pin=conversationRepository.originalReplyText(target);
+            if(pin==null||!pin.equals(originalReplyTextReceipt(target.task(),target.run(),pin.operationId())))return null;
+            db.setTransactionSuccessful();return pin;
+        }finally{db.endTransaction();}
+    }
+    private boolean settledOriginalReplyFile(OriginalReplyDocument.Target target)throws Exception {
+        JSONObject header=TaskJobProjection.ownerHeader(db,target.task());
+        if(!OwnerWorkTask.isButlerSource(header)||header.optBoolean("metadataLimited")||header.optBoolean("cancelRequested")
+                ||!target.conversation().equals(header.opt("conversationId"))||!target.run().equals(header.opt("runId"))
+                ||target.epoch()!=OriginalReplyDocument.integer(header.opt("coordinatorEpoch"))
+                ||!header.optString("status").matches("completed|needs_confirmation")||hasUnresolvedOperations(target.task(),null))return false;
+        try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",
+                new String[]{target.task(),target.run(),Integer.toString(target.epoch())})){
+            if(!run.moveToFirst())return false;
+            String taskStatus=header.getString("status"),runStatus=run.getString(0);
+            return taskStatus.equals(runStatus)||"completed".equals(taskStatus)&&"needs_confirmation".equals(runStatus)
+                    &&originalReplyDocumentOwnerConfirmed(target);
+        }
     }
     /** The native result CAS records this verification and the task confirmation in
      * one transaction without rewriting the already-ended run's original status. */
@@ -730,11 +743,18 @@ public final class TaskStore {
         }
     }
     private OriginalReplyDocument originalReplyDocumentReceipt(String task,String run,String operation)throws Exception {
+        JSONObject receipt=originalReplyFileReceipt(task,run,operation,OriginalReplyDocument.TOOL);
+        return receipt==null?null:OriginalReplyDocument.fromReceipt(receipt);
+    }
+    private OriginalReplyText originalReplyTextReceipt(String task,String run,String operation)throws Exception {
+        JSONObject receipt=originalReplyFileReceipt(task,run,operation,OriginalReplyText.TOOL);
+        return receipt==null?null:OriginalReplyText.fromReceipt(receipt);
+    }
+    private JSONObject originalReplyFileReceipt(String task,String run,String operation,String tool)throws Exception {
         try(Cursor row=db.rawQuery("SELECT state,CASE WHEN length(CAST(receipt AS BLOB))<=32768 THEN receipt END "
                 +"FROM operations WHERE task_id=? AND run_id=? AND operation_id=? AND tool=? LIMIT 1",
-                new String[]{task,run,operation,OriginalReplyDocument.TOOL})){
-            return row.moveToFirst()&&"receipt".equals(row.getString(0))&&!row.isNull(1)?
-                    OriginalReplyDocument.fromReceipt(new JSONObject(row.getString(1))):null;
+                new String[]{task,run,operation,tool})){
+            return row.moveToFirst()&&"receipt".equals(row.getString(0))&&!row.isNull(1)?new JSONObject(row.getString(1)):null;
         }
     }
     private static String originalReplyDocumentInput(JSONObject task,JSONObject input){
@@ -748,9 +768,17 @@ public final class TaskStore {
         return input.opt("messageId") instanceof String message&&OriginalReplyDocument.uuid(message)?message:null;
     }
     private static OriginalReplyDocument checkpointReplyDocument(JSONObject item){
+        JSONObject receipt=checkpointReplyFileReceipt(item,OriginalReplyDocument.TOOL);
+        return receipt==null?null:OriginalReplyDocument.fromReceipt(receipt);
+    }
+    private static OriginalReplyText checkpointReplyText(JSONObject item){
+        JSONObject receipt=checkpointReplyFileReceipt(item,OriginalReplyText.TOOL);
+        return receipt==null?null:OriginalReplyText.fromReceipt(receipt);
+    }
+    private static JSONObject checkpointReplyFileReceipt(JSONObject item,String tool){
         if(!"tool".equals(item.opt("role"))||!(item.opt("content") instanceof String body)
-                ||body.length()>32768||!body.contains(OriginalReplyDocument.TOOL))return null;
-        try{return OriginalReplyDocument.fromReceipt(new JSONObject(body));}
+                ||body.length()>32768||!body.contains(tool))return null;
+        try{return new JSONObject(body);}
         catch(org.json.JSONException unproved){return null;}
     }
     /** Only under the existing original schedule source transaction: a sole real
@@ -13835,13 +13863,14 @@ public final class TaskStore {
         private final String inputs,originalReminderOperation;
         private final JSONObject originalMemoryDraft;
         private final List<OriginalReplyDocument> originalDocuments;
+        private final OriginalReplyText originalText;
         private boolean active=true;
         public final String taskId,conversationId,runId;
         public final int epoch;
         public final dev.pocketengine.runtime.AgentRunner.OwnerReply completed;
-        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft,List<OriginalReplyDocument> originalDocuments)throws Exception{
+        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft,List<OriginalReplyDocument> originalDocuments,OriginalReplyText originalText)throws Exception{
             this.issuer=issuer;taskId=task.getString("id");conversationId=task.getString("conversationId");runId=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.completed=completed;this.inputs=inputs.toString();this.originalReminderOperation=originalReminderOperation;
-            this.originalMemoryDraft=originalMemoryDraft;this.originalDocuments=List.copyOf(originalDocuments);
+            this.originalMemoryDraft=originalMemoryDraft;this.originalDocuments=List.copyOf(originalDocuments);this.originalText=originalText;
         }
         public void requireMutationScope(TaskStore original){
             if(!active||issuer!=original||!Thread.holdsLock(original)||!original.db.inTransaction())throw new SecurityException("采用回执不在原任务的同一消息事务内");
@@ -13850,6 +13879,7 @@ public final class TaskStore {
         public String originalReminderOperation(){requireMutationScope(issuer);return originalReminderOperation;}
         public JSONObject originalMemoryDraft(){requireMutationScope(issuer);return originalMemoryDraft;}
         public List<OriginalReplyDocument> originalDocuments(){requireMutationScope(issuer);return originalDocuments;}
+        public OriginalReplyText originalText(){requireMutationScope(issuer);return originalText;}
     }
     /** Records already-checkpointed model facts, including an explicit same-task resume.
      * Does not open activeChat, mint an input/grant, dispatch, retry, or refund an inference. */
@@ -13869,9 +13899,12 @@ public final class TaskStore {
             String documentInput=!original.isCancelled()&&rows!=null&&rows.length()==1?originalReplyDocumentInput(task,rows.optJSONObject(0)):null;
             boolean documentAfterInput=false,documentsBeyondScope=false;
             List<OriginalReplyDocument> documentsInAnswer=new ArrayList<>(2);
+            OriginalReplyText textInAnswer=null;
+            int textAt=-1,lastAssistantAt=-1;
+            boolean textBeyondScope=false;
             for(int i=0;messages!=null&&i<messages.length();i++){
                 JSONObject message=messages.getJSONObject(i);String id=message.optString("ownerMessageId");if(!id.isEmpty()&&included.put(id,message)!=null)throw new SecurityException("检查点重复了主人消息身份");
-                if("assistant".equals(message.optString("role")))lastAssistant=message;
+                if("assistant".equals(message.optString("role"))){lastAssistant=message;lastAssistantAt=i;}
                 if(documentInput!=null&&documentInput.equals(id))documentAfterInput=true;
                 if(documentAfterInput&&!documentsBeyondScope){
                     // The same bounded checkpoint, not a search of other operations.
@@ -13880,6 +13913,13 @@ public final class TaskStore {
                     if(candidate!=null){
                         if(documentsInAnswer.size()==2)documentsBeyondScope=true;
                         else documentsInAnswer.add(candidate);
+                    }
+                }
+                if(documentAfterInput&&!textBeyondScope){
+                    OriginalReplyText candidate=checkpointReplyText(message);
+                    if(candidate!=null){
+                        if(textInAnswer!=null)textBeyondScope=true;
+                        else{textInAnswer=candidate;textAt=i;}
                     }
                 }
             }
@@ -13921,7 +13961,14 @@ public final class TaskStore {
                 }
                 if(originalDocuments.size()==2&&!OriginalReplyDocument.exactPair(originalDocuments))originalDocuments.clear();
             }catch(Exception unavailable){/* Optional handoff cannot interfere with saving the original answer. */}
-            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft,originalDocuments);JSONObject result;
+            OriginalReplyText originalText=null;
+            if(originalDocuments.isEmpty()&&!textBeyondScope&&textInAnswer!=null&&textAt<lastAssistantAt&&selectedRows.length()==1&&!original.isCancelled())try{
+                // A checkpoint alone cannot publish a file. Reuse the exact settled native
+                // operation row; an unconfirmed, refused or unrelated save is never linked.
+                if(!hasUnresolvedOperations(completed.taskId,null)&&textInAnswer.equals(originalReplyTextReceipt(completed.taskId,run,textInAnswer.operationId())))
+                    originalText=textInAnswer;
+            }catch(Exception unavailable){/* An optional file handoff cannot interfere with saving the answer. */}
+            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft,originalDocuments,originalText);JSONObject result;
             try{result=mutation.apply(selected);}finally{selected.active=false;}
             if(task.has("ownerWorkPreparation")){
                 JSONObject saved=result==null?null:result.optJSONObject("message");if(saved==null||!completed.taskId.equals(saved.optString("taskId"))||!run.equals(saved.optString("nativeRunId"))||epoch!=saved.optInt("nativeEpoch")

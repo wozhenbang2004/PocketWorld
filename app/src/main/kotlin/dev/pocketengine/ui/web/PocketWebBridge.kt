@@ -720,7 +720,7 @@ internal class PocketWebBridge(
             controller.modelSelectionRevision
             val exactPicker=currentReplyPicker()
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume) {
-                liveReplyDocuments(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true).orEmpty()
+                liveReplyDocuments(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true,includeText=true).orEmpty()
                     .map{original->PocketWebState.ReplyDocument(original.file,original.checkFirst)}
             }
             exactPicker?.let {
@@ -1177,7 +1177,7 @@ internal class PocketWebBridge(
                     val fileId=requiredString(source,"id");val sha=requiredString(source,"sha256")
                     val conversation=requiredString(source,"conversationId")
                     fun selected(allowOwn:Boolean,allowSummary:Boolean)=controller.state.messages.singleOrNull{it.id==message&&it.sourceRevision==revision}
-                        ?.let{liveReplyDocuments(it,inOwnReader=allowOwn,allowSummary=allowSummary)}
+                        ?.let{liveReplyDocuments(it,inOwnReader=allowOwn,allowSummary=allowSummary,includeText=true)}
                         ?.singleOrNull{it.target.conversation()==conversation&&it.file.id==fileId&&it.file.sha256==sha}
                     val original=selected(false,true)?:error("原答复文档已变化；请回原工作核对")
                     val originalDocument=documentId?:error("原答复页面已关闭")
@@ -4145,11 +4145,13 @@ internal class PocketWebBridge(
     }
     /** Only the already displayed ordinary private native reply and sole original submission.
      * This projection does not fetch Work/Audit history or verify files in the background. */
-    private fun liveReplyDocuments(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false,allowSummary:Boolean=false):List<LiveReplyDocument>? {
+    private fun liveReplyDocuments(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false,allowSummary:Boolean=false,
+        includeText:Boolean=false):List<LiveReplyDocument>? {
         val reply=row.replyContext?:return null
-        val files=reply.originalGeneratedDocuments
-        if(files.isEmpty()||files.size>2||files.any{file->file.size<=0||
-                file.mimeType !in setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document")})return null
+        val text=reply.originalGeneratedText?.takeIf{includeText&&reply.originalGeneratedDocuments.isEmpty()}
+        val files=if(text!=null)listOf(text)else reply.originalGeneratedDocuments
+        if(text==null&&(files.isEmpty()||files.size>2||files.any{file->file.size<=0||
+                file.mimeType !in setOf("application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document")}))return null
         val nativeReply=reply.replyId?:return null
         val inputId=reply.replyToMessageIds.singleOrNull()?:return null
         val source=PhoneDraftMessagePin.from(row.ownerOriginalLocator)?:return null
@@ -4177,6 +4179,8 @@ internal class PocketWebBridge(
             audit.opt("conversationId")!=source.conversation||audit.opt("runId")!=reply.runId||
             OriginalReplyDocument.integer(audit.opt("coordinatorEpoch"))!=reply.epoch.toLong()||
             audit.optBoolean("cancelRequested"))return null
+        if(text!=null&&(audit.opt("contextAvailable")==false||audit.opt("contextWithdrawn")==true||
+                audit.opt("sourceCurrentReadRequired")==true))return null
         val kind=audit.opt("taskProjection");val unresolved=audit.opt("hasUnresolvedOperations")
         val loadedProof=(inOwnReader||inOwnPicker||kind=="detail_window"&&audit.opt("taskCoreReadLimited")==false)&&unresolved==false
         // The cold header omits operation settlement. Its exact match is a prompt to

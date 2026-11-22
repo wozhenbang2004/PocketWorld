@@ -383,7 +383,10 @@ internal class AttachmentOutcomeCoordinator(
     }
     fun openReplyDocument(file:UiChatAttachment,
         target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,current:()->Boolean){
-        openMessageOriginal(file,null,current){control->app.attachmentOutcomes.originalReplyDocument(target,control)}
+        openMessageOriginal(file,null,current){control->
+            if(file.mimeType=="text/plain")app.attachmentOutcomes.originalReplyText(target,control)
+            else app.attachmentOutcomes.originalReplyDocument(target,control)
+        }
     }
     /** A live message proves one private native Book reference, not an attachment inventory. */
     private fun openMessageOriginal(file:UiChatAttachment,input:AttachmentMessageInput?,current:()->Boolean,
@@ -394,7 +397,8 @@ internal class AttachmentOutcomeCoordinator(
         state=AttachmentOutcomeState(open=true,messageInput=input,messageReplyDocumentOnly=input==null,originalReturn=AttachmentOriginalReturn.ENTRY)
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
         val unavailable=when(input){
-            null->"未能核对这条原答复的文档。原工作仍可查看，没有打开其他文件。"
+            null->if(file.mimeType=="text/plain")"未能核对这条原答复保存的 TXT。没有打开其他文件。"
+                else "未能核对这条原答复的文档。原工作仍可查看，没有打开其他文件。"
             AttachmentMessageInput.PDF->"未能核对这份原消息 PDF。请返回原消息，不会打开其他文件或应用。"
             AttachmentMessageInput.WORD_OR_TEXT->"未能核对提问所附原件。没有打开其他文件或应用。"
         }

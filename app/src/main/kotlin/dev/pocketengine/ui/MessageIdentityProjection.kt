@@ -12,6 +12,7 @@ internal data class UiReplyContext private constructor(
     val originalReminderRecorded: Boolean,
     val originalMemoryDraftRecorded: Boolean,
     val originalGeneratedDocuments: List<UiChatAttachment>,
+    val originalGeneratedText: UiChatAttachment?,
 ) {
     fun toJson(): JSONObject = JSONObject().put("taskId", taskId).put("runId", runId).put("epoch", epoch)
         .put("replyId", replyId ?: JSONObject.NULL).put("deliveryId", deliveryId ?: JSONObject.NULL)
@@ -37,10 +38,15 @@ internal data class UiReplyContext private constructor(
                 val id = (refs.opt(index) as? String)?.takeIf { it.isNotBlank() && it.length <= 240 } ?: return null
                 if (id !in ids) ids.add(id)
             }
+            val ordinary=reply!=null&&delivery==null&&ids.size==1
             return UiReplyContext(task, run, epoch, reply, delivery, ids.toList(), message.opt("publicAnswerSourcesRecorded") == true,
                 message.opt("originalReminderRecorded") == true && reply != null && delivery == null && ids.size == 1,
                 message.opt("originalMemoryDraftRecorded") == true && reply != null && delivery == null && ids.size == 1,
-                if (reply != null && delivery == null && ids.size == 1) documents(message) else emptyList())
+                if (ordinary) documents(message) else emptyList(),
+                if (ordinary && !message.has("originalGeneratedDocument") && !message.has("originalGeneratedDocuments"))
+                    message.optJSONObject("originalGeneratedText")?.let(ChatInputRules::attachment)?.takeIf {
+                        it.mimeType=="text/plain"&&it.size in 1L..196608L&&it.name.endsWith(".txt",ignoreCase=true)
+                    } else null)
         }
 
         private fun documents(message:JSONObject):List<UiChatAttachment> {

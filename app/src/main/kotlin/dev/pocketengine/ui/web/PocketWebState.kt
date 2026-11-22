@@ -19,7 +19,8 @@ internal object PocketWebState {
         // Only the separately verified boolean is public; private reviewer-route fingerprints stay native.
         "teamreviewerroutecapture", "revisionrecipient", "projectmemoryread", "nativeprojectconventionreceipt", "nativeprojectconventiondraftseal",
         "ownerdirectviteeditorresume", "ownerpythonoutputtextpublication", "nativeoriginalmemorydraft",
-        "nativeoriginalreplydocument", "originalgenerateddocument", "originalgenerateddocuments", "originalgenerateddocumentscheck"
+        "nativeoriginalreplydocument", "originalgenerateddocument", "originalgenerateddocuments", "originalgenerateddocumentscheck",
+        "nativeoriginalreplytext", "originalgeneratedtext", "originalgeneratedtextcheck"
     )
     private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
@@ -175,7 +176,9 @@ internal object PocketWebState {
                 val originals=originalReplyDocuments(row)
                 if(originals.size==1){
                     val original=originals.single()
-                    if(original.checkFirst) visible.put("originalGeneratedDocumentCheck",JSONObject().put("id",original.file.id).put("sha256",original.file.sha256))
+                    if(original.file.mimeType=="text/plain")
+                        visible.put("originalGeneratedTextCheck",JSONObject().put("id",original.file.id).put("sha256",original.file.sha256))
+                    else if(original.checkFirst) visible.put("originalGeneratedDocumentCheck",JSONObject().put("id",original.file.id).put("sha256",original.file.sha256))
                     else visible.put("originalGeneratedDocument",attachment(original.file))
                 }else if(originals.size==2&&originals[0].checkFirst==originals[1].checkFirst){
                     val checkFirst=originals[0].checkFirst

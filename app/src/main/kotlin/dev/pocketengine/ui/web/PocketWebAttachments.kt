@@ -414,7 +414,8 @@ internal class PocketWebAttachments(
     fun openReplyDocument(file:UiChatAttachment,
         target:OriginalReplyDocument.Target,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject {
         val opened=openMessageOriginal(ticket,current){flow.openReplyDocument(file,target,it)}
-        replyDocumentVisit=ReplyDocumentVisit(checkNotNull(window),file,target)
+        // Ordinary TXT is a read-only handoff. The pre-existing Word/PDF picker does not acquire it.
+        if(file.mimeType!="text/plain")replyDocumentVisit=ReplyDocumentVisit(checkNotNull(window),file,target)
         return opened
     }
     /** A Web frame selects only the native reader it is currently showing, never a file ID. */

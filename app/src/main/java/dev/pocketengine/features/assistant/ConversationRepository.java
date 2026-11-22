@@ -6,6 +6,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.os.CancellationSignal;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.attachments.OriginalReplyDocument;
+import dev.pocketengine.features.attachments.OriginalReplyText;
 import dev.pocketengine.features.memory.ConversationHistory;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.features.memory.TaskMemoryTrace;
@@ -32,6 +33,7 @@ public final class ConversationRepository {
     private static final String ORIGINAL_REPLY_DOCUMENT="nativeOriginalReplyDocument";
     private static final String ORIGINAL_REPLY_DOCUMENT_VIEW="originalGeneratedDocument";
     private static final String ORIGINAL_REPLY_DOCUMENT_PAIR="originalGeneratedDocuments";
+    private static final String ORIGINAL_REPLY_TEXT="nativeOriginalReplyText", ORIGINAL_REPLY_TEXT_VIEW="originalGeneratedText";
     static void requireReplyContent(String text){
         if(text==null||text.isBlank())throw new IllegalArgumentException("模型没有返回文字答复");
         if(!StandardCharsets.UTF_8.newEncoder().canEncode(text))throw new IllegalArgumentException("答复含不完整Unicode字符，未替换后保存");
@@ -222,6 +224,18 @@ public final class ConversationRepository {
     /** A body-free exact pair in the original task/reply SQL transaction, not a
      * search, synthetic attachment, or lookup of the latest document in a run. */
     public OriginalReplyDocument originalReplyDocument(OriginalReplyDocument.Target target)throws Exception{
+        for(OriginalReplyDocument file:OriginalReplyDocument.linkedPins(originalReplyFileLink(target,ORIGINAL_REPLY_DOCUMENT)))
+            if(target.file().equals(file.id())&&target.sha().equals(file.sha256()))return file;
+        return null;
+    }
+    public OriginalReplyText originalReplyText(OriginalReplyDocument.Target target)throws Exception{
+        OriginalReplyText pin=OriginalReplyText.fromLink(originalReplyFileLink(target,ORIGINAL_REPLY_TEXT));
+        if(pin==null||!target.file().equals(pin.id())||!target.sha().equals(pin.sha256()))return null;
+        // Follow the existing bounded original dependency proof only on this explicit read.
+        requireDerivedMessageCurrent(target.message(),target.revision());
+        return pin;
+    }
+    private JSONObject originalReplyFileLink(OriginalReplyDocument.Target target,String field)throws Exception{
         if(!Thread.holdsLock(monitor)||!db.inTransaction())throw new SecurityException("请在原答复来源事务内核对");
         if(target.revision()!=1)return null;
         try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(a.source_json AS BLOB))<=65536 THEN a.source_json END,"
@@ -238,7 +252,7 @@ public final class ConversationRepository {
                 new String[]{target.ownerInput(),target.generation(),target.conversation(),target.message(),target.reply(),target.fingerprint()})){
             if(!row.moveToFirst()||row.isNull(0)||row.isNull(1))return null;
             JSONObject assistant=new JSONObject(row.getString(0)),input=new JSONObject(row.getString(1));
-            JSONObject link=assistant.optJSONObject(ORIGINAL_REPLY_DOCUMENT),context=assistant.optJSONObject("nativeContext");
+            JSONObject link=assistant.optJSONObject(field),context=assistant.optJSONObject("nativeContext");
             JSONObject accepted=input.optJSONObject("submission");long revision=row.getLong(2);
             if(!originalSavedAssistantSource(assistant,target.revision())||!target.message().equals(assistant.opt("sourceId"))||
                     !sameSavedAssistantReply(assistant,target.conversation(),target.task(),target.run(),target.epoch(),target.reply())
@@ -257,9 +271,7 @@ public final class ConversationRepository {
                     ||target.epoch()!=OriginalReplyDocument.integer(accepted.opt("epoch"))
                     ||target.epoch()!=OriginalReplyDocument.integer(accepted.opt("consumedEpoch"))
                     ||revision!=OriginalReplyDocument.integer(accepted.opt("ownerMessageRevision")))return null;
-            for(OriginalReplyDocument file:OriginalReplyDocument.linkedPins(link))
-                if(target.file().equals(file.id())&&target.sha().equals(file.sha256()))return file;
-            return null;
+            return link;
         }
     }
     private static boolean sameSavedAssistantReply(JSONObject row,String conversation,String task,String run,int epoch,String reply){
@@ -962,6 +974,7 @@ public final class ConversationRepository {
         else message.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
         message.remove(ORIGINAL_MEMORY_DRAFT);
         message.remove(ORIGINAL_REPLY_DOCUMENT);message.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);message.remove(ORIGINAL_REPLY_DOCUMENT_PAIR);
+        message.remove(ORIGINAL_REPLY_TEXT);message.remove(ORIGINAL_REPLY_TEXT_VIEW);
         if(originalReply&&row.getLong(2)==1&&!message.optBoolean("importAssignedIdentity")&&!message.has("nativeDeliveryKind")){
             JSONObject link=state.optJSONObject(ORIGINAL_REPLY_DOCUMENT);
             JSONArray inputs=message.optJSONArray("replyToMessageIds");
@@ -970,6 +983,11 @@ public final class ConversationRepository {
                 if(files.size()==1)message.put(ORIGINAL_REPLY_DOCUMENT_VIEW,files.get(0).view());
                 else if(files.size()==2)message.put(ORIGINAL_REPLY_DOCUMENT_PAIR,
                         new JSONArray().put(files.get(0).view()).put(files.get(1).view()));
+            }
+            if(link==null&&inputs!=null&&inputs.length()==1){
+                JSONObject text=state.optJSONObject(ORIGINAL_REPLY_TEXT);
+                OriginalReplyText pin=OriginalReplyText.fromLink(text);
+                if(pin!=null&&Objects.equals(inputs.opt(0),text.opt("input")))message.put(ORIGINAL_REPLY_TEXT_VIEW,pin.view());
             }
         }
         if(message.has("projectConventionRecorded")){
@@ -1103,6 +1121,10 @@ public final class ConversationRepository {
             if(documents.size()==1)link.put("file",documents.get(0).pin());
             else link.put("files",new JSONArray().put(documents.get(0).pin()).put(documents.get(1).pin()));
             state.put(ORIGINAL_REPLY_DOCUMENT,link);
+        }else if(documents.isEmpty()&&inputs.length()==1&&replyTo.length()==1){
+            OriginalReplyText textFile=selected.originalText();
+            if(textFile!=null)state.put(ORIGINAL_REPLY_TEXT,new JSONObject().put("input",replyTo.getString(0))
+                    .put("inputRevision",inputs.getJSONObject(0).getLong("ownerMessageRevision")).put("file",textFile.pin()));
         }
         if(selected.completed.publicAnswerSources&&text.equals(selected.completed.text))state.put(PENDING_PUBLIC_ANSWER,CompactionPlan.fingerprint(text));
         JSONObject quote=selected.completed.projectConvention();

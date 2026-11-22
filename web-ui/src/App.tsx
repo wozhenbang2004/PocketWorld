@@ -192,7 +192,7 @@ type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:numb
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
 type OriginalChatTeamReportSource=WorkIdentity&{conversationId:string;messageId:string;sourceRevision:number;deliveryId:string};
 type OriginalChatTeamReportVisit={source:OriginalChatTeamReportSource;documentEpoch:number;navigation:number;resume:number;sourceChanges:number;draftEpoch:number;taskRequest:number;key:number;trigger:HTMLButtonElement};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;originalGeneratedTextCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
@@ -232,8 +232,12 @@ type PreferredDeliveredFile=PreferredChatFile|PreferredReplyDocument;
 function originalReplyDocumentFiles(message:Message|undefined):DeliveredReplyDocumentFile[] {
  if(message?.role!=='assistant'||message.sourceRevision!==1||!message.id)return [];
  const {originalGeneratedDocument:ready,originalGeneratedDocumentCheck:check,
-  originalGeneratedDocuments:readyPair,originalGeneratedDocumentsCheck:checkPair}=message;
- if([ready,check,readyPair,checkPair].filter(value=>value!=null).length!==1)return [];
+  originalGeneratedDocuments:readyPair,originalGeneratedDocumentsCheck:checkPair,originalGeneratedTextCheck:text}=message;
+ if([ready,check,readyPair,checkPair,text].filter(value=>value!=null).length!==1)return [];
+ if(text!=null){
+  const pin=exactFileTarget(obj(text));
+  return pin?[{id:pin.fileId,sha256:pin.sha256,mimeType:'text/plain',checkFirst:true}]:[];
+ }
  const pair=readyPair!=null||checkPair!=null,checkFirst=check!=null||checkPair!=null;
  const rows=pair?(readyPair??checkPair):[ready??check];
  if(!Array.isArray(rows)||rows.length!==(pair?2:1))return [];

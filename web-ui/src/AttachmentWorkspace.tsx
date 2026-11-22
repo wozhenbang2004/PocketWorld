@@ -332,6 +332,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const mode=draftDesk?'drafts':view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':
   pdfPageText||wordExcerpt?'read':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
  const replyDocumentOnly=view.messageReplyDocumentOnly===true, liveMessageOriginalOnly=isLiveMessageOriginal(view);
+ const replyTextOnly=replyDocumentOnly&&file.mimeType==='text/plain';
  const reportOnly=view.reportResultOnly===true,scopedResultOnly=reportOnly||view.historyResultOnly===true||liveMessageOriginalOnly;
  const privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly;
  const listScope=privateFiles&&!view.choosingSource?JSON.stringify([view.taskId||'',snapshot.taskRunId||'',snapshot.coordinatorEpoch||0,
@@ -631,7 +632,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const canStage=!localOnlyFile&&!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const focusedDraft=view.focusedStandaloneDraft===true;
  const title=focusedDraft?'本机文档草稿':draftDesk?'私人文件库 · 本机草稿':view.documentDraft?'编辑文档':pdfPageText?`第 ${pdfPageText} 页的文字`:
-  wordExcerpt?'核对 Word 摘录':replyDocumentOnly?'原答复文档':view.messageInputDocumentOnly===true?
+  wordExcerpt?'核对 Word 摘录':replyTextOnly?'原答复 TXT':replyDocumentOnly?'原答复文档':view.messageInputDocumentOnly===true?
   (pairedOriginal.kind==='office'&&pairedOriginal.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'?'提问所附 Word':
    pairedOriginal.kind==='text'&&pairedOriginal.mimeType==='text/plain'?'提问所附 TXT':'提问所附原件'):
   view.messagePdfOnly===true?'原消息 PDF':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
@@ -741,7 +742,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    draftHasFile&&<p className="pw-file-draft-status" role="status">文件位置已关联到「{draftTarget.label}」；未作为附件。</p>}
  </>;
  const original=obj(view.originalFile),canSaveOriginal=privateFiles&&hasFile&&view.canSaveOriginal===true;
- const offerReplyAttachment=mode==='original'&&replyDocumentOnly&&view.ready===true&&!!replyAttachmentDraft&&
+ const offerReplyAttachment=mode==='original'&&replyDocumentOnly&&!replyTextOnly&&view.ready===true&&!!replyAttachmentDraft&&
   !!selection&&original.sourceUnavailable===false&&original.busy===false&&!original.error&&typeof original.id==='string'&&
   original.sha256===selection.sha256&&original.mimeType===file.mimeType&&original.size===file.size;
  const chooseReplyAttachment=async()=>{
@@ -1243,7 +1244,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  <header className="pw-drawer-header pw-file-page-header">
   {mode==='original'&&!originalHasDirectBack&&view.wordExcerptSourceOpen!==true?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>{detailsLabel}</Button>:
    <IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={liveMessageOriginalOnly?!view.ready||pending>0:draftDesk?pending>0:busy||draftBusy}/>}
-  <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[draftDesk||hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,parentVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):replyDocumentOnly?'原答复已保存的文档':liveMessageOriginalOnly?'原消息附件':draftDesk?'':'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>
+  <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[draftDesk||hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,parentVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):replyTextOnly?'原答复已保存的 TXT':replyDocumentOnly?'原答复已保存的文档':liveMessageOriginalOnly?'原消息附件':draftDesk?'':'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>
   {originalHasDirectBack&&!liveMessageOriginalOnly&&<IconButton icon={IconInfo} aria-label={detailsLabel} title={detailsLabel} disabled={busy||draftBusy} onClick={()=>run('originalDetails')}/>}
   {!scopedResultOnly&&onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}
   {!liveMessageOriginalOnly&&(!entryBack||mayDismissRestored)&&<IconButton icon={IconClose} aria-label={view.restoredWorkReturn===true||returnToLibraryDocument?'关闭文件':sourceReturnLabel} title={view.restoredWorkReturn===true||returnToLibraryDocument?'关闭文件':sourceReturnLabel} disabled={pending>0||draftBusy} onClick={close}/>}
