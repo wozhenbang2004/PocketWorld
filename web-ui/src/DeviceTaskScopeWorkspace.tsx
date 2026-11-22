@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextField } from './forms-library';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SettingsDialog, TextField } from './forms-library';
 import { bridge, type PocketSnapshot } from './bridge';
 import { deviceChoiceCode, materialPath, phoneTextOnly, routeDraft, routeTitle, routeUseSummary, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
 import { OriginalPhoneDispatchStatus } from './OriginalPhoneDispatchStatus';
@@ -171,9 +171,34 @@ type WorkspaceFileDraft = WorkspaceReadSource & { work: string; choice: string; 
 type WorkspaceFileAttempt = { work: string; epoch: number; kind: WorkspaceReadSource['kind'];
   state: 'pending' | 'registered' | 'unknown'; runId?: string };
 
+const visibleWorkspaceFiles = 8;
+
+/** Query only the signed names already returned for this exact directory; never send the query or a path. */
+function WorkspaceListedChoices({ choices, disabled, onChoose }: {
+  choices: readonly { entryIndex: number; name: string }[]; disabled: boolean; onChoose: (index: number) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const needle = query.toLowerCase();
+  const rank = (name: string) => name === query ? 0 : name.toLowerCase() === needle ? 1 : 2;
+  const matches = query === '' ? choices :
+    choices.filter(row => row.name.toLowerCase().includes(needle)).sort((a, b) => rank(a.name) - rank(b.name));
+  return <>
+    {choices.length > visibleWorkspaceFiles && <SearchField label="筛选已收到的文件" placeholder="输入文件名"
+      clearLabel="清除文件名筛选" hint="只在这次的目录记录中筛选，不重新读取电脑。"
+      isDisabled={disabled} value={query} onChange={setQuery}/>}
+    {matches.length > 0 ? <ul>{matches.slice(0, visibleWorkspaceFiles).map(row => <li key={row.entryIndex}>
+      <Button variant="secondary" disabled={disabled} onClick={() => onChoose(row.entryIndex)}>
+        <bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi>
+      </Button>
+    </li>)}</ul> : <p role="status">这次收到的可选文件中没有匹配项。</p>}
+    {query !== '' && matches.length > visibleWorkspaceFiles && <p>还有匹配项，请再输入一些文件名。</p>}
+  </>;
+}
+
 function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack, onPending }: { taskId: string; active: boolean;
   disabled: boolean; modelStart?: WorkspaceFileModelStart; registerBack: (handler: (() => boolean) | null) => void; onPending: (value: boolean) => void }) {
   const snapshot = usePocketSnapshot(), activeRef = useRef(active), disabledRef = useRef(disabled);
+  const documentEpoch = useSyncExternalStore(bridge.subscribeDocumentEpoch, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
   activeRef.current = active; disabledRef.current = disabled;
   const [draft, setDraft] = useState<WorkspaceFileDraft | null>(null), currentDraft = useRef<WorkspaceFileDraft | null>(null);
   const [attempt, setAttempt] = useState<WorkspaceFileAttempt | null>(null), currentAttempt = useRef<WorkspaceFileAttempt | null>(null);
@@ -323,7 +348,7 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
   const choice = work && workspaceFileCommands(snapshot) && workspaceFileChoice(work, taskId);
   const directoryChoice = work && workspacePickerCommands(snapshot) && workspaceFileChoice(work, taskId, true);
   const picker = work && originalWindowsWorkspacePickerAt(snapshot, taskId), directory = picker?.directory;
-  const sameAttempt = work && attempt && attempt.work === work.key && attempt.epoch === bridge.getDocumentEpoch() ? attempt : undefined;
+  const sameAttempt = work && attempt && attempt.work === work.key && attempt.epoch === documentEpoch ? attempt : undefined;
   const canChoose = picker?.canChoose === true && workspacePickerCommands(snapshot) &&
     sameAttempt?.state !== 'pending' && sameAttempt?.kind !== 'listed';
   const deadline = picker?.phase === 'waiting_for_file' ? picker.expiresAt : undefined;
@@ -368,17 +393,14 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
     {picker && directory && <section className="pw-operation-entry" aria-label="这次从原电脑收到的目录">
       {canChoose && directory.choices.length > 0 ? <>
         <h4>选择一个文件</h4>
-        <p className="pw-muted">{shownFolder}最多列出 8 个可选文件。尚未读取正文；确认后只用原连接读取选中的相对路径。</p>
-        <ul>{directory.choices.map(row => <li key={row.entryIndex}>
-          <Button variant="secondary" disabled={disabled} onClick={() => beginListed(picker, row.entryIndex)}>
-            <bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi>
-          </Button>
-        </li>)}</ul>
+        <p className="pw-muted">{shownFolder}尚未读取正文；确认后只用原连接读取选中的相对路径。</p>
+        <WorkspaceListedChoices key={JSON.stringify([documentEpoch, work?.key, picker.runId, directory.operationId, directory.received.identity])}
+          choices={directory.choices} disabled={disabled} onChoose={entryIndex => beginListed(picker, entryIndex)}/>
         {directory.received.truncated && <p>电脑只返回了部分目录项。</p>}
       </> : <Accordion variant="divided" className="pw-compact-disclosures">
         <AccordionItem id="workspace-picker-original-directory" headingLevel={4} title="查看当时列出的目录">
           <p className="pw-muted">{shownFolder}当时返回 {directory.received.returned} 项；这不是当前目录。</p>
-          {directory.choices.length > 0 ? <ul>{directory.choices.map(row =>
+          {directory.choices.length > 0 ? <ul>{directory.choices.slice(0, visibleWorkspaceFiles).map(row =>
             <li key={row.entryIndex}><bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi></li>)}</ul> :
             directory.received.entries.length > 0 && <ul>{directory.received.entries.map((row, index) =>
               <li key={index}><bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi> · {row.kind === 'file' ? '文件' : row.kind === 'directory' ? '目录' : '不可选'}</li>)}</ul>}

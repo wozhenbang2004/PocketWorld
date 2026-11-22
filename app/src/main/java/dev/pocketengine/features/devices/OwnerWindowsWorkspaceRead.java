@@ -126,7 +126,7 @@ public final class OwnerWindowsWorkspaceRead {
                     !names.add(name))return noDirectory(Body.UNVERIFIED);
             long bytes=DeviceProtocol.integer(row.opt("bytes"),"directory entry bytes",0,DeviceProtocol.MAX_SAFE_INTEGER);
             DeviceProtocol.integer(row.opt("modifiedAt"),"directory entry time",0,DeviceProtocol.MAX_SAFE_INTEGER);
-            if(choices.size()<8&&"file".equals(kind)&&bytes<=MAX_DISPLAY_BYTES){
+            if("file".equals(kind)&&bytes<=MAX_DISPLAY_BYTES){
                 try{choices.put(i,path(row.getString("path")));}catch(Exception ineligible){/* Never replace an ineligible spelling. */}
             }
         }

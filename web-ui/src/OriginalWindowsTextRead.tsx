@@ -141,7 +141,7 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
       ownerPicker && entry.modifiedAt < 0 || typeof kind !== 'string' || !Object.hasOwn(directoryKinds, kind)) return;
     names.add(name);
     // Preserve the raw index, even if earlier directory entries were not selectable.
-    if (ownerPicker && choices.length < 8 && kind === 'file' && entry.bytes <= RECEIVED_TEXT_LIMIT && validWindowsWorkspaceFilePath(prefix + name))
+    if (ownerPicker && kind === 'file' && entry.bytes <= RECEIVED_TEXT_LIMIT && validWindowsWorkspaceFilePath(prefix + name))
       choices.push({ entryIndex, path: prefix + name, name });
     if (entries.length < 8) {
       if (file && typeof linkedPath === 'string' && entry.path === linkedPath && kind === 'file' && entry.bytes === file.bytes)
