@@ -4946,6 +4946,13 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         var origin=tasks.ownerWorkTeamReportOrigin(id,run,epoch,digest,teamRun,generation,revision);
         return selected.readOwnerWorkReport(tasks,origin,current);
     }
+    /** Same live private-Chat delivery only, independent of any Work decision. */
+    public JSONObject readOriginalChatTeamReport(String conversation,String message,long sourceRevision,TaskStore.OwnerWorkDeliveryRef delivery,
+                                                 java.util.function.BooleanSupplier current)throws Exception {
+        requireOwnerActionReady("getTask");if(!current.getAsBoolean())throw new SecurityException("原对话汇总阅读已关闭");
+        if(!(features.module("teams") instanceof dev.pocketengine.features.teams.TeamsModule selected))throw new SecurityException("原团队保存记录不可用");
+        return selected.readOriginalChatTeamReport(tasks,conversation,message,sourceRevision,delivery,current);
+    }
     public JSONObject confirmOwnerWorkTeamReport(dev.pocketengine.features.teams.TeamCoordinator.OwnerWorkReport proof,boolean done,String feedback,
                                                 java.util.function.BooleanSupplier current)throws Exception {
         requireOwnerActionReady("confirmResult");if(!current.getAsBoolean())throw new SecurityException("原工作审阅窗口已关闭");

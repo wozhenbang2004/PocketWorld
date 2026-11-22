@@ -114,19 +114,34 @@ public final class ConversationRepository {
         message.put("nativeContext",new JSONObject(context.toString()));saveSource(state);saveMessage(conversation,message);
     }
 
+    private record OriginalOwnerWorkDelivery(String conversation,String task,String run,int epoch,String delivery,String digest){}
+    /** One canonical native saved delivery, checked by the same bounded metadata and source proof, not a message-body read. */
+    public void requireOriginalOwnerWorkDelivery(String conversation,String message,long revision,String task,String run,int epoch,
+                                                String delivery,String digest)throws Exception{
+        requireDerivedMessageCurrent(message,revision,new OriginalOwnerWorkDelivery(conversation,task,run,epoch,delivery,digest));
+    }
     /** Lock-free, body-free dependency validation. The original run source facts may point
      * to older saved replies; bounded recursion follows that native DAG, never arbitrary JSON. */
     public void requireDerivedMessageCurrent(String sourceId,long revision)throws Exception{
+        requireDerivedMessageCurrent(sourceId,revision,null);
+    }
+    private void requireDerivedMessageCurrent(String sourceId,long revision,OriginalOwnerWorkDelivery expected)throws Exception{
         DerivedInspection inspection=derivedInspection.get();boolean outer=inspection==null;if(outer){inspection=new DerivedInspection();derivedInspection.set(inspection);}
         String key=sourceId+":"+revision;
         try{
-            inspection.check();if(inspection.checked.contains(key))return;if(!inspection.visiting.add(key))throw new SourceUnavailable("派生来源形成循环，未采用正文");
+            inspection.check();if(expected==null&&inspection.checked.contains(key))return;if(!inspection.visiting.add(key))throw new SourceUnavailable("派生来源形成循环，未采用正文");
             CancellationSignal signal=new CancellationSignal();var timeout=DEADLINES.schedule(signal::cancel,500,java.util.concurrent.TimeUnit.MILLISECONDS);
             JSONObject state,nativeMessage;String conversation,gen,fingerprint,role;
             try(Cursor row=db.rawQuery("SELECT a.value,s.conversation_id,s.revision,s.role,s.deleted,s.retired_through,s.context_retired,coalesce(c.deleted,1),m.revision,m.body_sha,m.body IS NULL,CASE WHEN s.role='user' THEN '{}' WHEN length(CAST(s.source_json AS BLOB))<=65536 THEN s.source_json END,CASE WHEN s.role='user' THEN '{}' WHEN length(CAST(m.meta_json AS BLOB))<=65536 THEN m.meta_json END FROM meta a LEFT JOIN assistant_sources s ON s.generation=a.value AND s.source_id=? LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id WHERE a.key='assistant_history_generation' LIMIT 1",new String[]{sourceId},signal)){
                 if(!healthy||!row.moveToFirst()||row.isNull(2)||revision!=row.getLong(2)||row.getInt(4)!=0||row.getLong(5)>=revision||row.getInt(6)!=0||row.getInt(7)!=0||row.isNull(8)||row.getLong(8)!=revision||row.getInt(10)!=0||row.isNull(11)||row.isNull(12))throw new SourceUnavailable("原消息已删除、停用、换版或无法核对");
                 gen=row.getString(0);conversation=row.getString(1);role=row.getString(3);fingerprint=row.getString(9);state=new JSONObject(row.getString(11));nativeMessage=new JSONObject(row.getString(12));
             }finally{timeout.cancel(false);}
+            if(expected!=null&&(!"assistant".equals(role)||!"owner_work".equals(nativeMessage.opt("nativeDeliveryKind"))
+                    ||!sourceId.equals(nativeMessage.opt("id"))||!expected.conversation().equals(conversation)
+                    ||!conversation.equals(nativeMessage.opt("conversationId"))||!expected.task().equals(state.opt("nativeTaskId"))
+                    ||!expected.run().equals(state.opt("nativeRunId"))||expected.epoch()!=state.optInt("nativeEpoch")
+                    ||!expected.delivery().equals(state.opt("nativeReplyId"))||!expected.digest().equals(state.opt("nativeReplyDigest"))))
+                throw new SourceUnavailable("这条消息不是所选原工作发布");
             if("assistant".equals(role)){
                 JSONObject context=state.optJSONObject("nativeContext");
                 // Old unproved native replies stay visible to the owner, but cannot be

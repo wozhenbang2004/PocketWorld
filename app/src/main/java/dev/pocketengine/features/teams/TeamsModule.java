@@ -171,6 +171,19 @@ public final class TeamsModule implements EngineModule {
         if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
         return coordinator.readCheckedOwnerWorkReport(tasks,origin,current);
     }
+    /** Foreground original Chat only; not a feature command, review, or model read. */
+    public JSONObject readOriginalChatTeamReport(dev.pocketengine.store.TaskStore tasks,String conversation,String message,long sourceRevision,
+                                                  dev.pocketengine.store.TaskStore.OwnerWorkDeliveryRef delivery,
+                                                  java.util.function.BooleanSupplier current)throws Exception {
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("原对话汇总不得从Tasks锁内进入协调器");
+        if(!current.getAsBoolean())throw new SecurityException("原对话汇总阅读已关闭");
+        var origin=tasks.ownerChatTeamReportOrigin(conversation,message,sourceRevision,delivery);
+        String body=coordinator.readCheckedOwnerChatTeamReport(tasks,origin,current);
+        return new JSONObject().put("format","pocketworld.original-chat-team-report.v1").put("conversationId",conversation)
+                .put("messageId",message).put("sourceRevision",sourceRevision).put("taskId",delivery.taskId())
+                .put("runId",delivery.runId()).put("epoch",delivery.epoch()).put("deliveryId",delivery.deliveryId())
+                .put("sha256",origin.sha256()).put("bytes",origin.bytes()).put("body",body).put("readOnly",true).put("executionAuthorized",false);
+    }
     public JSONObject confirmOwnerWorkReport(dev.pocketengine.store.TaskStore tasks,TeamCoordinator.OwnerWorkReport report,boolean completed,String feedback,
                                               java.util.function.BooleanSupplier current)throws Exception{
         if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");

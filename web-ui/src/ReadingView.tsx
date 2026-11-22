@@ -84,7 +84,7 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active }: {
   </section>;
 });
 
-export function ReadingView({ documents, onBack }: { documents: ReadingDocument[]; onBack: () => void }) {
+export function ReadingView({ documents, onBack, originalChat = false }: { documents: ReadingDocument[]; onBack: () => void; originalChat?: boolean }) {
   const current = documents.at(-1);
   const closeFocus = useRef<HTMLElement | null>(null);
   const previousDocuments = useRef(documents);
@@ -112,11 +112,13 @@ export function ReadingView({ documents, onBack }: { documents: ReadingDocument[
         onPointerDownOutside={event => event.preventDefault()}
         onCloseAutoFocus={event => { event.preventDefault(); if (closeFocus.current?.isConnected) closeFocus.current.focus({ preventScroll: true }); }}>
         <header className="pw-reading-header">
-          <button type="button" aria-label={documents.length > 1 ? '返回回复阅读' : '返回原工作'} onClick={onBack}><IconArrowLeft size={22} aria-hidden="true" /></button>
+          <button type="button" aria-label={originalChat ? '返回原消息' : documents.length > 1 ? '返回回复阅读' : '返回原工作'} onClick={onBack}><IconArrowLeft size={22} aria-hidden="true" /></button>
           <Dialog.Title>{current?.title}</Dialog.Title>
           <span>打开时的内容</span>
         </header>
-        <Dialog.Description id="pw-reading-description" className="pw-reading-description">独立阅读当前内容，后续回复不会改变这里的文字。返回可继续原工作。</Dialog.Description>
+        <Dialog.Description id="pw-reading-description" className="pw-reading-description">{originalChat
+          ? '只读原团队汇总。返回同一条原消息，不会改动工作或草稿。'
+          : '独立阅读当前内容，后续回复不会改变这里的文字。返回可继续原工作。'}</Dialog.Description>
         {documents.map((entry, index) => <ReadingPage key={entry.key} document={entry} active={index === documents.length - 1} />)}
       </Dialog.Content>
     </Dialog.Portal>

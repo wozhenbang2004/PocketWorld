@@ -2403,21 +2403,27 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         public JSONObject evidence()throws Exception{return origin.reference().put("messageId",messageId);}
     }
     public record OwnerWorkReportRead(OwnerWorkReport proof,String body){}
-    synchronized OwnerWorkReportRead readOwnerWorkReport(dev.pocketengine.store.TaskStore.OwnerWorkTeamReportOrigin origin)throws Exception {
+    private record OriginalOwnerSummary(String messageId,String body){}
+    synchronized OwnerWorkReportRead readOwnerWorkReport(TaskStore.OwnerWorkTeamReportOrigin origin)throws Exception {
+        OriginalOwnerSummary body=readExactOwnerSynthesis(origin.teamRun(),origin.teamDefinition(),origin.temporaryDefinition(),
+                origin.generation(),origin.revision(),origin.sha256(),origin.bytes());
+        return new OwnerWorkReportRead(new OwnerWorkReport(this,origin,body.messageId()),body.body());
+    }
+    private OriginalOwnerSummary readExactOwnerSynthesis(String id,String definition,boolean temporary,int generation,long revision,
+                                                          String sha256,int bytes)throws Exception {
         if(closed)throw new SecurityException("原团队结果宿主已关闭");
-        String id=origin.teamRun();
         Run live=runs.get(id);
         // This current owner result path never opens an archived execution slot.
         if(live==null)throw new SecurityException("原团队已不在当前结果窗口；请在原协作记录查看，未选择替代汇总");
         JSONObject saved=live.json;
-        if(!id.equals(saved.opt("id"))||!id.equals(saved.opt("operationId"))||!origin.teamDefinition().equals(saved.opt("teamId"))
+        if(!id.equals(saved.opt("id"))||!id.equals(saved.opt("operationId"))||!definition.equals(saved.opt("teamId"))
                 ||!RESEARCH_FORMAT.equals(saved.opt("researchExecutionFormat"))||!"collaborate".equals(saved.opt("mode"))
                 ||!"classic".equals(saved.optString("discussionFormat","classic"))||saved.has("phoneScope")
-                ||(origin.temporaryDefinition()?!"one_time".equals(saved.opt("definitionKind")):saved.has("definitionKind"))
+                ||(temporary?!"one_time".equals(saved.opt("definitionKind")):saved.has("definitionKind"))
                 ||saved.has("workPlan")||saved.has("productionScope")||saved.has("nativeWorkProfileModels")
                 ||!"completed".equals(saved.opt("status"))||!"completed".equals(saved.opt("phase"))
                 ||!"host_model".equals(saved.opt("summaryProducer"))||saved.opt("summaryStale")!=Boolean.FALSE
-                ||saved.getInt("generation")!=origin.generation()||saved.getLong("revision")!=origin.revision()
+                ||saved.getInt("generation")!=generation||saved.getLong("revision")!=revision
                 ||!(saved.opt("summary") instanceof String text)||text.length()>OWNER_WORK_REPORT_MAX_BYTES||text.isBlank())
             throw new SecurityException("没有这次选择的确切团队汇总，未打开其他版本");
         JSONArray roster=saved.getJSONArray("members");
@@ -2425,11 +2431,21 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
         JSONArray transcript=saved.getJSONArray("transcript");
         JSONObject message=transcript.optJSONObject(transcript.length()-1);
         if(message==null||!"assistant".equals(message.opt("role"))||!"summary".equals(message.opt("kind"))
-                ||message.optInt("generation",-1)!=origin.generation()||!nativeUuid(message.optString("messageId"))
-                ||!text.equals(message.opt("content"))||text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length!=origin.bytes()
-                ||!origin.sha256().equals(TeamOutputText.hash(text)))
+                ||message.optInt("generation",-1)!=generation||!nativeUuid(message.optString("messageId"))
+                ||!text.equals(message.opt("content"))||text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length!=bytes
+                ||!sha256.equals(TeamOutputText.hash(text)))
             throw new SecurityException("原汇总正文与原保存回执不一致，没有用节选替代");
-        return new OwnerWorkReportRead(new OwnerWorkReport(this,origin,message.getString("messageId")),text);
+        return new OriginalOwnerSummary(message.getString("messageId"),text);
+    }
+    synchronized String readCheckedOwnerChatTeamReport(TaskStore tasks,TaskStore.OwnerChatTeamReportOrigin origin,
+                                                       java.util.function.BooleanSupplier current)throws Exception {
+        if(!current.getAsBoolean())throw new SecurityException("原对话汇总阅读已关闭");
+        OriginalOwnerSummary body=readExactOwnerSynthesis(origin.teamRun(),origin.definitionId(),false,
+                origin.generation(),origin.revision(),origin.sha256(),origin.bytes());
+        // Same lock order as save() -> the original TaskStore mirror. This never creates a review proof.
+        tasks.requireOwnerChatTeamReportOrigin(origin);
+        if(!current.getAsBoolean())throw new SecurityException("原对话汇总阅读已关闭");
+        return body.body();
     }
     public static boolean ordinaryLocalReportRoster(JSONArray roster){
         if(roster==null||roster.length()<1||roster.length()>4)return false;

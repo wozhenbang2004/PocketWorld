@@ -190,6 +190,8 @@ type Task={id:string;goal:string;status:string;summary?:string;executionMode?:st
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
+type OriginalChatTeamReportSource=WorkIdentity&{conversationId:string;messageId:string;sourceRevision:number;deliveryId:string};
+type OriginalChatTeamReportVisit={source:OriginalChatTeamReportSource;documentEpoch:number;navigation:number;resume:number;sourceChanges:number;draftEpoch:number;taskRequest:number;key:number;trigger:HTMLButtonElement};
 type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
@@ -312,6 +314,19 @@ function ordinaryChatWorkRow(task:Task|undefined,conversation:string,detail=fals
   raw.ownerPhoneControl==null&&raw.ownerDeviceWork==null&&
   (!detail||raw.taskProjection==='detail_window'&&raw.auditBodyIncluded===true&&raw.taskCoreReadLimited===false)?work:null;
 }
+// Discover only on the actual saved bubble matching the original settled Team outbox row already in this native snapshot.
+function originalChatTeamReportSource(task:Task|undefined,message:Message,result:TaskResult|null,conversation:string):OriginalChatTeamReportSource|undefined {
+ const work=ordinaryChatWorkRow(task,conversation),raw=task?.raw,rows=asArray<Json>(raw?.ownerWorkTeams),team=rows[0];
+ if(!work||!task||!['needs_confirmation','completed'].includes(task.status)||raw?.status!==task.status||
+    raw.cancelRequested!==false||raw.ownerWorkTeamsUnavailable===true||rows.length!==1||!team||
+    !message.id||!Number.isSafeInteger(message.sourceRevision)||Number(message.sourceRevision)<1||message.taskId!==work.taskId||
+    !result||result.kind!=='owner_work'||result.noticeKind!==null||!['needs_confirmation','completed'].includes(result.status)||
+    workIdentityKey(result)!==workIdentityKey(work)||team.originalChatTeamReportDeliveryId!==result.deliveryId||
+    team.active!==false||team.status!=='completed'||team.phase!=='completed'||team.conversationId!==conversation||
+    team.parentTaskId!==work.taskId||team.parentRunId!==work.runId||team.parentEpoch!==work.epoch)return;
+ return {...work,conversationId:conversation,messageId:message.id,sourceRevision:Number(message.sourceRevision),deliveryId:result.deliveryId};
+}
+
 function sameChatWorkRun(origin:ChatWorkRowOrigin,live:ReturnType<typeof bridge.getState>,detail=false){
  const matches=asArray<Task>(live.state.tasks).filter(row=>row.id===origin.work.taskId);
  const task=matches.length===1?matches[0]:undefined,work=ordinaryChatWorkRow(task,origin.conversation,detail);
@@ -1023,6 +1038,8 @@ export default function App(){
  const [workControls,setWorkControls]=useState<Record<string,WorkControlFeedback>>({});
  const workControlEntered=useRef(new Set<string>());
  const [readingDocuments,setReadingDocuments]=useState<ReadingDocument[]>([]);const readingSerial=useRef(0);
+ const originalChatTeamVisit=useRef<OriginalChatTeamReportVisit|null>(null);
+ const [originalChatTeamRead,setOriginalChatTeamRead]=useState<{visit:OriginalChatTeamReportVisit;page?:ReadingDocument}|null>(null);
  const closeReading=useCallback(()=>{setReadingDocuments(previous=>previous.slice(0,-1))},[]);
  useEffect(()=>{setReadingDocuments([])},[state.conversationId,route,taskId,taskOpen]);
  const messageTaskAnchors=useMemo(()=>taskMessageAnchors(messages),[messages]);
@@ -1136,7 +1153,7 @@ export default function App(){
  const conversationDraft=foregroundConversationDraft(state);
  const conversationStream=conversationDraft?.text.trim()?conversationDraft:null;
  const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
- const {content:chatContent,messageList:chatMessageList,readingNav,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
+ const {content:chatContent,messageList:chatMessageList,readingNav,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!originalChatTeamRead?.page||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
  const activeTask=tasks.find(x=>x.id===state.activeTaskId);const projectReading=route==='projects'&&projectTaskReturn.current?.taskId===taskId?projectTaskReturn.current:null;
  const reportSourceChanged=taskLayer==='homeReport'&&(!homeReport.current||!currentHomeReport(homeReport.current));
@@ -3319,6 +3336,62 @@ export default function App(){
  const [originalReminderRule,setOriginalReminderRule]=useState<OriginalChatReminderRuleVisit>();
  const originalReminderBack=useRef<(()=>boolean)|null>(null);
  const registerOriginalReminderBack=useCallback((handler:(()=>boolean)|null)=>{originalReminderBack.current=handler},[]);
+ const originalChatTeamCurrent=useCallback((visit:OriginalChatTeamReportVisit)=>{
+  const live=bridge.getState(),native=obj(live.view),owner=live.state,source=visit.source;
+  if(route!=='chat'||intent!=='chat'||taskOpen||taskOpening||document.hidden||!visit.trigger.isConnected||
+     bridge.getDocumentEpoch()!==visit.documentEpoch||navigationWindow.current!==visit.navigation||
+     reviewRequest.current!==visit.taskRequest||readingSerial.current!==visit.key||
+     native.taskId!==null||native.resumeRevision!==visit.resume||owner.traceSourceRevision!==visit.sourceChanges||
+     owner.chatAttachmentPickerOpen||!ordinaryMessageWorkChat(live,source.conversationId,visit.draftEpoch))return false;
+  const rows=asArray<Message>(owner.messages).filter(row=>row.id===source.messageId);
+  const works=asArray<Task>(owner.tasks).filter(row=>row.id===source.taskId);
+  const actual=rows.length===1&&works.length===1?originalChatTeamReportSource(works[0],rows[0],messageTaskResult(rows[0]),source.conversationId):undefined;
+  return !!actual&&actual.sourceRevision===source.sourceRevision&&actual.deliveryId===source.deliveryId&&workIdentityKey(actual)===workIdentityKey(source);
+ },[route,intent,taskOpen,taskOpening]);
+ const shownChatTeamRead=originalChatTeamRead&&originalChatTeamCurrent(originalChatTeamRead.visit)?originalChatTeamRead:null;
+ const closeChatTeamReport=useCallback((restore=true)=>{
+  const visit=originalChatTeamVisit.current;
+  if(!visit)return false;
+  originalChatTeamVisit.current=null;setOriginalChatTeamRead(null);
+  if(!restore||!originalChatTeamCurrent(visit))return false;
+  requestAnimationFrame(()=>{if(!originalChatTeamVisit.current&&originalChatTeamCurrent(visit))visit.trigger.focus({preventScroll:true})});
+  return true;
+ },[originalChatTeamCurrent]);
+ useLayoutEffect(()=>{
+  if(originalChatTeamRead&&!shownChatTeamRead&&originalChatTeamVisit.current===originalChatTeamRead.visit)closeChatTeamReport(false);
+ },[originalChatTeamRead,shownChatTeamRead,closeChatTeamReport]);
+ useEffect(()=>{
+  const hidden=()=>{if(document.hidden)closeChatTeamReport(false)};
+  document.addEventListener('visibilitychange',hidden);
+  return()=>document.removeEventListener('visibilitychange',hidden);
+ },[closeChatTeamReport]);
+ const openOriginalChatTeamReport=async(source:OriginalChatTeamReportSource,trigger:HTMLButtonElement)=>{
+  if(originalChatTeamVisit.current||readingDocuments.length||!can('ownerWork.teamReport.read'))return;
+  const live=bridge.getState(),resume=obj(live.view).resumeRevision,sourceChanges=live.state.traceSourceRevision;
+  if(!Number.isSafeInteger(resume)||!Number.isSafeInteger(sourceChanges))return;
+  const visit:OriginalChatTeamReportVisit={source,trigger,documentEpoch:bridge.getDocumentEpoch(),navigation:navigationWindow.current,
+   resume,sourceChanges,draftEpoch,taskRequest:reviewRequest.current,key:++readingSerial.current};
+  if(!originalChatTeamCurrent(visit))return;
+  originalChatTeamVisit.current=visit;setOriginalChatTeamRead({visit});
+  const current=()=>originalChatTeamVisit.current===visit&&originalChatTeamCurrent(visit);
+  try{
+   const {conversationId,messageId,sourceRevision}=source;
+   const value=obj(await bridge.command('ownerWork.teamReport.read',{conversationId,messageId,sourceRevision}));
+   if(!current())return;
+   const body=value.body;
+   if(value.format!=='pocketworld.original-chat-team-report.v1'||value.conversationId!==conversationId||
+      value.messageId!==messageId||value.sourceRevision!==sourceRevision||value.taskId!==source.taskId||
+      value.runId!==source.runId||value.epoch!==source.epoch||value.deliveryId!==source.deliveryId||value.readOnly!==true||
+      value.executionAuthorized!==false||typeof value.sha256!=='string'||!/^[a-f0-9]{64}$/.test(value.sha256)||
+      typeof body!=='string'||!body.trim()||body.length>65_536||value.bytes>65_536||new TextEncoder().encode(body).length!==value.bytes)
+    throw Error('没有取得这个版本的原团队汇总，可查看原工作。');
+   rememberChatPosition();
+   setOriginalChatTeamRead({visit,page:{key:visit.key,kind:'message',title:'原团队汇总',plainText:true,text:body}});
+  }catch(failure){
+   if(current())setLocalError(failure instanceof Error?failure.message:'未读取原团队汇总，可查看原工作。');
+   if(originalChatTeamVisit.current===visit)closeChatTeamReport(false);
+  }
+ };
  const originalReminderChatCurrent=(visit:OriginalReminderChatVisit)=>{
   const native=bridge.getState(),view=obj(native.view),owner=native.state,expected=visit.source;
   if(route!=='chat'||taskOpen||taskOpening||document.hidden||visit.documentEpoch!==bridge.getDocumentEpoch()||
@@ -3494,7 +3567,7 @@ export default function App(){
    }
   }
   if(route==='chat'&&savedHostSession.current){closeSavedHost();return true}
-  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchHistoryPage,searchOriginal,closeSearchOriginal,shownChatReference,closeChatReference,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,deliveredFileReader,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
+  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(closeChatTeamReport())return true;if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchHistoryPage,searchOriginal,closeSearchOriginal,shownChatReference,closeChatReference,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,deliveredFileReader,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,closeChatTeamReport,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{
@@ -7900,6 +7973,9 @@ export default function App(){
     const chatReport=m.id?chatReports.get(m.id):undefined;
     const answerInput=!chatReport&&m.id&&m.role==='assistant'&&m.sourceRevision===1?answerInputs.get(m.id):undefined;
     const returnedWork=phoneResult||(taskResult?.noticeKind?null:taskResult);
+    const teamReport=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&can('ownerWork.teamReport.read')&&
+      ordinaryMessageWorkChat(snapshot,String(state.conversationId||''),draftEpoch)?
+      originalChatTeamReportSource(linked,m,taskResult,String(state.conversationId||'')):undefined;
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
     const inlineResult=!earlierRun&&!phoneResult&&taskResult?.kind==='owner_work'&&taskResult.status==='completed'&&!taskResult.noticeKind&&!!m.id;
@@ -7993,6 +8069,11 @@ export default function App(){
        {chatReport&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
         disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
         onClick={event=>openReportFromChat(chatReport,event.currentTarget)}>查看原工作成果</Button>}
+       {teamReport&&<Button variant="secondary" size="small" className="pw-message-trace" leadingIcon={IconTeam}
+        disabled={shownChatTeamRead?.visit.source.messageId===teamReport.messageId}
+        onClick={event=>void openOriginalChatTeamReport(teamReport,event.currentTarget)}>
+        {shownChatTeamRead?.visit.source.messageId===teamReport.messageId?'正在读取团队汇总…':'阅读原团队汇总'}
+       </Button>}
        {returnedWork&&(!phoneResult||!m.id||m.sourceRevision!==1)&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} disabled={inlineResult&&!!openingChatResultId}
         onClick={event=>{
           if(inlineResult&&taskResult&&m.id)void openChatResult(m.id,taskResult,event.currentTarget);
@@ -8789,6 +8870,7 @@ export default function App(){
  {projectConventionMessage&&<ProjectConventionProvided key={projectConventionMessage} messageId={projectConventionMessage} onClose={()=>setProjectConventionMessage(null)}/>}
  {providedMemoryMessage&&<ProvidedMemories key={providedMemoryMessage} messageId={providedMemoryMessage} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setProvidedMemoryMessage(null)} onManage={original=>{setProvidedMemoryMessage(null);openPersonalMemory(original?{view:'memory',id:original.id,candidate:false,expectedRevision:original.revision}:{view:'memories'})}} registerBack={registerProvidedMemoryBack}/>}
  {sourceSelection&&<AnswerSources key={sourceSelection.messageId||sourceSelection.taskId} target={sourceSelection} revision={Number(state.memoryRefreshRevision||0)} onClose={()=>setSourceSelection(null)}/>}
- <ReadingView documents={readingDocuments} onBack={closeReading}/>
+ <ReadingView documents={shownChatTeamRead?.page?[shownChatTeamRead.page]:readingDocuments} originalChat={!!shownChatTeamRead?.page}
+  onBack={shownChatTeamRead?.page?()=>{closeChatTeamReport()}:closeReading}/>
  </div></Drawer.Root></ConversationModelPickerProvider></ReadingContext.Provider>;
 }

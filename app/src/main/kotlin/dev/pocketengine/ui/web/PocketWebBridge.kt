@@ -502,7 +502,7 @@ internal class PocketWebBridge(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
-            "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
+            "ownerWork.teamReport.read", "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
             "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original", "phone.result.taskOriginal",
             "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
@@ -1705,6 +1705,10 @@ internal class PocketWebBridge(
                     requiredString(args, "expectedDigest", empty = !publishedMessage), publishedMessage, current) {
                     value, error -> complete(id, value, error, retainValue = false)
                 }; return
+            }
+            if (action == "ownerWork.teamReport.read") {
+                readOriginalChatTeamReport(id, args)
+                return
             }
             if (action == "phone.result.original") {
                 checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision", "taskId", "runId", "epoch", "deliveryId", "offset", "expectedDigest", "readerWindow"))
@@ -4162,6 +4166,65 @@ internal class PocketWebBridge(
         return files.map{file->LiveReplyDocument(file,OriginalReplyDocument.Target(source.conversation,source.generation,source.message,source.version,
             source.fingerprint,nativeReply,inputId,reply.taskId,reply.runId,reply.epoch,file.id,file.sha256),!loadedProof)}
     }
+    /** Native loaded Chat row and its already projected Team link, not a Web-supplied task or Team target. */
+    private fun originalChatTeamDelivery(conversation: String, message: String, revision: Long): TaskStore.OwnerWorkDeliveryRef? {
+        val shown = controller.state
+        if (section != null || taskViewId != null || taskReturnSection != null || !controller.webPrivateOwnerVisible() ||
+            phoneComposer.intent || controller.hasChannelPhoneOrigin || controller.conversationReader != null ||
+            controller.queuedInputsPage != null || shown.filePath != null || shown.chatAttachmentPickerOpen ||
+            controller.attachmentOutcomes.state.open || shown.conversationId != conversation ||
+            controller.composerDraft?.let { it.key == "conversation:$conversation" && it.conversationId == conversation } != true) return null
+        val reply = shown.messages.singleOrNull { it.id == message } ?: return null
+        val result = reply.taskResult ?: return null
+        if (reply.role != "assistant" || reply.sourceRevision != revision || reply.taskId != result.taskId ||
+            result.kind != "owner_work" || result.noticeKind != null || result.status !in setOf("needs_confirmation", "completed")) return null
+        val work = shown.tasks.singleOrNull { it.id == result.taskId } ?: return null
+        val raw = work.raw
+        if (!OwnerWorkTask.isOwnerWork(raw) || raw.opt("actorId") != "owner" || raw.opt("spaceId") != "private" ||
+            raw.opt("contextAvailable") != true || raw.opt("cancelRequested") != false || raw.opt("conversationId") != conversation ||
+            work.status !in setOf("needs_confirmation", "completed") || raw.opt("status") != work.status ||
+            raw.opt("runId") != result.runId || raw.optInt("coordinatorEpoch") != result.epoch ||
+            raw.optBoolean("ownerWorkTeamsUnavailable")) return null
+        val team = raw.optJSONArray("ownerWorkTeams").objects().singleOrNull() ?: return null
+        if (team.opt("originalChatTeamReportDeliveryId") != result.deliveryId || team.opt("active") != false ||
+            team.opt("status") != "completed" || team.opt("phase") != "completed" || team.opt("conversationId") != conversation ||
+            team.opt("parentTaskId") != result.taskId || team.opt("parentRunId") != result.runId ||
+            team.optInt("parentEpoch") != result.epoch) return null
+        return TaskStore.OwnerWorkDeliveryRef(result.taskId, result.runId, result.epoch, result.deliveryId)
+    }
+
+    private fun readOriginalChatTeamReport(id: String, args: JSONObject) {
+        checkedPayload(args, setOf("conversationId", "messageId", "sourceRevision"))
+        val conversation = requiredString(args, "conversationId").also { require(it.length <= 240) }
+        val message = requiredString(args, "messageId").also { require(it.matches(Regex("[a-f0-9-]{36}"))) }
+        val revision = requiredLong(args, "sourceRevision").also { require(it > 0) }
+        val delivery = originalChatTeamDelivery(conversation, message, revision) ?: error("请回到有这份汇总的原私人对话")
+        val document = requireNotNull(documentId)
+        val ticket = commandFence.ticket()
+        val foreground = controller.displayedPhoneWindowVersion()
+        val composerEpoch = controller.composerViewEpochForScopedRead
+        val sources = controller.conversationSourceRevision
+        // Worker/SQL only probes the captured window fence; the loaded row is read on main.
+        fun current() = !closed && documentId == document && commandFence.accepts(ticket) &&
+            controller.displayedPhoneWindowAlive(foreground) && controller.composerViewEpochForScopedRead == composerEpoch &&
+            controller.conversationSourceRevision == sources && taskViewId == null
+        val owner = controller.nativeTokenBudgetHost()
+        controller.runTeamPhoneWork {
+            val result = runCatching { owner.readOriginalChatTeamReport(conversation, message, revision, delivery, ::current) }
+            main.post {
+                if (documentId != document) return@post
+                val exact = result.mapCatching {
+                    check(current() && originalChatTeamDelivery(conversation, message, revision) == delivery) {
+                        "原消息或汇总已变化，未打开其他版本"
+                    }
+                    it
+                }
+                exact.fold({ complete(id, it, null, retainValue = false) },
+                    { complete(id, null, it.message ?: "未读取原团队汇总，可查看原工作", retainValue = false) })
+            }
+        }
+    }
+
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
         val history = args.has("resultReaderWindow")
         require(history == args.has("resultSourceRevision")) { "原历史窗口和原消息版本须一起核对" }
