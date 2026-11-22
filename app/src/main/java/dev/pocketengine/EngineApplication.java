@@ -31,10 +31,34 @@ import org.json.JSONArray;
 public final class EngineApplication extends Application implements dev.pocketengine.features.automation.AutomationModule.AlarmHostProvider,dev.pocketengine.phone.OwnerScreenContextHost,dev.pocketengine.features.notifications.NotificationsModule.Host,dev.pocketengine.features.assistant.notifications.OwnerQuestionReply.Host {
     private dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications assistantTaskNotifications;
     private volatile dev.pocketengine.phone.PrivatePhoneResultNotices privatePhoneResults;
+    private record FirstBackgroundResultWatch(TaskStore store,RunControl.HostRunIdentity owner){}
+    private final java.util.concurrent.ConcurrentHashMap<RunControl,FirstBackgroundResultWatch> firstBackgroundResultWatches=new java.util.concurrent.ConcurrentHashMap<>();
     public JSONObject privatePhoneResultWatch(String id,String run,int epoch,Boolean wanted,java.util.function.BooleanSupplier window)throws Exception{
         var notices=privatePhoneResults;RunControl original=control(id);
         if(notices==null||!Boolean.FALSE.equals(wanted)&&(original==null||!original.matchesHostRun(id,run,epoch)))throw new SecurityException("原本机手机执行已经变化，未更改提醒");
-        return notices.choice(id,run,epoch,original,wanted,window);
+        var startup=wanted==null||original==null||!original.matchesHostRun(id,run,epoch)?null:firstBackgroundResultWatches.get(original);
+        if(startup==null)return notices.choice(id,run,epoch,original,wanted,window);
+        // A successful explicit change either precedes the initial arm or changes its saved row.
+        // A failed/stale manual change does not consume the reviewed choice. Never take the app monitor here.
+        synchronized(startup){
+            JSONObject reply=notices.choice(id,run,epoch,original,wanted,window);
+            firstBackgroundResultWatches.remove(original,startup);
+            return reply;
+        }
+    }
+    /** On the original background worker, after its own foreground notification was accepted. */
+    void armFirstBackgroundResultWatch(String id,String run,int epoch,RunControl original,java.util.function.BooleanSupplier sameSession){
+        var startup=firstBackgroundResultWatches.get(original);if(startup==null)return;
+        synchronized(startup){
+            var notices=privatePhoneResults;
+            java.util.function.BooleanSupplier current=()->firstBackgroundResultWatches.get(original)==startup&&
+                    tasks==startup.store()&&privatePhoneResults==notices&&sameSession.getAsBoolean()&&
+                    epoch==1&&startup.owner().equals(original.hostRunIdentity())&&original.matchesHostRun(id,run,epoch)&&
+                    !original.isCancelled()&&retainsShownPhoneControl(id,original);
+            try{if(notices!=null&&current.getAsBoolean())notices.choice(id,run,epoch,original,true,current);}
+            catch(Exception unavailable){/* Optional; never retry, request permission, or change original execution. */}
+            finally{firstBackgroundResultWatches.remove(original,startup);}
+        }
     }
     private final dev.pocketengine.features.assistant.OwnerQuestionInputs ownerQuestionInputs=new dev.pocketengine.features.assistant.OwnerQuestionInputs();
     private final dev.pocketengine.features.assistant.OwnerPhoneQuestions ownerPhoneQuestions=new dev.pocketengine.features.assistant.OwnerPhoneQuestions();
@@ -1875,6 +1899,11 @@ public final class EngineApplication extends Application implements dev.pocketen
     public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,long firstMainPolicyRevision,
                                                           boolean watchFirstMainResult,java.util.function.BooleanSupplier ownerCurrent,
                                                           java.util.function.Consumer<String> allocated)throws Exception {
+        return startConversationPhone(review,screenConsent,firstMainPolicyRevision,watchFirstMainResult,false,ownerCurrent,allocated);
+    }
+    public synchronized JSONObject startConversationPhone(ConversationPhoneStartReview review,boolean screenConsent,long firstMainPolicyRevision,
+                                                          boolean watchFirstMainResult,boolean watchFirstBackgroundResult,
+                                                          java.util.function.BooleanSupplier ownerCurrent,java.util.function.Consumer<String> allocated)throws Exception {
         if(review==null||review.issuer!=this||review.store!=tasks)throw new SecurityException("原手机任务审阅不可核对");
         JSONObject previous=queryConversationPhoneStart(review.requestId,review.conversationId);
         if(review.attempted||previous.optBoolean("accepted"))return previous.put("duplicate",true);
@@ -1885,6 +1914,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             if(firstMainPolicyRevision>=0&&(!"main_screen".equals(review.mode)||firstMainScreenPolicyRevision()!=firstMainPolicyRevision))
                 throw new SecurityException("原主屏或本机应用规则已变化，原目标仍保留，请重新核对");
             if(watchFirstMainResult&&firstMainPolicyRevision<0)throw new SecurityException("只能为这次手动开始的主屏任务选择提醒");
+            if(watchFirstBackgroundResult&&(!"background".equals(review.mode)||firstMainPolicyRevision>=0||watchFirstMainResult))
+                throw new SecurityException("只能为这次原私聊的独立屏任务选择提醒");
             requireConversationPhoneReviewCurrent(review,ownerCurrent);
             java.util.Objects.requireNonNull(allocated);
         }catch(Exception rejected){throw new ConversationPhoneStartRejected(rejected);}
@@ -1899,7 +1930,8 @@ public final class EngineApplication extends Application implements dev.pocketen
             admit(id,review.mode,review.config,false,null,0,"",new NewDraftPhoneAdmission(control->{
                 control.check();return tasks.beginReviewedConversationPhone(review.creation,confirmedAt,review.config.maxSteps,firstMainPolicyRevision,
                         assigned->{writeEntered[0]=true;allocated.accept(assigned);},()->{control.check();return current.call();});
-            },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state),watchFirstMainResult));
+            },current,state->tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),state),
+                    watchFirstMainResult,watchFirstBackgroundResult));
             tasks.rememberFirstConversationPhoneServiceOutcome(id,review.conversationId,originalPhoneAdmissionReceipt(id),"admitted");
             return queryConversationPhoneStart(id,review.conversationId).put("duplicate",false).put("budgetIncreased",false);
         }catch(Exception failure){
@@ -1990,8 +2022,9 @@ public final class EngineApplication extends Application implements dev.pocketen
     private String admit(String taskId,String executionMode,ModelConfig c,boolean manualOnly,String expectedRun,int expectedEpoch)throws Exception {return admit(taskId,executionMode,c,manualOnly,expectedRun,expectedEpoch,"");}
     @FunctionalInterface private interface NewDraftPhoneWrite { JSONObject begin(RunControl original)throws Exception; }
     @FunctionalInterface private interface FirstServiceOutcome { void record(String state)throws Exception; }
-    private record NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome,boolean watchFirstMainResult){
-        private NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome){this(write,current,outcome,false);}
+    private record NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome,
+                                         boolean watchFirstMainResult,boolean watchFirstBackgroundResult){
+        private NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current,FirstServiceOutcome outcome){this(write,current,outcome,false,false);}
         private NewDraftPhoneAdmission(NewDraftPhoneWrite write,java.util.concurrent.Callable<Boolean> current){this(write,current,null);}
         void noteRefusal(String state,RuntimeException original){if(outcome!=null)try{outcome.record(state);}catch(Exception storage){original.addSuppressed(storage);}}
     }
@@ -2040,6 +2073,8 @@ public final class EngineApplication extends Application implements dev.pocketen
                 start.putExtra(TaskStore.FIRST_MAIN_SCREEN,true);
                 if(firstDraft!=null&&firstDraft.watchFirstMainResult())firstMainResultWatch.set(nextControl);
             }
+            if(background&&firstDraft!=null&&firstDraft.watchFirstBackgroundResult()&&reviewedBackgroundWatchSource(t))
+                firstBackgroundResultWatches.put(nextControl,new FirstBackgroundResultWatch(tasks,nextControl.hostRunIdentity()));
             android.content.ComponentName requested;
             try{requested=startForegroundService(start);}
             catch(RuntimeException failure){
@@ -2056,6 +2091,10 @@ public final class EngineApplication extends Application implements dev.pocketen
             finally{released(taskId,nextControl);resources.releasePhone(token);if(display!=null)display.unpinOwner(nextControl);}throw ex;
         }
         pushTask(t.getString("id"));if(channelTaskHost!=null)channelTaskHost.publishTaskState(taskId);return t.getString("id");
+    }
+    private static boolean reviewedBackgroundWatchSource(JSONObject task){
+        return "background".equals(task.opt("executionMode"))&&task.optInt("coordinatorEpoch",-1)==1&&
+                task.optJSONObject("conversationPhoneHandoff")!=null&&dev.pocketengine.store.PhoneActionRecovery.local(task);
     }
     /** Capture the native controller, then release the application monitor before touching Tasks. */
     private RunControl originalPhoneControl(String id,String run,int epoch,boolean stopping)throws Exception {
@@ -5130,6 +5169,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         var questions=phoneQuestions(id,owner);if(questions!=null)questions.released(id,owner);if(deviceOwnerInputs!=null)deviceOwnerInputs.released(id,owner);
         if(id==null||owner==null||owner!=control(id))return;
         firstMainResultWatch.compareAndSet(owner,null);
+        firstBackgroundResultWatches.remove(owner);
         privatePhoneStopOrigins.remove(owner);
         deferredPhoneSessions.remove(owner);
         var teamAdmission=teamPhoneRuns.get(id);if(teamAdmission!=null&&teamAdmission.originalControl()==owner)teamPhoneRuns.remove(id,teamAdmission);

@@ -12,9 +12,9 @@ export type PhoneConditions={notification:Condition&{settingsDetail?:'phone_task
 export type PhoneReviewDisplay={
   goal:string;mode:string;toolLimit:number;modelCallLimit:number;scopeMinutes:number;
   ownerPickedMessage?:boolean;message?:string;conversationId?:string;conversationTitle?:string;modelName?:string;screenDisclosure?:string;
-  conditions?:PhoneConditions;manualFirstMainAvailable?:true;
+  conditions?:PhoneConditions;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true;
 };
-type Live={reviewHandle:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;ownerPickedMessage?:boolean;manualFirstMainAvailable?:true};
+type Live={reviewHandle:string;expiresInMs?:number;documentEpoch?:number;draftRequestId?:string;conversationId?:string;ownerPickedMessage?:boolean;manualFirstMainAvailable?:true;firstBackgroundResultWatchAvailable?:true};
 
 const privatePlace = (mode:string) => mode==='background'?'后台独立屏':mode==='main_screen'?'手机主屏':undefined;
 const readinessLine = (condition:Pick<Condition,'state'|'message'>|undefined, ready:string) => {
@@ -86,10 +86,14 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
   const hasNotification=notification?.state==='ready',hasSlot=capacity?.state==='ready';
   const planned=privatePlace(shown.mode);
   const canSubmit=!conditions||!!planned&&hasNotification&&hasSlot;
+  const backgroundWatch=shown.mode==='background'&&live?.firstBackgroundResultWatchAvailable===true&&
+    !!shown.conversationId&&shown.conversationId===live.conversationId&&hasNotification&&hasSlot&&screen?.state==='ready';
   const issue=!hasNotification?notification:screen?.state!=='ready'?screen:undefined;
   const retry=!!conditions&&(expired||!canSubmit||screen?.state!=='ready');
   const controls={error,onReject:live&&!pending?onClose:undefined,pending,
-    onApprove:live&&onStart&&!unknown&&canSubmit&&!expired?()=>{if(current())onStart()}:undefined};
+    onApprove:live&&onStart&&!unknown&&canSubmit&&!expired?()=>{
+      if(current())onStart(undefined,backgroundWatch&&watchNow.current===handle?handle:undefined);
+    }:undefined};
   // No private original/conditions in a channel review. Retain that flow unchanged.
   if(!conditions)return <PermissionReview {...controls} title={shown.goal} context={'在'+(shown.mode==='background'?'后台独立屏':'手机主屏')+'执行'}
     reason={[shown.message,shown.screenDisclosure].filter(Boolean).join(' ')} approveLabel="开始这次任务"
@@ -131,6 +135,12 @@ export function PhoneScopeReview({shown,live,pending,unknown,onStart,onClose,onC
       </div>}
       {taskChannel&&onSettings&&<p className="pw-field-hint">若只打开应用通知设置，请在其中选择「手机任务」。返回后重新核对原目标。</p>}
       {place&&onPlace&&<p className="pw-field-hint">{place==='background_setup'?'在准备页选「后台独立屏 → 连接与检查」。回来后再核对原目标，不会自动连接或提交。':'主屏会占用手中的屏幕。只有你在原草稿选择后才会更换位置；仍需重新核对。'}</p>}
+      {backgroundWatch&&!expired&&onStart&&<div className="pw-phone-review-remedies">
+        <CheckboxField isDisabled={pending} isSelected={!!handle&&watchHandle===handle} onChange={checked=>{
+          if(!handle||!current())return;watchNow.current=checked?handle:'';setWatchHandle(watchNow.current);
+        }}>本轮结束后提醒我查看</CheckboxField>
+        <p className="pw-field-hint">仅尝试在本机通知栏提示，不带任务内容。没有收到也可回原私聊查看。</p>
+      </div>}
       {shown.mode==='main_screen'&&live?.manualFirstMainAvailable===true&&canSubmit&&screen?.state==='ready'&&!expired&&onStart&&
         <div className="pw-phone-review-remedies">
           <CheckboxField isDisabled={pending} isSelected={!!handle&&watchHandle===handle} onChange={checked=>{

@@ -321,10 +321,17 @@ internal class PocketWebPhoneComposer(
         return result
     }
 
+    // An offer comes only from the normal linked private composer review, not a draft/channel
+    // or team preparation. The service still checks its actual notification channel on arm.
+    private fun firstBackgroundResultWatchAvailable(review: PhoneReview): Boolean =
+        review.privateOwner && review.linked != null && review.conversation.isNotBlank() && review.mode == "background" &&
+            listOf("notification", "screen", "capacity").all { review.conditions?.optJSONObject(it)?.optString("state") == "ready" }
+
     private fun reviewView(handle: String, review: PhoneReview): JSONObject {
         val shown = review.linked?.view() ?: review.draft?.view()
         return (shown ?: JSONObject()).put("reviewHandle", handle).put("goal", review.goal).put("mode", review.mode)
             .putOpt("manualFirstMainAvailable", true.takeIf { review.firstMainPolicyRevision >= 0 })
+            .putOpt("firstBackgroundResultWatchAvailable", true.takeIf { firstBackgroundResultWatchAvailable(review) })
             .put("toolLimit", review.tools).put("modelCallLimit", review.models).put("scopeMinutes", review.minutes)
             .put("originalDraft", review.conditions?.let { JSONObject().put("composer", review.composerKey).put("conversation", review.conversation)
                 .put("ownerEpoch", review.viewEpoch).put("revision", review.draftRevision).put("origin", review.originRevision) })
@@ -574,7 +581,7 @@ internal class PocketWebPhoneComposer(
         (next==null || !knownBlankSystemResult(next) || listOf("draftRequestId","taskId","runId","admissionState").any { saved.optString(it)!=next.optString(it) })
 
     fun start(id: String, args: JSONObject) {
-        checkedPayload(args, setOf("reviewHandle", "manualFirstMain", "watchFirstMainResult"))
+        checkedPayload(args, setOf("reviewHandle", "manualFirstMain", "watchFirstMainResult", "watchFirstBackgroundResult"))
         val handle = requiredString(args, "reviewHandle")
         val review = phoneReviews[handle] ?: error("原手机目标审阅已关闭或已使用")
         require(phoneReviewCurrent(review)) { "原对话、目标窗口或执行范围已变化，请重新核对" }
@@ -588,6 +595,11 @@ internal class PocketWebPhoneComposer(
         val watchFirstMainResult = args.has("watchFirstMainResult")
         if(watchFirstMainResult) require(firstMainPolicy >= 0 && requiredBoolean(args,"watchFirstMainResult")) {
             "只能为这次手动开始的主屏任务选择提醒"
+        }
+        val watchFirstBackgroundResult = args.has("watchFirstBackgroundResult")
+        if(watchFirstBackgroundResult) require(firstBackgroundResultWatchAvailable(review) && firstMainPolicy < 0 &&
+            !watchFirstMainResult && requiredBoolean(args,"watchFirstBackgroundResult")) {
+            "只能为这次原私聊的独立屏任务选择提醒"
         }
         val privateRequest = review.privateOwner && (review.linked != null || review.draft != null)
         require(!controller.state.phoneSubmitting && (privateRequest || controller.state.activeTaskId == null)) { "原输入仍在提交或渠道工作正占用，未重复开始" }
@@ -615,7 +627,7 @@ internal class PocketWebPhoneComposer(
                 publishState()
             } else complete(id,null,"原启动窗口已变化，未覆盖已核对的回执")
         }
-        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, watchFirstMainResult, completed) }
+        val admitted = review.linked?.let { controller.startConversationPhone(it, { phoneReviewCurrent(review) }, capacity, firstMainPolicy, watchFirstMainResult, watchFirstBackgroundResult, completed) }
             ?: review.draft?.let { controller.startDraftPhone(it, { phoneReviewCurrent(review) }, capacity, completed) }
             ?: controller.startReviewedPhone(review.goal, review.mode, { phoneReviewCurrent(review) }, completed)
         if (admitted) {

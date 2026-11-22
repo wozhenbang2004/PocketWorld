@@ -1029,7 +1029,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     view.commandsAuthorized===false&&nativeDirectBuild&&
     sameImportedEditor(candidateImport,originalImportedEditor(projectId))?candidateImport:null;
   const viteForSave=starterForSave||importedViteForSave;
-  const showViteSaveLabel=!!starterForSave||!!importedViteForSave&&importedViteEntry;
+  const dependencyChoices=selectedCopy?.ownerDependencyCopyEditor===true?available.filter(row=>row.checkoutId===checkout):[];
+  const selectedDependencyEditor=dependencyChoices.length===1&&selectedCopy?.draftWorkingCopy===false&&
+    view?.projectId===projectId&&view.viewHandle===handle.current&&view.executionAuthorized===false&&
+    view.commandsAuthorized===false&&view.draftRecoveryRequired===false?selectedCopy:null;
+  const shownDependencyEditor=useRef<Data|null>(null);shownDependencyEditor.current=selectedDependencyEditor;
+  const dependencyForSave=selectedDependencyEditor&&fileCheckout===checkout&&nativeDirectBuild?selectedDependencyEditor:null;
+  const showViteSaveLabel=!!starterForSave||!!(importedViteForSave||dependencyForSave)&&importedViteEntry;
   const pythonToolSetup = !!onPreparePythonTools && !!fileWindow && !fileWindow.originalImport && !fileWindow.unselectedImport &&
     checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&!view?.draftRecoveryRequired&&
     selectedCopy?.draftWorkingCopy===false&&view?.runtime?.runtimeId==='managed_process_v1'&&
@@ -1050,8 +1056,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     closeFiles(savedHere?exactPosition:undefined);
     latest.current.onPreparePythonTools?.(exactPosition);
   };
-  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||viteForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
-    !view?.draftRecoveryRequired&&can('projects.development.inspect')&&(!!viteForSave||can('projects.development.reviewDraftBuild')));
+  const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||viteForSave||dependencyForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
+    !view?.draftRecoveryRequired&&can('projects.development.inspect')&&(!!viteForSave||!!dependencyForSave||can('projects.development.reviewDraftBuild')));
   const savedSource = source?.savedEditInSource;
   const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
     savedSource.sourceDigest===source?.sourceDigest && sourceHash(source?.sourceDigest) && typeof savedSource.matches==='boolean' ? savedSource : null;
@@ -1099,7 +1105,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const prepareSavedBuild = async ({position:saved,filesHandle,id,closeEditor}:CheckoutSaveForBuild) => {
     const viewHandle=handle.current, window=ownerWindow(), sequence=generation.current;
     const original=directImportedSave?originalImportForSave:undefined;
-    const vite=viteForSave, shown={...draft.current};
+    const vite=viteForSave, dependency=dependencyForSave, shown={...draft.current};
     if(!active||!canPrepareSavedBuild||!viewHandle||view?.viewHandle!==viewHandle||saved.projectId!==projectId||
       saved.checkoutId!==fileCheckout||draft.current.checkoutId!==saved.checkoutId||
       (missingRequiredLock&&saved.path!==missingRequiredLock)||document.hidden)
@@ -1120,19 +1126,23 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       const exactOrigin=vite||original;
       if(exactOrigin&&(!sameImportedEditor(exactOrigin,originalImportedEditor(projectId))||observation.matches!==true))
         throw Error('原导入副本或刚保存的字节已变化，没有进入其他版本的构建核对。');
+      if(dependency&&(shownDependencyEditor.current!==dependency||value.ownerDependencyCopyEditor!==true||observation.matches!==true))
+        throw Error('未核对到这份依赖副本刚保存的文件。仍留在原编辑器，没有切换副本。');
       const tools=checkoutFirstWebTools(value,projectId,saved.checkoutId);
-      goToReview=!!vite&&(vite.sourceKind===builtinViteStarter?value.firstImportedWebFile?.sourceKind===builtinViteStarter:value.existingNodeBuild===true)&&
+      const knownViteOrigin=vite?.sourceKind===builtinViteStarter?value.firstImportedWebFile?.sourceKind===builtinViteStarter:
+        !!(vite||dependency)&&value.existingNodeBuild===true;
+      goToReview=knownViteOrigin&&
         value.directBuildKind==='vite'&&
         tools?.kind==='node'&&tools.manager==='npm'&&tools.runtimeReady&&tools.missing.length===0&&
         !value.existingNodeBuildTask&&!value.existingNodeBuildUnavailable&&!value.directViteBuildWork&&!value.directViteBuildWorkUnavailable;
       if(!goToReview)showSavedSource(value,true);
     },failure=>{throw failure;});
     if(!fresh)throw Error('没有取得这次原保存的核对回执。');
-    if(!goToReview||!vite)return;
+    if(!goToReview||!(vite||dependency))return;
     const sameVisit=()=>alive.current&&latest.current.active&&!document.hidden&&generation.current===sequence&&ownerWindow()===window&&
       handle.current===viewHandle&&bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath;
     const sameOrigin=()=>sameVisit()&&!activeReview.current&&!previewOpen.current&&sameDraft(draft.current,shown)&&
-      sameImportedEditor(vite,originalImportedEditor(projectId));
+      (vite?sameImportedEditor(vite,originalImportedEditor(projectId)):shownDependencyEditor.current===dependency);
     if(!sameOrigin())throw Error('原副本或项目草稿已变化，未打开构建审阅。');
     const closed=await closeEditor();
     if(!sameVisit())return;
@@ -1285,7 +1295,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       throw Error('新副本的原登记已变化，未选择其他副本。');
     const viewHandle=handle.current;
     if(!existing.length)setView(last=>last&&last.viewHandle===viewHandle&&!rows(last.checkouts).some(row=>row.checkoutId===actual.newCheckoutId)?{
-      ...last,checkouts:[...rows(last.checkouts),{checkoutId:actual.newCheckoutId,projectId,name:actual.name,createdAt:actual.createdAt,draftWorkingCopy:false}],
+      ...last,checkouts:[...rows(last.checkouts),{checkoutId:actual.newCheckoutId,projectId,name:actual.name,createdAt:actual.createdAt,
+        draftWorkingCopy:false,ownerDependencyCopyEditor:true}],
     }:last);
   };
   const createDependencyCopy=()=>{
@@ -1604,7 +1615,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         onTaskRegistered();onOpenTask(work.taskId,work.checkoutId,{runId:work.runId,epoch:work.epoch});
       }:undefined}
       onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined}
-      prepareBuildLabel={showViteSaveLabel?'从这次保存核对网页构建':directImportedSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
+      prepareBuildLabel={showViteSaveLabel?'从这次保存核对网页构建':directImportedSave||dependencyForSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
     {originalDifference&&<SettingsDialog isOpen title="本轮原改稿" closeLabel="返回当前工作副本" onClose={closeRetainedOriginal}>
       <div className="pw-project-draft">
         <strong className="pw-project-draft-path">{originalDifference.path}</strong>

@@ -1340,7 +1340,7 @@ public final class LocalModule implements EngineModule {
         DirectViteEditorResume resume=null;
         if(selected.vite())try{
             EditorSaveOrigin origin=editorSaveOrigin(snapshot.getJSONObject("checkout"),project,checkout);
-            if(origin==EditorSaveOrigin.BUILTIN_VITE||origin==EditorSaveOrigin.IMPORTED_VERSIONED){
+            if(origin==EditorSaveOrigin.BUILTIN_VITE||(origin!=null&&origin.versioned())){
                 ProjectFileSavePosition position=readEditorSavePosition(origin,project,checkout,source);
                 if(position!=null){
                     JSONArray actual=snapshot.getJSONArray("files");
@@ -2136,13 +2136,24 @@ public final class LocalModule implements EngineModule {
                 "nativeGitImportPending","collectedFromCheckoutId","collectionOperationId"})if(row.has(special))return false;
         return true;
     }
-    private enum EditorSaveOrigin { PREPARED, BUILTIN_VITE, IMPORTED_VERSIONED }
+    private enum EditorSaveOrigin {
+        PREPARED, BUILTIN_VITE, IMPORTED_VERSIONED, DEPENDENCY_COPY;
+        boolean versioned(){return this==IMPORTED_VERSIONED||this==DEPENDENCY_COPY;}
+    }
+    /** A private native catalogue/snapshot fact, separate from a valid current Vite plan. */
+    public static final String OWNER_DEPENDENCY_COPY_EDITOR="ownerDependencyCopyEditor";
+    public synchronized boolean ownerDependencyCopyEditorForOwner(JSONObject actual,String project,String checkout){
+        if(closed||!ordinaryDirectNodeCheckout(actual)||actual.has("sourceImport")||actual.has("ownerDevelopmentRequestId"))return false;
+        try{return OwnerNodeDependencyCheckout.publishedEditorCheckout(root,actual,project,checkout);}
+        catch(Exception unavailable){return false;}
+    }
     private static boolean importIdentity(Object value){
         return value instanceof String id&&id.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}");
     }
     /** The originally published copy, never an inherited or cached source marker. */
     private EditorSaveOrigin editorSaveOrigin(JSONObject row,String project,String id)throws Exception{
         if(originalPreparedOwnerCopy(row,project,id))return EditorSaveOrigin.PREPARED;
+        if(ownerDependencyCopyEditorForOwner(row,project,id))return EditorSaveOrigin.DEPENDENCY_COPY;
         JSONObject source=row.optJSONObject("sourceImport");
         if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||!ordinaryDirectNodeCheckout(row)||
                 row.has("ownerDevelopmentRequestId")||source==null||!"new_project".equals(source.opt("mode"))||
@@ -2168,7 +2179,7 @@ public final class LocalModule implements EngineModule {
         return Boolean.TRUE.equals(registered.opt("registered"))&&project.equals(registered.opt("expectedProjectId"))?origin:null;
     }
     private ProjectFileSavePosition readEditorSavePosition(EditorSaveOrigin origin,String project,String id,JSONObject source)throws Exception{
-        return origin==EditorSaveOrigin.IMPORTED_VERSIONED?ProjectFileSavePosition.readForOwner(root,project,id,source.getString("sourceDigest")):
+        return origin.versioned()?ProjectFileSavePosition.readForOwner(root,project,id,source.getString("sourceDigest")):
                 ProjectFileSavePosition.readForOwner(root,project,id);
     }
     private static boolean matchingSavedFile(JSONObject member,ProjectFileSavePosition position){
@@ -2191,7 +2202,7 @@ public final class LocalModule implements EngineModule {
                 if(origin!=null&&current.getAsBoolean()){
                     var position=new ProjectFileSavePosition(intent.projectId,intent.checkoutId,intent.path,sha);
                     String revision=null;
-                    if(origin==EditorSaveOrigin.IMPORTED_VERSIONED){
+                    if(origin.versioned()){
                         // Only this confirmed native write is applied to the already checked manifest.
                         // The ordinary listing and build preflight compare this pin to their actual fresh tree.
                         JSONArray manifest=new JSONArray(),before=committed.sourceManifest();

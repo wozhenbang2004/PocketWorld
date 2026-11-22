@@ -79,7 +79,15 @@ final class BackgroundPhoneRun {
         try{
             if(!AndroidPhoneReadiness.snapshot(service,null).getJSONObject("taskNotifications").optBoolean("ready"))throw new SecurityException("停止入口不可用，请开启任务通知或重新启用手机操作服务");
             startLeaseWatch(runningId,runningRunId,runningEpoch,ownerControl);
-            worker.execute(()->{if(deviceGoal!=null)runDeviceGoal(lastStartId);else run(runningId,runningRunId,runningEpoch,runningGoal,runningConfig,ownerControl,lastStartId,manualOnly);});
+            worker.execute(()->{
+                // This start path already posted this session's ordinary foreground
+                // notification. An optional one-shot watch never creates a channel or gates the run.
+                if(!manualOnly&&deviceGoal==null&&teamAdmission==null)
+                    app.armFirstBackgroundResultWatch(runningId,runningRunId,runningEpoch,ownerControl,
+                            ()->!destroyed&&!finishing.get()&&service.stillHostsBackground(this));
+                if(deviceGoal!=null)runDeviceGoal(lastStartId);
+                else run(runningId,runningRunId,runningEpoch,runningGoal,runningConfig,ownerControl,lastStartId,manualOnly);
+            });
         }catch(Exception unavailable){finishAttempt(runningId,runningRunId,ownerControl,new RunOutcome(deviceGoal==null?"awaiting_user":"interrupted",deviceGoal==null?safeMessage(unavailable):"原设备后台执行器未能启动，请核对本机的可见停止条件。",new JSONObject()),lastStartId);}
     }
     void onTaskEvent(JSONObject task){

@@ -353,6 +353,9 @@ public final class PhoneRunService extends Service {
             app.pushTask(id);settleForegroundOwnership(startId);
         }
     }
+    boolean stillHostsBackground(BackgroundPhoneRun owner){
+        return !destroyed&&backgroundRuns.get(owner.runningId)==owner;
+    }
     /** Exact owner callback; no completion may remove another run of the same task. */
     void backgroundFinished(BackgroundPhoneRun session,int startId){
         if(!backgroundRuns.remove(session.runningId,session))return;

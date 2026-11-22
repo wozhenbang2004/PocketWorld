@@ -30,10 +30,13 @@ public final class ProjectOwnerWorkflows {
     public JSONObject inspectForOwner(String project,boolean includeRuntime)throws Exception {
         ProjectBuildPlan.identity(project);local.requireAvailableDraftProjectForOwner(project);JSONArray available=new JSONArray(),rows=local.ownerCheckoutRecords();
         for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(!project.equals(row.optString("projectId"))||!ordinaryCheckout(row))continue;
-            available.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
+            String checkout=row.getString("id");
+            JSONObject choice=new JSONObject().put("checkoutId",checkout).put("projectId",project).put("name",row.optString("name")).put("createdAt",row.optLong("createdAt"))
                 .put("draftWorkingCopy",row.optJSONObject(OwnerDraftWorkCopy.FIELD)!=null)
                 .put("taskPackageSource",ProjectTaskSourceRecord.hasPublishedIdentity(row))
-                .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind"))));}
+                .put("hostSource",row.optJSONObject("sourceImport")!=null&&"host_saved_snapshot".equals(row.getJSONObject("sourceImport").opt("sourceKind")));
+            if(local.ownerDependencyCopyEditorForOwner(row,project,checkout))choice.put(LocalModule.OWNER_DEPENDENCY_COPY_EDITOR,true);
+            available.put(choice);}
         JSONObject picked=new JSONObject().put("projectId",project).put("checkouts",available).put("executionAuthorized",false);
         return includeRuntime?picked.put("runtime",local.projectRuntimeForHost("managed_process_v1")):picked;
     }
@@ -111,6 +114,8 @@ public final class ProjectOwnerWorkflows {
             }
             source.put("savedEditInSource",new JSONObject().put("path",savedPath).put("savedHash",savedHash)
                 .put("sourceDigest",source.getString("sourceDigest")).put("matches",matches));
+            if(matches&&local.ownerDependencyCopyEditorForOwner(snapshot.getJSONObject("checkout"),project,checkout))
+                source.put(LocalModule.OWNER_DEPENDENCY_COPY_EDITOR,true);
         }
         source.remove("files");
         if(wrapper!=null)source.put("androidGradleWrapper",wrapper);

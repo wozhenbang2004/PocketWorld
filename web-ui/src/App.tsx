@@ -324,14 +324,18 @@ function sameAttachedWorkDraft(a:AttachedWorkDraft,b:AttachedWorkDraft){
   a.files.length===b.files.length&&a.files.every((file,index)=>file.id===b.files[index].id&&file.sha256===b.files[index].sha256&&
    file.name===b.files[index].name);
 }
-function originalTeamDraft(live:ReturnType<typeof bridge.getState>,selectedTeam?:string){
+function originalTeamDraft(live:ReturnType<typeof bridge.getState>,selectedTeam?:string,firstHome=false){
  const owner=live.state,draft=live.composer,phone=obj(live.phoneDraft),conversation=owner.conversationId;
- if(typeof conversation!=='string'||!conversation||draft?.ready!==true||draft.conversationId!==conversation||
-    draft.key!==`conversation:${conversation}`||!Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||draft.revision<1||
+ // A first input has no conversation ID yet. Reuse the native classification
+ // of the ordinary new draft; a report follow-up or a pending send is not it.
+ const original=firstHome?conversation===null&&draft?.ordinaryNewAttachmentDraft===true&&draft.conversationId===''&&
+    typeof draft.key==='string'&&draft.key.startsWith('new:'):
+    typeof conversation==='string'&&!!conversation&&draft?.conversationId===conversation&&draft.key===`conversation:${conversation}`;
+ if(!original||draft?.ready!==true||!Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||draft.revision<1||
     phone.phone!==false||phone.channelOrigin!==false||owner.conversationReader||owner.filePath||owner.queuedInputsPage||
     owner.attachmentWorkspace?.open||owner.chatSubmitting||owner.phoneSubmitting||foregroundConversationTurn(owner)||
     !live.capabilities.commands.includes('composer.object.add'))return null;
- const input={conversation,key:draft.key as string,epoch:draft.epoch as number,revision:draft.revision as number};
+ const input={conversation:typeof conversation==='string'?conversation:'',key:draft.key as string,epoch:draft.epoch as number,revision:draft.revision as number};
  const refs=asArray<Json>(draft.objectRefs),workRefs=refs.filter(row=>row?.kind==='work');
  if(!workRefs.length){
   const teams=refs.filter(row=>row?.kind==='team');
@@ -343,9 +347,9 @@ function originalTeamDraft(live:ReturnType<typeof bridge.getState>,selectedTeam?
      draft.pending.some(row=>row?.draftKey===draft.key))return null;
   return {...input,kind:'goal' as const,text:draft.text};
  }
- if(workRefs.length!==1)return null;
+ if(firstHome||workRefs.length!==1)return null;
  const ref=workRefs[0],rows=asArray<Task>(owner.tasks).filter(task=>task.id===ref.id),task=rows[0];
- const work=ordinaryChatWorkRow(rows.length===1?task:undefined,conversation),generation=task?.raw?.ownerWork?.generation;
+ const work=ordinaryChatWorkRow(rows.length===1?task:undefined,input.conversation),generation=task?.raw?.ownerWork?.generation;
  return work?.runId&&work.epoch>0&&work.runId===ref.runId&&work.epoch===ref.epoch&&typeof generation==='string'&&generation
   ?{...input,kind:'work' as const,work,generation}:null;
 }
@@ -3139,10 +3143,12 @@ export default function App(){
   const reviewed=phoneReviewLive.current;
   if(document.hidden||phoneAction.current||!reviewed||phoneReviewPending||phoneStart?.status==='unknown')return;
   if(manualFirstMain&&reviewed.manualFirstMainAvailable!==true)return;
-  if(watchReviewedHandle&&(!manualFirstMain||watchReviewedHandle!==reviewed.reviewHandle))return;
+  const backgroundWatch=!manualFirstMain&&reviewed.mode==='background'&&reviewed.firstBackgroundResultWatchAvailable===true&&!!reviewed.conversationId;
+  if(watchReviewedHandle&&(watchReviewedHandle!==reviewed.reviewHandle||!manualFirstMain&&!backgroundWatch))return;
   const startWindow=phoneWindow.current,startDoc=bridge.getDocumentEpoch();const here=()=>!document.hidden&&phoneWindow.current===startWindow&&bridge.getDocumentEpoch()===startDoc;
   phoneAction.current=true;phoneText.markSent();setPhoneReviewPending(true);
-  void act('phone.start',{reviewHandle:reviewed.reviewHandle,...(manualFirstMain?{manualFirstMain:true}:{}),...(watchReviewedHandle?{watchFirstMainResult:true}:{})}).then(value=>{
+  void act('phone.start',{reviewHandle:reviewed.reviewHandle,...(manualFirstMain?{manualFirstMain:true}:{}),
+    ...(watchReviewedHandle?(manualFirstMain?{watchFirstMainResult:true}:{watchFirstBackgroundResult:true}):{})}).then(value=>{
     if(!here())return;const receipt=phoneStartReceipt(value,reviewed);setPhoneStart(receipt);
     if(reviewed.conditions&&receipt.status==='rejected'&&value?.recheckReview===reviewed.reviewHandle){
       setPhoneReview(current=>current?.reviewHandle===reviewed.reviewHandle?{...current,documentEpoch:undefined}:current);
@@ -4271,37 +4277,38 @@ export default function App(){
    if(request.originalWorkDraft){
      const selected=request.originalWorkDraft,origin=relatedOrigin.current,visit=origin?.teamDraft,teamId=request.teamId;
      if(route!=='teams'||!origin||!visit||!teamId||!/^[a-f0-9-]{36}$/.test(teamId))return;
+     const firstHome=origin.route==='butler'&&visit.kind==='goal'&&visit.conversation==='';
      const at=(navigation:number)=>!document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===visit.documentEpoch;
      const inSelection=()=>relatedOrigin.current===origin&&at(visit.navigation);
      const mayReturn=()=>{
        if(!inSelection())return false;
        const live=bridge.getState(),view=obj(live.view);
-       if(!selected()||draftSwitchPending()||view.section!=='teams'||view.taskId!==null||view.resumeRevision!==visit.resume||!sameTeamDraftInput(visit,originalTeamDraft(live))){
+       if(!selected()||draftSwitchPending()||view.section!=='teams'||view.taskId!==null||view.resumeRevision!==visit.resume||!sameTeamDraftInput(visit,originalTeamDraft(live,undefined,firstHome))){
          setLocalError(originalTeamDraftChanged);return false;
        }
        return true;
      };
      if(!mayReturn())return;
      setLocalError('');
-     void navigate('chat',()=>{
+     void navigate(firstHome?'butler':'chat',()=>{
        if(relatedOrigin.current===origin)relatedOrigin.current=origin.parent||null;
        const arrived=()=>at(visit.navigation+1);
        const here=(sameRevision=true)=>{
          const live=bridge.getState(),view=obj(live.view);
          return arrived()&&!draftSwitchPending()&&view.taskId===null&&view.resumeRevision===visit.resume&&
-           sameTeamDraftInput(visit,originalTeamDraft(live,sameRevision?undefined:teamId),sameRevision);
+           sameTeamDraftInput(visit,originalTeamDraft(live,sameRevision?undefined:teamId,firstHome),sameRevision);
        };
-       const atChat=()=>here(false)&&obj(bridge.getState().view).section===null;
+       const atOriginalInput=()=>here(false)&&obj(bridge.getState().view).section===null;
        void (async()=>{
          // Secondary already retires its native window; wait for that receipt, not a new read.
          const ready=await awaitPickerProjection(here,()=>obj(bridge.getState().view).section===null?true:undefined);
-         if(!ready||!here()||!atChat()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
-         const added=await stageButlerObject({kind:'team',id:teamId},atChat,true);
-         if(!atChat()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
+         if(!ready||!here()||!atOriginalInput()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
+         const added=await stageButlerObject({kind:'team',id:teamId},atOriginalInput,true);
+         if(!atOriginalInput()){if(arrived())setLocalError(originalTeamDraftChanged);return;}
          if(!added)return;
-         setLocalStatus('编组已关联到原对话草稿，未发送。');
-         requestAnimationFrame(()=>{if(atChat())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
-       })().catch(error=>{if(arrived())setLocalError(atChat()&&error instanceof Error?error.message:originalTeamDraftChanged)});
+         setLocalStatus(firstHome?'编组已关联到原输入，目标未改，尚未发送。':'编组已关联到原对话草稿，未发送。');
+         requestAnimationFrame(()=>{if(atOriginalInput())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
+       })().catch(error=>{if(arrived())setLocalError(atOriginalInput()&&error instanceof Error?error.message:originalTeamDraftChanged)});
      },{keepOrigin:true,stillCurrent:mayReturn});
      return;
    }
@@ -4640,9 +4647,11 @@ export default function App(){
  const attentionTasks=tasks.filter(attention);
  const navigationSelection=state.attachmentWorkspace?.open?'artifacts':route==='chat'?'butler':['developer-logs','setup','remoteInbox','profile'].includes(route)?route:isPrimaryRoute?route:workspaceNavigationKey(secondaryPage||route);
  const pickTeamForCurrentDraft=useCallback((expected?:TeamDraftInput)=>{
-  if(route!=='chat'||taskOpen||intent!=='chat'||draftSwitchPending()||document.hidden||
+  // The Home draft uses the explicit composer button, not ordinary directory navigation.
+  const firstHome=route==='butler'&&expected?.kind==='goal'&&expected.conversation==='';
+  if((route!=='chat'&&!firstHome)||taskOpen||intent!=='chat'||draftSwitchPending()||document.hidden||
      expected&&navigationWindow.current!==navigationRevision)return false;
-  const live=bridge.getState(),view=obj(live.view),draft=originalTeamDraft(live);
+  const live=bridge.getState(),view=obj(live.view),draft=originalTeamDraft(live,undefined,firstHome);
   if(!draft||expected&&!sameTeamDraftInput(expected,draft)||view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision))return false;
   if(draft.kind==='goal'&&chatDraft.currentValue()!==draft.text){setLocalError('当前输入尚未核对，请稍后选择编组。原文字不变。');return true;}
   const visit:TeamDraftVisit={...draft,documentEpoch:bridge.getDocumentEpoch(),navigation:navigationWindow.current+1,resume:view.resumeRevision};
@@ -4650,7 +4659,7 @@ export default function App(){
   void navigate('teams',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent:()=>{
    if(document.hidden||navigationWindow.current!==visit.navigation-1||bridge.getDocumentEpoch()!==visit.documentEpoch)return false;
    const current=bridge.getState(),window=obj(current.view);
-   const exact=!draftSwitchPending()&&window.section===null&&window.taskId===null&&window.resumeRevision===visit.resume&&sameTeamDraftInput(visit,originalTeamDraft(current))&&
+   const exact=!draftSwitchPending()&&window.section===null&&window.taskId===null&&window.resumeRevision===visit.resume&&sameTeamDraftInput(visit,originalTeamDraft(current,undefined,firstHome))&&
     (visit.kind!=='goal'||chatDraft.currentValue()===visit.text);
    if(!exact)setLocalError(originalTeamDraftChanged);
    return exact;
@@ -6349,8 +6358,8 @@ export default function App(){
   }catch(error){if(current())setLocalError(error instanceof Error?error.message:String(error))}
   finally{if(reportDraftFlight.current===pin){reportDraftFlight.current=null;setReportDraftSwitching(false)}}
  };
- const chooseDraftTeam=route==='chat'&&intent==='chat'&&!taskOpen&&!draftSwitching&&snapshot?.view?.section===null&&snapshot.view.taskId===null&&
-   can('teams.snapshot')&&can('teams.readDefinition')?originalTeamDraft(snapshot):null;
+ const chooseDraftTeam=isChatSurface&&intent==='chat'&&!taskOpen&&!draftSwitching&&snapshot?.view?.section===null&&snapshot.view.taskId===null&&
+   can('teams.snapshot')&&can('teams.readDefinition')?originalTeamDraft(snapshot,undefined,route==='butler'):null;
  const composerRegion=<div className="pw-composer-region">
    {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context">
     <Button variant="ghost" size="small" leadingIcon={homeHostMessage?IconServer:IconChat} onClick={homeHostMessage?continueSavedHostFromHome:foregroundTurn&&!pendingHere?returnToForegroundReply:()=>void navigate('chat')} aria-label={homeHostMessage?`${continueSavedHostLabel}：${currentConversation?.title||'原交办'}`:pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}>

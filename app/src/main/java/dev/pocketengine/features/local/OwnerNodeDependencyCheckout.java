@@ -39,11 +39,42 @@ public final class OwnerNodeDependencyCheckout {
         source=exactSource.getString("sourceDigest");lock=exactLock.getString("lockSha256");reviewedLock=exactLock.toString();
         if(!source.matches("[a-f0-9]{64}")||!lock.matches("[a-f0-9]{64}")||!"npm".equals(exactLock.opt("manager"))||
                 !"package-lock.json".equals(exactLock.opt("lockPath")))throw new SecurityException("不是已核对的本机 Vite 锁");
-        String key=String.join("\n",FORMAT,project,original,source,lock);
-        checkout=UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
+        checkout=identity(project,original,source,lock);
         if(checkout.equals(original))throw new SecurityException("新副本不能是原副本");
         files=exactSource.getInt("fileCount");bytes=exactSource.getInt("bytes");
-        name="依赖副本 · "+source.substring(0,8);
+        name=name(source);
+    }
+    private static String identity(String project,String original,String source,String lock){
+        return UUID.nameUUIDFromBytes(String.join("\n",FORMAT,project,original,source,lock)
+                .getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    private static String name(String source){return "依赖副本 · "+source.substring(0,8);}
+    private static boolean uuid(Object value){return value instanceof String text&&text.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}");}
+    private static boolean hash(Object value){return value instanceof String text&&text.matches("[a-f0-9]{64}");}
+    private static boolean positive(Object value,long max){
+        return (value instanceof Integer||value instanceof Long)&&((Number)value).longValue()>0&&((Number)value).longValue()<=max;
+    }
+
+    /** Re-prove the actual registration for an editor, not the old source or any execution permit.
+     * The caller supplies a native checkout record already read for this catalogue/working snapshot. */
+    static boolean publishedEditorCheckout(File root,JSONObject record,String project,String checkout)throws Exception{
+        JSONObject pin=record.optJSONObject(FIELD);
+        if(pin==null||pin.length()!=9||!FORMAT.equals(pin.opt("format"))||!uuid(project)||!uuid(checkout)||
+                !project.equals(record.opt("projectId"))||!checkout.equals(record.opt("id"))||
+                !project.equals(pin.opt("projectId"))||!checkout.equals(pin.opt("newCheckoutId"))||
+                !uuid(pin.opt("checkoutId"))||checkout.equals(pin.opt("checkoutId"))||
+                !hash(pin.opt("sourceDigest"))||!hash(pin.opt("lockSha256"))||
+                !positive(pin.opt("fileCount"),ProjectSources.MAX_FILES)||!positive(pin.opt("bytes"),ProjectSources.MAX_TOTAL_BYTES)||
+                !positive(record.opt("createdAt"),Long.MAX_VALUE)||record.optJSONArray("files")==null)return false;
+        String initialSource=pin.getString("sourceDigest");
+        if(!name(initialSource).equals(record.opt("name"))||!name(initialSource).equals(pin.opt("name"))||
+                !checkout.equals(identity(project,pin.getString("checkoutId"),initialSource,pin.getString("lockSha256"))))return false;
+        File registered=OwnerDraftCopyShelf.location(root,checkout,false);
+        directoryKey(root);directoryKey(registered.getParentFile());directoryKey(registered);directoryKey(new File(registered,"files"));
+        File metadata=new File(registered,"checkout.json");
+        var physical=Files.readAttributes(metadata.toPath(),BasicFileAttributes.class,NOFOLLOW);
+        return physical.isRegularFile()&&!physical.isSymbolicLink()&&physical.fileKey()!=null&&physical.size()>0&&
+                physical.size()<=MAX_RECORD&&metadata.equals(metadata.getCanonicalFile());
     }
     String project(){return project;}
     String original(){return original;}
