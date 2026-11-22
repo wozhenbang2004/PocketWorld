@@ -384,22 +384,29 @@ public final class FeatureHost implements AutoCloseable {
     /** Same original owner Work, separate read-only native pipe channels. No effect/retry on absence. */
     public JSONObject readOwnerPythonForOwner(String id,String run,int epoch,String operation,BooleanSupplier window,
             java.util.function.Consumer<OwnerPythonOutputText> completeText)throws Exception{
+        return readOwnerPythonForOwner(id,run,epoch,operation,window,null,completeText);
+    }
+    public JSONObject readOwnerPythonForOwner(String id,String run,int epoch,String operation,BooleanSupplier window,
+            OwnerPythonRun.CompleteText requested,java.util.function.Consumer<OwnerPythonOutputText> completeText)throws Exception{
         if(tasks==null||!(module("local") instanceof dev.pocketengine.features.local.LocalModule local)||!window.getAsBoolean())
             throw new IllegalStateException("原本机脚本工作未打开");
         var original=tasks.ownerPythonOriginalForOwner(id,run,epoch,operation);
         JSONObject result=tasks.ownerPythonStatusForOwner(original);
+        if(requested!=null&&(!"settled".equals(result.opt("state"))||completeText==null))
+            throw new SecurityException("必须在已核对结束的原脚本工作读取完整输出");
         if("not_started".equals(result.opt("state"))){
             if(!window.getAsBoolean())throw new SecurityException("原脚本工作窗口已关闭");
             return result; // positive pre-provider proof: there is no native job or output to look up
         }
         var attachments=module("attachments") instanceof AttachmentsModule originalBook?originalBook:null;
+        if(requested!=null&&attachments==null)throw new SecurityException("原私人文件库不可用，没有读取完整输出");
         TaskStore.OwnerPythonTextPublication savedText=null;
         if(attachments!=null&&"settled".equals(result.opt("state"))){
             savedText=tasks.ownerPythonTextPublicationForOwner(original);
             if(savedText!=null){
                 JSONObject saved=readOriginalPythonText(attachments,original,savedText,window);
                 result.put("textOutputSave",saved);
-                if("saved".equals(saved.opt("state")))return result.put("outputState","unavailable");
+                if(requested!=null||"saved".equals(saved.opt("state")))return result.put("outputState","unavailable");
             }
         }
         RunControl read=new RunControl();read.bindHostRun(id,run,epoch);
@@ -421,22 +428,28 @@ public final class FeatureHost implements AutoCloseable {
             OwnerPythonOutputText[] candidate={null};
             try{
                 JSONObject output;
-                try{output=local.ownerPythonRuntime().openOwnerPythonOutput(original,read,window,
+                try{output=local.ownerPythonRuntime().openOwnerPythonOutput(original,read,window,requested,
                         attachments!=null&&savedText==null&&completeText!=null?value->candidate[0]=value:null);}
-                catch(Exception unavailable){if(Thread.currentThread().isInterrupted()||!window.getAsBoolean())throw unavailable;output=null;}
+                catch(Exception unavailable){if(requested!=null||Thread.currentThread().isInterrupted()||!window.getAsBoolean())throw unavailable;output=null;}
                 if(output!=null){
                     String[] fields={"stdout","stderr","stdoutBytesShown","stderrBytesShown","truncated","encoding"};
                     JSONObject payload=new JSONObject(),scalar=new JSONObject(output.toString());
-                    for(String field:fields)payload.put(field,scalar.remove(field));
+                    JSONObject full=scalar.optJSONObject("completeText");scalar.remove("completeText");
+                    if(requested==null)for(String field:fields)payload.put(field,scalar.remove(field));
                     if(dev.pocketengine.features.local.project.ProjectSources.canonical(result.getJSONObject("exit"))
                             .equals(dev.pocketengine.features.local.project.ProjectSources.canonical(scalar))){
-                        for(String field:fields)result.put(field,payload.get(field));
-                        result.put("outputState","available");
+                        if(requested==null){
+                            for(String field:fields)result.put(field,payload.get(field));
+                            result.put("outputState","available").putOpt("completeText",full);
+                        }
                         if(candidate[0]!=null&&tasks.ownerPythonTextPublicationForOwner(original)==null){
+                            if(requested!=null)result.put("completeText",full);
                             read.check();completeText.accept(candidate[0]);candidate[0]=null;
                         }
                     }
                 }
+                if(requested!=null&&!result.has("completeText"))
+                    throw new SecurityException("完整原输出或保存状态已变化，没有使用其他结果");
             }finally{if(candidate[0]!=null)candidate[0].close();}
         }
         read.check();return result;

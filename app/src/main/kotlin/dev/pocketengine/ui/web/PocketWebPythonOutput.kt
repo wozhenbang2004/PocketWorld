@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.features.FeatureHost
 import dev.pocketengine.features.local.runtime.OwnerPythonOutputText
+import dev.pocketengine.features.local.runtime.OwnerPythonRun
 import java.util.UUID
 import java.util.function.BooleanSupplier
 import java.util.function.Consumer
@@ -36,8 +37,18 @@ internal class PocketWebPythonOutput(
     fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         require(action in COMMANDS)
         val saving = action == SAVE
-        val keys = setOf("taskId", "runId", "epoch", "operationId") + if (saving) setOf("outputHandle") else emptySet()
-        require(args.keys().asSequence().toSet() == keys && keys.filter { it != "epoch" }.all { args.opt(it) is String })
+        val fullRead = !saving && args.has("completeText")
+        val keys = setOf("taskId", "runId", "epoch", "operationId") +
+            (if (saving) setOf("outputHandle") else if (fullRead) setOf("completeText") else emptySet())
+        require(args.keys().asSequence().toSet() == keys && (keys - "epoch" - "completeText").all { args.opt(it) is String })
+        val complete = if (fullRead) args.getJSONObject("completeText").let { target ->
+            val size = target.opt("bytes")
+            require(target.keys().asSequence().toSet() == setOf("bytes", "receiptSha256") &&
+                (size is Int || size is Long) && target.opt("receiptSha256") is String)
+            val bytes = (size as Number).toLong()
+            require(bytes in 1L..Int.MAX_VALUE.toLong())
+            OwnerPythonRun.CompleteText(bytes.toInt(), target.getString("receiptSha256"))
+        } else null
         val task = args.getString("taskId")
         val epoch = args.opt("epoch")
         require(uuid.matches(task) && task == args.opt("runId") && task == args.opt("operationId") &&
@@ -62,7 +73,7 @@ internal class PocketWebPythonOutput(
                     if (reviewed != null) return@runCatching reviewed.snapshot.use {
                         host().saveOwnerPythonTextForOwner(task, task, 1, task, it, BooleanSupplier { current() })
                     }
-                    val observed = host().readOwnerPythonForOwner(task, task, 1, task, BooleanSupplier { current() }, Consumer { candidate = it })
+                    val observed = host().readOwnerPythonForOwner(task, task, 1, task, BooleanSupplier { current() }, complete, Consumer { candidate = it })
                     check(current()) { "原脚本工作窗口已关闭" }
                     candidate?.let { snapshot ->
                         val token = Offer(task, window, UUID.randomUUID().toString(), SystemClock.elapsedRealtime() + HOLD_MILLIS, snapshot)
@@ -83,6 +94,7 @@ internal class PocketWebPythonOutput(
                     }, {
                         next?.snapshot?.close()
                         done(null, if (saving) "未核对到本次 TXT 保存，请读取原工作核对；不会自动保存第二次。"
+                            else if (fullRead) "未核对到这次完整的 UTF-8 输出，没有保存片段。"
                             else "没有核对到原脚本结果；没有再次运行。")
                     })
                 }

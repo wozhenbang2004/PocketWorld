@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Button } from './forms-library';
-import { ownerPythonRead, ownerPythonSaveText, pythonOutputSaveResult, pythonReadResult,
+import { ownerPythonRead, ownerPythonSaveText, pythonCompleteTextRead, pythonOutputSaveResult, pythonReadResult,
   type OriginalPythonRun, type PythonExit, type PythonOutputFile, type PythonOutputSave, type PythonRead } from './owner-python-run';
 
 const endText = (exit: PythonExit) => {
@@ -50,6 +50,24 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
     openedOutput.current=true;
     if(read?.state!=='settled')void readOutput();
   },[completion,canRead,pending,read,readOutput]);
+  const completeText=read?.state==='settled'?read.completeText:undefined;
+  const reviewCompleteText = async () => {
+    if (!completeText || textSave || !canRead || !canSaveText || entered.current || submitted.current || !current.current()) return;
+    entered.current=true;setPending(true);setError('');
+    const {taskId,runId,operationId,epoch}=work;
+    try {
+      const value=await bridge.command(ownerPythonRead,{taskId,runId,operationId,epoch,completeText});
+      if (!alive.current || !current.current()) return;
+      const reply=pythonCompleteTextRead(value,work,completeText);
+      if (!reply) throw Error('没有核对到这次完整输出，没有保存片段。');
+      setTextSave(reply);
+    } catch (failure) {
+      if (alive.current && current.current()) setError(failure instanceof Error?failure.message:'没有核对到这次完整输出。');
+    } finally {
+      entered.current=false;
+      if (alive.current) setPending(false);
+    }
+  };
   const saveText = async () => {
     const ready=textSave;
     if (ready?.state!=='ready' || !canSaveText || submitted.current || entered.current || !current.current()) return;
@@ -101,9 +119,11 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
       {output.stdout?<pre className="pw-checkout-review-diff" aria-label="程序输出">{output.stdout}</pre>:<p>没有程序输出。</p>}
       <h4>错误输出</h4>
       {output.stderr?<pre className="pw-checkout-review-diff" aria-label="错误输出">{output.stderr}</pre>:<p>没有错误输出。</p>}
-      {output.truncated && <p>只显示已保留的部分输出。</p>}
+      {output.truncated && <p>{completeText?'这里只预览部分输出。':'只显示已保留的部分输出。'}</p>}
+      {completeText && !textSave && canRead && canSaveText && <Button variant="secondary" disabled={pending}
+        onClick={()=>void reviewCompleteText()}>核对完整输出</Button>}
       {textSave?.state==='ready' && canSaveText && <Button variant="secondary" disabled={pending}
-        onClick={()=>void saveText()}>保存本次输出为 TXT</Button>}
+        onClick={()=>void saveText()}>{completeText?'保存完整输出为 TXT':'保存本次输出为 TXT'}</Button>}
     </div>}
   </section>;
 }

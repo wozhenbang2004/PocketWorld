@@ -14,7 +14,8 @@ import org.json.JSONObject;
 public final class OwnerPythonOutputText implements AutoCloseable {
     public static final String ROLE="owner_python_output_text", EVIDENCE="original_owner_python_output_text";
     private static final String FORMAT="pocketworld.owner-python-output-text.v1", MIME="text/plain";
-    private static final int MAX_RAW=65536, MAX_TEXT=MAX_RAW+1024;
+    static final int MAX_RAW=120*1024;
+    private static final int MAX_TEXT=MAX_RAW+1024;
     private final Pin pin;
     private byte[] bytes;
 

@@ -13,7 +13,14 @@ import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form
 import './knowledge-depth.css';
 
 type Data = Record<string, any>;
-type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void; onEditingChange: (value: boolean) => void; registerBeforeLeave?: RegisterBeforeLeave };
+export type PlanSettingsAnchor = { id: string; revision: number; observedAt: number; scrollTop: number; listScrollTop: number };
+export type RegisterPlanSettingsAnchor = (read: () => PlanSettingsAnchor | undefined) => () => void;
+export type PlanSettingsReturn = {
+  anchor?: PlanSettingsAnchor; notificationRevision: number; notificationKey: string; current: () => boolean;
+  pending: () => boolean; take: () => boolean; waitForOwner: () => Promise<number | undefined>;
+};
+export type PlanSettingsNavigation = { registerPlanSettingsAnchor?: RegisterPlanSettingsAnchor; planSettingsReturn?: PlanSettingsReturn };
+type Props = PlanSettingsNavigation & { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void; onEditingChange: (value: boolean) => void; registerBeforeLeave?: RegisterBeforeLeave };
 type Editor = PlanTimingDraft & { goal: string; steps: PlanStepDraft[]; sources: Data; original: Data | null; stepId?: string; index?: number; viewHandle?: string };
 const rows = (value: any): Data[] => Array.isArray(value) ? value.filter(row => row && typeof row === 'object') : [];
 const time = (value: any) => Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : '未指定';
@@ -182,6 +189,19 @@ function planFileWindow(resume: number, epoch: number) {
     view?.section === 'commitments' && view.taskId === null && view.resumeRevision === resume;
 }
 
+const planSettingsUnavailable = '暂未核对到设置前的原目标。已回到持续目标列表，没有打开其他目标。';
+const planSettingsUncovered = ({ state }: ReturnType<typeof bridge.getState>) =>
+  state.filePath === null && state.conversationReader === null && state.attachmentWorkspace?.open === false &&
+  state.queuedInputsPage === null && state.chatAttachmentPickerOpen === false;
+const planSettingsWindow = (resume: number, epoch: number) =>
+  planFileWindow(resume, epoch) && planSettingsUncovered(bridge.getState());
+type PlanSettingsWindow = { visit: PlanSettingsReturn; resume: number; document: number };
+function settingsPlanProgress(plan: Data | undefined) {
+  if (!plan || !planWorkId(plan.id) || !Number.isSafeInteger(plan.revision) || plan.revision < 1 ||
+      plan.ownerId !== 'owner' || plan.spaceId !== 'private' || plan.referenceOnly !== true || plan.executionAuthorized !== false) return;
+  const progress = planProgressView(plan);
+  return progress?.readState === 'current' && progress.executionAuthorized === false ? progress : undefined;
+}
 function PlanProgress({ plan, run, supported, attention, currentAction, renewalReason, fileControl, fileResult, onWork }: {
   plan: Data; run: Props['run']; supported: Props['supported']; attention?: PlanWorkAttention; currentAction?: ReactNode; renewalReason?: string;
   fileControl?: ReactNode; fileResult?: ReactNode; onWork?: () => void;
@@ -263,14 +283,18 @@ function PlanContents({ plan, run, supported, discloseSteps = false, renderStepA
 }
 
 /** Plan definition, review, admission and receipts all stay in AutomationPlanHost/TaskStore. */
-export function PlansWorkspace({ state, supported, run, registerTransientBack, registerBeforeLeave, onEditingChange }: Props) {
+export function PlansWorkspace({ state, supported, run, registerTransientBack, registerBeforeLeave, onEditingChange, registerPlanSettingsAnchor, planSettingsReturn }: Props) {
   const formDraft = useFormDrafts(run, 'plans', registerBeforeLeave);
   const [snapshot, setSnapshot] = useState<Data>({}), [reading, setReading] = useState<Data | null>(null), [review, setReview] = useState<Data | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null), [settings, setSettings] = useState<Data | null>(null);
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const [busy, setBusy] = useState(false), [ack, setAck] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uncertain, setUncertain] = useState(false), [readAfterUnknown, setReadAfterUnknown] = useState(false);
   const [reminderSubmission, setReminderSubmission] = useState(false);
-  const openedNotification = useRef('');
+  const openedNotification = useRef(planSettingsReturn?.notificationKey ?? '');
+  const settingsRead = useRef(planSettingsReturn);
+  const settingsReturnWindow = reading?.settingsReturn as PlanSettingsWindow | undefined;
+  const returnedFromSettings = !settingsReturnWindow || settingsReturnWindow.visit.current() &&
+    planSettingsWindow(settingsReturnWindow.resume, settingsReturnWindow.document);
   const mutationPending = useRef(false);
   const taskWindow = useRef({ open: state.webWorkspaceTaskOpen, resume: state.webWorkspaceResumeRevision });
   const planWorkVisit = useRef<PlanWorkVisit | null>(null);
@@ -282,6 +306,21 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   const listPosition = useRef(0), openedId = useRef(''), presentedId = useRef('');
   const alive = useRef(true), scope = useRef(new OwnerWorkspaceRequest()), selected = useRef<Data | null>(null), reviewed = useRef<Data | null>(null);
   selected.current = reading; reviewed.current = review;
+  useLayoutEffect(() => registerPlanSettingsAnchor?.(() => {
+    const live = bridge.getState(), view = live.view as Data | undefined;
+    const scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
+    const plan = selected.current?.plan, progress = settingsPlanProgress(plan);
+    if (!alive.current || document.hidden || live.host?.ready !== true || view?.section !== 'commitments' || view.taskId !== null ||
+        !planSettingsUncovered(live) || busy || uncertain || editor || settings || review ||
+        mutationPending.current || fileVisit.current || fileFlight.current || !scroller?.isConnected || !plan || !progress ||
+        !(planWorkId(selected.current?.viewHandle) || settingsReturnWindow && returnedFromSettings)) return;
+    return { id: plan.id, revision: plan.revision, observedAt: progress.observedAt,
+      scrollTop: scroller.scrollTop, listScrollTop: listPosition.current };
+  }), [registerPlanSettingsAnchor, busy, uncertain, editor, settings, review, settingsReturnWindow, returnedFromSettings]);
+  useEffect(() => {
+    if (settingsReturnWindow && !returnedFromSettings)
+      setReading(old => old?.settingsReturn === settingsReturnWindow ? null : old);
+  }, [settingsReturnWindow, returnedFromSettings]);
   const closePlanFile = (restore = false) => {
     const visit = fileVisit.current;
     if (!visit) return false;
@@ -310,9 +349,23 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     finally { if (scope.current.finish(ticket) && alive.current) { mutationPending.current = false; setBusy(false); } }
   };
   const acceptReading = (value: Data) => { if (!value?.viewHandle || !value.plan?.id) throw new Error('未取得原目标读取。'); release(selected.current, 'viewHandle'); setReading(value); };
-  const readSnapshot = (returned?: PlanWorkVisit) => { void invoke('plans.snapshot', {}, value => {
+  const readSnapshot = (returned?: PlanWorkVisit, settingsBack?: PlanSettingsWindow) => { void invoke('plans.snapshot', {}, value => {
     if (!Array.isArray(value?.plans)) throw new Error('原计划清单尚未完整返回。');
     setSnapshot(value); if (uncertain) setReadAfterUnknown(true);
+    if (settingsBack) {
+      const {visit, resume, document: epoch} = settingsBack, anchor = visit.anchor;
+      if (!visit.current() || !planSettingsWindow(resume, epoch)) return;
+      const matches = rows(value.plans).filter(row => row.id === anchor?.id), fresh = matches[0];
+      const progress = matches.length === 1 ? settingsPlanProgress(fresh) : undefined;
+      if (!anchor || value.taskAuthority !== 'TaskStore' || !fresh || !progress ||
+          fresh.revision !== anchor.revision || progress.observedAt < anchor.observedAt) {
+        setNotice(planSettingsUnavailable); return;
+      }
+      // Use this exact current owner row. Do not restore a review handle or open another Work/file.
+      openedId.current = anchor.id; listPosition.current = anchor.listScrollTop;
+      setReading({ plan: fresh, viewHandle: '', settingsReturn: settingsBack });
+      return;
+    }
     if (!returned || !planReturnCurrent(returned.window) || value.taskAuthority !== 'TaskStore') return;
     const matches = rows(value.plans).filter(row => row.id === returned.plan.id), fresh = matches[0], progress = fresh && planProgressView(fresh);
     const previous = planProgressView(returned.plan), step = fresh && boundPlanWorkStep(fresh, returned.work);
@@ -334,8 +387,27 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
     else setNotice('通知对应的原目标暂不在当前清单，请刷新后核对；未打开其它目标。');
   }, [state.requestedExecutionPlanId, state.requestedExecutionPlanRevision, snapshot.plans, busy, editor, settings, review, state.webWorkspaceTaskOpen]);
   const prepare = (action: string, input: Data) => { if (uncertain) return; void invoke(action, input, value => { if (!value?.reviewHandle || !value.command) throw new Error('未取得原目标审阅。'); closeReview(); setReview(value); setAck(false); }); };
-  const hide = (active: boolean) => { closePlanFile(); if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old ? { ...old, viewHandle: '', returnWindow: undefined } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
-  useEffect(() => { alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh(); return () => { alive.current = false; planWorkVisit.current = null; fileVisit.current = null; fileFlight.current = null; scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false); }; }, []);
+  const hide = (active: boolean) => { closePlanFile(); if (mutationPending.current) { setUncertain(true); setReadAfterUnknown(false); mutationPending.current = false; } scope.current.invalidate(active); setBusy(false); closeReview(); setReading(old => old && !old.settingsReturn ? { ...old, viewHandle: '', returnWindow: undefined } : null); setEditor(old => old ? { ...old, viewHandle: '' } : null); setSettings(old => old ? { ...old, viewHandle: '' } : null); void run('plans.discard').catch(() => {}); };
+  useEffect(() => {
+    alive.current = true; scope.current.invalidate(document.visibilityState === 'visible');
+    const arrival = settingsRead.current;
+    let active = true;
+    if (!arrival?.take()) refresh();
+    else if (!arrival.anchor) { setNotice(planSettingsUnavailable); refresh(); }
+    else {
+      setBusy(true);
+      const epoch = bridge.getDocumentEpoch();
+      void arrival.waitForOwner().then(resume => {
+        if (!active) return;
+        if (resume !== undefined && arrival.current() && planSettingsWindow(resume, epoch)) readSnapshot(undefined, { visit: arrival, resume, document: epoch });
+        else { setBusy(false); if (arrival.current()) setNotice(planSettingsUnavailable); }
+      });
+    }
+    return () => {
+      active = false; alive.current = false; planWorkVisit.current = null; fileVisit.current = null; fileFlight.current = null;
+      scope.current.invalidate(false); release(selected.current, 'viewHandle'); release(reviewed.current, 'reviewHandle'); onEditingChange(false);
+    };
+  }, []);
   useEffect(() => { onEditingChange(busy || !!editor || !!settings || !!review); }, [busy, editor, settings, review]);
   useEffect(() => { const changed = () => { planWorkVisit.current = null; const active = document.visibilityState === 'visible'; hide(active); if (active) refresh(); }; const hidden = () => { planWorkVisit.current = null; hide(false); }; document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden); return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); }; });
   useEffect(() => {
@@ -357,16 +429,19 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
   }, [nativeTaskId, state.webWorkspaceTaskOpen, state.webWorkspaceResumeRevision, state.requestedTaskRevision, state.tasks]);
   useEffect(() => { registerTransientBack(() => { if (closePlanFile(true)) return true; if (busy) return true; if (review) { closeReview(); return true; } if (settings) { setSettings(null); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (reading) { returnToList(); return true; } return false; }); return () => registerTransientBack(null); }, [busy, review, settings, editor, reading, registerTransientBack]);
   useLayoutEffect(() => {
-    const id = reading?.plan?.id || '', scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
+    const id = returnedFromSettings ? reading?.plan?.id || '' : '', scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
     if (id) {
-      if (presentedId.current !== id) { if (scroller) scroller.scrollTop = 0; detailHeading.current?.focus({ preventScroll: true }); }
+      if (presentedId.current !== id) {
+        detailHeading.current?.focus({ preventScroll: true });
+        if (scroller) scroller.scrollTop = settingsReturnWindow?.visit.anchor?.scrollTop ?? 0;
+      }
       presentedId.current = id;
     } else if (presentedId.current && !busy) {
       const row = Array.from(collectionPanel.current?.querySelectorAll<HTMLButtonElement>('[data-plan-id]') || []).find(node => node.dataset.planId === openedId.current);
       (row || collectionPanel.current)?.focus({ preventScroll: true }); if (scroller) scroller.scrollTop = listPosition.current;
       presentedId.current = '';
     }
-  }, [reading?.plan?.id, busy]);
+  }, [reading?.plan?.id, busy, returnedFromSettings, settingsReturnWindow]);
   const ordinaryReminder = isOrdinaryReminderReview(review);
   const reminderReview = ordinaryReminderReview(review);
   const canConfirmReminder = !ordinaryReminder || !!reminderReview && reminderReview.times.length > 0;
@@ -400,7 +475,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
         : actionLabel(original.command) + '：已收到操作结果，请在工作记录中查看后续进展与成果。');
     }, true);
   };
-  const plan = reading?.plan, validRead = !!reading?.viewHandle, terminal = ['completed', 'cancelled', 'finished_with_failures'].includes(plan?.state), paused = plan?.execution?.state === 'paused';
+  const plan = returnedFromSettings ? reading?.plan : undefined, validRead = !!reading?.viewHandle, terminal = ['completed', 'cancelled', 'finished_with_failures'].includes(plan?.state), paused = plan?.execution?.state === 'paused';
   const renewal = supported('plans.reviewApproval') && supported('plans.reviewAction') && supported('plans.confirm') ? planRenewalTarget(plan) : undefined;
   const renewalReason = renewal ? (renewal.expired && renewal.exhausted ? '本目标的启动次数已用完，执行授权也已到期。' : renewal.exhausted ? '本目标的启动次数已用完。' : '本次执行授权已到期。') +
     (renewal.paused ? '可以在暂停时审阅新的执行范围。' : '先暂停，再审阅剩余步骤的执行范围。') : undefined;
@@ -552,7 +627,7 @@ export function PlansWorkspace({ state, supported, run, registerTransientBack, r
         onWork={closePlanFile} currentAction={promotedWork &&
         <Button variant={promotedWork.active ? 'secondary' : undefined} disabled={busy || (!validRead && !readOnlyProgress) || state.webWorkspaceSection !== 'commitments' || state.webWorkspaceTaskOpen}
           onClick={() => void openPromotedWork()}>{promotedWork.attention ? `查看第 ${promotedWork.attention.index + 1} 步的原工作` : '查看这一步的工作'}</Button>} /> : plan.runtimeDecision?.reason && <p className="pw-followup-context">{planWaitingReason({ ...plan, requirements: undefined })}{plan.runtimeDecision.nextAt ? ' · 下次核对 ' + time(plan.runtimeDecision.nextAt) : ''}</p>}
-      {!validRead && <div className="pw-followup-attention"><p>{readOnlyProgress ? '已核对这个目标当前的进展。调整目标前需重新核对原版本。' : '详情已保留，操作前需要重新读取原版本。'}</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}
+      {!validRead && <div className="pw-followup-attention"><p>{readOnlyProgress || settingsReturnWindow ? '已核对这个目标当前的进展。调整目标前需重新核对原版本。' : '详情已保留，操作前需要重新读取原版本。'}</p><Button variant="secondary" disabled={busy} onClick={() => read(plan.id)}>重新核对这个目标</Button></div>}
       <div className="pw-followup-primary-actions">
         {(!plan.execution || !plan.approvalValid) && !terminal && <Button disabled={busy || uncertain || !validRead} onClick={() => openSettings()}>审阅目标与执行范围</Button>}
         {renewal?.paused && <Button disabled={busy || uncertain || !validRead} onClick={() => openSettings(renewal)}>审阅新的执行范围</Button>}

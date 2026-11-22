@@ -3,7 +3,7 @@ import { IconAdd, IconChevronLeft, IconChevronRight, IconGoal, IconRefresh, Icon
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SelectField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { PressButton } from './library';
 import { Tabs, TabList, Tab, TabPanel } from './shell-library';
-import { PlansWorkspace } from './PlansWorkspace';
+import { PlansWorkspace, type PlanSettingsNavigation } from './PlansWorkspace';
 import { commitmentDraft, commitmentMutationReceipt, commitmentPolicyReview, commitmentReview, OwnerWorkspaceRequest, type CommitmentDraft } from './commitment-contract';
 import './followup-reading.css';
 import { CalendarDateTimeFields } from './CalendarDateTimeFields';
@@ -12,7 +12,7 @@ import { bridge } from './bridge';
 import './knowledge-depth.css';
 
 type Data = Record<string, any>;
-type Props = { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave };
+type Props = PlanSettingsNavigation & { state: Data; supported: (action: string) => boolean; run: (action: string, args?: Data) => Promise<any>; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave };
 const rows = (value: any): Data[] => Array.isArray(value) ? value.filter(row => row && typeof row === 'object') : [];
 const time = (value: any) => Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : '尚未确定';
 const status = (value: string) => ({ pending: '待跟进', snoozed: '已暂缓', completed: '已确认完成', cancelled: '已取消' } as Data)[value] || value;
@@ -20,9 +20,10 @@ const operation = (value: string) => ({ createCommitment: '保存新委托', upd
 
 /** Uses the adopted forms and original owner receipts. Saving a commitment never starts a task. */
 export function CommitmentsWorkspace(props: Props) {
-  const [tab, setTab] = useState('commitments');
+  const [arrival] = useState(() => props.planSettingsReturn?.pending() ? props.planSettingsReturn : undefined);
+  const [tab, setTab] = useState(arrival ? 'plans' : 'commitments');
   const [childBusy, setChildBusy] = useState(false);
-  const openedPlanRequest = useRef(0);
+  const openedPlanRequest = useRef(arrival?.notificationRevision ?? 0);
   useEffect(() => {
     const revision = Number(props.state.requestedExecutionPlanRevision || 0);
     if (childBusy || revision <= openedPlanRequest.current || !props.state.requestedExecutionPlanId) return;
@@ -31,7 +32,7 @@ export function CommitmentsWorkspace(props: Props) {
   return <Tabs className="pw-followup-tabs" selectedKey={tab} onSelectionChange={key => { if (!childBusy) setTab(String(key)); }}>
     <TabList aria-label="委托类型"><Tab id="commitments" isDisabled={childBusy && tab !== 'commitments'}>单项委托</Tab><Tab id="plans" isDisabled={childBusy && tab !== 'plans'}>持续目标</Tab></TabList>
     {/* Inactive workspaces must unmount: each owns requests and one back handler. */}
-    <TabPanel id={tab}>{tab === 'plans' ? <PlansWorkspace {...props} onEditingChange={setChildBusy} /> : <CommitmentList {...props} onEditingChange={setChildBusy} />}</TabPanel>
+    <TabPanel id={tab}>{tab === 'plans' ? <PlansWorkspace {...props} planSettingsReturn={arrival} onEditingChange={setChildBusy} /> : <CommitmentList {...props} onEditingChange={setChildBusy} />}</TabPanel>
   </Tabs>;
 }
 

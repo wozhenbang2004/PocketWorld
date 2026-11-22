@@ -32,8 +32,10 @@ export type PythonExit = {exitKind: 'exit_code' | 'signal' | 'no_child'; value: 
 export type PythonOutputFile = {id:string;name:string;mimeType:'text/plain';size:number;sha256:string};
 export type PythonOutputReady = {state:'ready';handle:string;name:string;size:number;sha256:string};
 export type PythonOutputSave = PythonOutputReady | {state:'pending'|'unavailable'} | {state:'saved';file:PythonOutputFile};
+export type PythonCompleteText = {bytes:number;receiptSha256:string};
 export type PythonRead = {state: 'pending' | 'not_started'} | {
-  state: 'settled'; exit: PythonExit; output?: {stdout: string; stderr: string; truncated: boolean}; textOutputSave?:PythonOutputSave;
+  state: 'settled'; exit: PythonExit; output?: {stdout: string; stderr: string; truncated: boolean};
+  textOutputSave?:PythonOutputSave; completeText?:PythonCompleteText;
 };
 
 const sameSource = (a: SavedPython, b: SavedPython) =>
@@ -149,6 +151,24 @@ export function pythonOutputSaveResult(value: unknown, original: OriginalPythonR
   if (result?.state==='pending' || result?.state==='unavailable') return result;
 }
 
+function completeTextMark(value: unknown): PythonCompleteText | undefined {
+  const row=record(value);
+  if (row && Object.keys(row).length===2 && typeof row.bytes==='number' && Number.isSafeInteger(row.bytes) &&
+      row.bytes>65536 && row.bytes<=120*1024 && digest(row.receiptSha256))
+    return {bytes:row.bytes,receiptSha256:row.receiptSha256};
+}
+
+export function pythonCompleteTextRead(value: unknown, original: OriginalPythonRun, expected: PythonCompleteText) {
+  const row=record(value), exit=originalPythonExit(row?.exit,original);
+  if (!row || row.state!=='settled' || !exactRun(row,original) || row.outputState!=='unavailable' ||
+      !exit || exit.exitKind!=='exit_code' || exit.timedOut || exit.cancelRequested) return;
+  const result=outputSave(row.textOutputSave,original);
+  if (result?.state!=='ready') return result;
+  const mark=completeTextMark(row.completeText);
+  if (mark && mark.receiptSha256===expected.receiptSha256 && mark.bytes===expected.bytes &&
+      result.size>=expected.bytes && result.size<=expected.bytes+1024) return result;
+}
+
 export function pythonReadResult(value: unknown, original: OriginalPythonRun): PythonRead | undefined {
   const row = record(value);
   if (!row || !exactRun(row, original)) return undefined;
@@ -166,6 +186,9 @@ export function pythonReadResult(value: unknown, original: OriginalPythonRun): P
       typeof row.stderrBytesShown !== 'number' || !Number.isSafeInteger(row.stderrBytesShown) || row.stderrBytesShown < 0 ||
       row.stdoutBytesShown + row.stderrBytesShown > 65536 || row.stdout.length > row.stdoutBytesShown ||
       row.stderr.length > row.stderrBytesShown || typeof row.truncated !== 'boolean') return undefined;
+  const mark=row.truncated && !available && exit.exitKind==='exit_code' && !exit.timedOut && !exit.cancelRequested
+    ? completeTextMark(row.completeText) : undefined;
   return {state:'settled', exit, output:{stdout:row.stdout,stderr:row.stderr,truncated:row.truncated},
-    textOutputSave:!row.truncated && (row.stdout.length>0 || row.stderr.length>0) ? available : saved};
+    textOutputSave:!row.truncated && (row.stdout.length>0 || row.stderr.length>0) ? available : saved,
+    completeText:mark && mark.bytes>row.stdoutBytesShown+row.stderrBytesShown ? mark : undefined};
 }

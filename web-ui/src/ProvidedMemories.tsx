@@ -191,6 +191,8 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
     return {...target,expires,taskId,runId,requestId,answerId,receiptId,coordinatorEpoch};
   };
   const preferenceReason = selected && selected.layer==='preference' && personalCurrent ? selectionReason(selected) : undefined;
+  const providedVersionPrefix = (row: Data) => !history && provided && canCorrectProvided(receipt,row)
+    ? `本次提供 · 第 ${row.revision} 版 · ` : '';
   const attended=attention.current;
   const finishCorrection=(result:AnswerMemoryCorrectionOutcome)=>{
     if(!live.current||document.hidden||attention.current!==attended||readWindow.current?.presentation!==answerPresentation())return;
@@ -223,7 +225,7 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
                 if(later&&receipt&&reading.current===null)void readCurrentVersion(receipt,row,++generation.current);
                 else if(available){setSelected(row);setSource(null);setError('');}
               }}><span className="pw-source-row-copy"><b>{available?row.text:statusLabel(row.status)}</b><small>{later?`当时第 ${later.originalRevision} 版 · 核对现行第 ${later.currentRevision} 版`:
-                `${selectionReason(row)??'原回执未保留选入原因'} · ${statusLabel(row.status)}`}</small></span></Button>;
+                `${providedVersionPrefix(row)}${selectionReason(row)??'原回执未保留选入原因'} · ${statusLabel(row.status)}`}</small></span></Button>;
             })}</div>
           </section>)}
           <p className="pw-muted">这份回执不列出语言、详略等默认设置。聊天里说“这次简短些”，也不等于改了长期偏好。</p>
@@ -239,7 +241,7 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
         {selectedLater&&currentRead?.status==='not_available'&&<p className="pw-muted" role="status">第 {selectedLater.currentRevision} 版目前不在可用范围，未显示旧版或新版正文。</p>}
         {selected && !selectedLater && <>
           <p className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{selected.text}</p>
-          <p className="pw-muted">{selected.source || '原记忆记录'} · {statusLabel(selected.status)}{selected.expiresAt ? ` · 有效至 ${new Date(selected.expiresAt).toLocaleDateString()}` : ''}</p>
+          <p className="pw-muted">{providedVersionPrefix(selected)}{selected.source || '原记忆记录'} · {statusLabel(selected.status)}{selected.expiresAt ? ` · 有效至 ${new Date(selected.expiresAt).toLocaleDateString()}` : ''}</p>
           {preferenceReason && <p className="pw-muted">为何提供：{preferenceReason}</p>}
           {(canCorrect||canManage)&&<div className="pw-action-row">
             {canCorrect&&<Button variant={directPreference?'secondary':'ghost'} size="small" disabled={busy} onClick={()=>{if(sameWindow(readWindow.current)&&canCorrectProvided(receipt,selected)){setSelected(selected);setSource(null);setSourceCursor(null);setCorrecting(true);}}}>纠正这条已保存记忆</Button>}

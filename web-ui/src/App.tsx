@@ -50,6 +50,7 @@ import type {HomeDeviceInboxVisit} from './DevicesWorkspace';
 import type {OriginalChatReminderRuleVisit,ReminderNoticeVisit} from './ReminderWorkspace';
 import {OriginalChatReminderReview} from './OriginalChatReminderReview';
 import type {SettingsDirectoryOrigin} from './SettingsDirectory';
+import type {PlanSettingsAnchor,PlanSettingsReturn,RegisterPlanSettingsAnchor} from './PlansWorkspace';
 import ProfileWorkspace,{type OriginalMemoryConversation,type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings,type ConversationMemoryControls} from './ConversationMemorySettings';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
@@ -317,7 +318,11 @@ type ViteToolsSource={position:ProjectViteToolsPosition;navigation:number;ownerC
 type OriginalPhoneModelInput={conversationId:string;key:string;epoch:number;revision:number;phoneEpoch:number;phoneRevision:number;sourceEditTicket:number;resumeRevision:number;preferenceRevision:number;mode:'main_screen'|'background'};
 type OriginalPhoneModelVisit={input:OriginalPhoneModelInput;navigation:number;selectionRevision:number;originDocument:number};
 type LocalPhoneModelVisit={navigation:number;current:(live:ReturnType<typeof bridge.getState>)=>boolean};
-type WorkspaceOrigin={route:string;label:string;localPhoneModel?:LocalPhoneModelVisit;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number;ordinaryDraftEpoch?:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type PlanSettingsOrigin={anchor:PlanSettingsAnchor;navigation:number;document:number;connection:number;planRequest:number;taskRequest:number;projectRequest:number;planNotice:string|null};
+const samePlanSettingsRequests=(origin:PlanSettingsOrigin,{state}:ReturnType<typeof bridge.getState>)=>
+ state.requestedConnectionRevision===origin.connection&&state.requestedExecutionPlanRevision===origin.planRequest&&
+ state.requestedExecutionPlanId===origin.planNotice&&state.requestedTaskRevision===origin.taskRequest&&state.requestedProjectRevision===origin.projectRequest;
+type WorkspaceOrigin={route:string;label:string;planSettings?:PlanSettingsOrigin;localPhoneModel?:LocalPhoneModelVisit;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number;ordinaryDraftEpoch?:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type BackgroundPhoneDraftVisit={origin:WorkspaceOrigin;pin:PhonePlaceReturn;navigation:number;document:number;afterRevision:number;
  first:{generation:number;setupRevision:number}|null;seenAuthentication:boolean;retired:boolean};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -911,6 +916,12 @@ export default function App(){
  const [modelSetupOpening,setModelSetupOpening]=useState(false);
  const [modelSetupFeedback,setModelSetupFeedback]=useState<{input:ModelSetupInput;choice:AIChoice;matchesDefault?:boolean;modelRevision:number;draftRevision:number;preferenceRevision:unknown}|null>(null);
  const relatedOrigin=useRef<WorkspaceOrigin|null>(null);
+ const planSettingsAnchor=useRef<Parameters<RegisterPlanSettingsAnchor>[0]|null>(null);
+ const planSettingsReturn=useRef<{navigation:number;visit:PlanSettingsReturn}|null>(null);
+ const registerPlanSettingsAnchor=useCallback<RegisterPlanSettingsAnchor>(read=>{
+  planSettingsAnchor.current=read;
+  return ()=>{if(planSettingsAnchor.current===read)planSettingsAnchor.current=null;};
+ },[]);
  const terminalSavedFileArrival=useRef<ProjectTerminalSavedFileReturn|null>(null);
  const [pythonSetupReturn,setPythonSetupReturn]=useState<CheckoutPythonSetupReturn>();
  const [viteToolsReturn,setViteToolsReturn]=useState<ProjectViteToolsReturn>();
@@ -1777,7 +1788,7 @@ export default function App(){
    setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);
    if(taskOpen&&!taskClosed&&!await closeTask())return false;
    if(options?.stillCurrent&&!options.stillCurrent())return false;
-   terminalSavedFileArrival.current=null;setPythonSetupReturn(undefined);setViteToolsReturn(undefined);
+   planSettingsReturn.current=null;terminalSavedFileArrival.current=null;setPythonSetupReturn(undefined);setViteToolsReturn(undefined);
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
   if(guardTaskLeave(()=>{void navigate(requested,afterNavigate,options)}))return Promise.resolve(false);
@@ -2364,6 +2375,35 @@ export default function App(){
    }:undefined,undefined,current)===true;
   }finally{openingModelSetup.current=false;}
  };
+ const returnFromPlanSettings=(origin:WorkspaceOrigin)=>{
+  const source=origin.planSettings;
+  if(route!=='settings'||!source||navigationWindow.current!==source.navigation)return false;
+  const documentEpoch=bridge.getDocumentEpoch(),navigation=source.navigation+1;
+  const current=()=>relatedOrigin.current===origin&&navigationWindow.current===source.navigation&&
+   !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&samePlanSettingsRequests(source,bridge.getState());
+  if(!current()){
+   // A new native notification/window request owns the next navigation.
+   if(relatedOrigin.current===origin)relatedOrigin.current=null;
+   return true;
+  }
+  const anchor=documentEpoch===source.document?source.anchor:undefined;
+  void navigate('commitments',()=>{
+   relatedOrigin.current=origin.parent||null;
+   const sameVisit=()=>navigationWindow.current===navigation&&!document.hidden&&
+    bridge.getDocumentEpoch()===documentEpoch&&samePlanSettingsRequests(source,bridge.getState());
+   let used=false;
+   const visit:PlanSettingsReturn={anchor,notificationRevision:source.planRequest,
+    notificationKey:source.planNotice?source.planNotice+':'+source.planRequest:'',
+    current:sameVisit,pending:()=>!used&&sameVisit(),take:()=>{if(used||!sameVisit())return false;used=true;return true;},
+    waitForOwner:()=>awaitPickerProjection(sameVisit,()=>{
+     const live=bridge.getState(),view=obj(live.view);
+     return live.host?.ready===true&&view.section==='commitments'&&view.taskId===null&&
+      Number.isSafeInteger(view.resumeRevision)?view.resumeRevision as number:undefined;
+    })};
+   planSettingsReturn.current={navigation,visit};
+  },{keepOrigin:true,stillCurrent:current});
+  return true;
+ };
  const returnFromSecondary=()=>{
   if(route==='profile'){returnFromProfile();return;}
   if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}
@@ -2374,7 +2414,7 @@ export default function App(){
   }
   const origin=relatedOrigin.current;
   if(origin){
-   if(returnOriginalArchiveChat(origin))return;
+   if(returnFromPlanSettings(origin)||returnOriginalArchiveChat(origin))return;
    if(route==='model-settings'&&origin.localPhoneModel?.navigation===navigationWindow.current){
     const visit=origin.localPhoneModel;
     const current=(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>{
@@ -6127,6 +6167,26 @@ export default function App(){
    },
   };
  };
+ const openPlanSettings=()=>{
+  if(secondaryPage!=='commitments'||taskOpen||taskOpening||document.hidden)return false;
+  const target=planSettingsAnchor.current?.(),live=bridge.getState(),owner=live.state;
+  const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  if(!target||!Number.isSafeInteger(owner.requestedConnectionRevision)||!Number.isSafeInteger(owner.requestedExecutionPlanRevision)||
+     !Number.isSafeInteger(owner.requestedTaskRevision)||!Number.isSafeInteger(owner.requestedProjectRevision)||!(owner.requestedExecutionPlanId===null||typeof owner.requestedExecutionPlanId==='string'))return false;
+  const source:PlanSettingsOrigin={anchor:target,navigation:navigation+1,document:documentEpoch,
+   connection:owner.requestedConnectionRevision,planRequest:owner.requestedExecutionPlanRevision,
+   taskRequest:owner.requestedTaskRevision,projectRequest:owner.requestedProjectRevision,planNotice:owner.requestedExecutionPlanId};
+  const current=()=>{
+   if(document.hidden||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==documentEpoch||
+      !samePlanSettingsRequests(source,bridge.getState()))return false;
+   const actual=planSettingsAnchor.current?.();
+   return !!actual&&actual.id===target.id&&actual.revision===target.revision&&actual.observedAt===target.observedAt;
+  };
+  if(!current())return false;
+  const origin:WorkspaceOrigin={route:'commitments',label:'返回持续目标',planSettings:source,parent:relatedOrigin.current};
+  void navigate('settings',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent:current});
+  return true;
+ };
  const selectNavigation=useCallback((key:string)=>{
   setNavigationMoreOpen(false);setSearchReturn(false);
   if(key==='artifacts'){
@@ -6141,6 +6201,8 @@ export default function App(){
    return;
   }else if(key==='remoteInbox'){
    void openNotifications(()=>{notificationMemory.current.attentionRequest=(notificationMemory.current.attentionRequest||0)+1});
+  }else if(key==='settings'&&openPlanSettings()){
+   return;
   }else if(key==='setup'){
    const input=route==='butler'&&intent==='background'&&!taskOpen&&!taskOpening&&!preparationTarget&&
     !phoneAction.current&&!phoneReviewLive.current&&!draftSwitchPending()?homePhoneSetupInput(null):null;
@@ -6149,7 +6211,7 @@ export default function App(){
    else void openSetup();
   }
   else navigate(key);
- },[can,route,intent,taskOpen,taskOpening,preparationTarget,pickTeamForCurrentDraft,desktopNavigation,captureWorkspaceOrigin,captureNavigationOrigin,openDrawerWorkspaceFromChat,openNavigationBook,openRelatedWorkspace,openNotifications,openSetup,homePhoneSetupInput,navigate]);
+ },[can,route,intent,taskOpen,taskOpening,preparationTarget,pickTeamForCurrentDraft,desktopNavigation,captureWorkspaceOrigin,captureNavigationOrigin,openDrawerWorkspaceFromChat,openNavigationBook,openRelatedWorkspace,openNotifications,openSetup,homePhoneSetupInput,openPlanSettings,navigate]);
  const homeFilesOpening=useRef(false), homeWindowsFileNavigation=useRef(-1);
  const homeDeviceInboxNavigation=useRef<{navigation:number;visit:HomeDeviceInboxVisit}|undefined>(undefined);
  const privateHomeFiles=(native:ReturnType<typeof bridge.getState>)=>{
@@ -9675,6 +9737,7 @@ export default function App(){
    current:epoch=>setupOrigin.current.viteToolsSource===viteToolsVisit&&navigationWindow.current===viteToolsVisit.navigation&&viteToolsVisit.ownerCurrent('setup',epoch),
    onReview:(identity,epoch)=>reviewViteAfterTools(viteToolsVisit,identity,epoch)
   }:undefined} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary homeWindowsFile={route==='devices'&&homeWindowsFileNavigation.current===navigationRevision}
+   registerPlanSettingsAnchor={registerPlanSettingsAnchor} planSettingsReturn={route==='commitments'&&planSettingsReturn.current?.navigation===navigationRevision?planSettingsReturn.current.visit:undefined}
    homeDeviceInbox={route==='devices'&&homeDeviceInboxNavigation.current?.navigation===navigationRevision?homeDeviceInboxNavigation.current.visit:undefined} reminderNoticeVisit={reminderNotice} originalChatReminderRuleVisit={originalReminderPage} reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} onReturnConnectedPhoneDraft={returnConnectedPhoneDraft} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} onSavedHostSetup={returnAfterSavedHostSetup} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} originalWorkDraft={route==='teams'&&relatedOrigin.current?.teamDraft?.navigation===navigationRevision&&(relatedOrigin.current?.teamDraft?.replacing||true)} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} terminalCheckout={originalTerminalCheckout} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput} onReturnOriginalPhoneInput={returnOriginalPhoneModelInput}/></Suspense></SecondaryRouteBoundary> }
   </div>{allWork}
   <ConversationHistoryWindow page={workReportPage||workRequestPage||searchHistoryPage||(route==='chat'&&!historyPage?.workRequest&&!historyPage?.searchAnchor&&!historyPage?.reminderSource&&

@@ -60,6 +60,7 @@ public final class OwnerPythonRun {
             """;
     static final long TIMEOUT_MILLIS = 60_000L;
     private static final int MAX_OUTPUT = 64 * 1024, MAX_STAGED = 16;
+    private static final int MAX_COMPLETE_LOG_CHUNKS = 2048;
     private static final int MAX_PATH = 240, MAX_PARENT_DEPTH = 4;
     private static final Pattern SCRIPT_LEAF = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]{0,119}\\.py");
     private static final Pattern MODULE_LEAF = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,119}\\.py");
@@ -481,16 +482,43 @@ public final class OwnerPythonRun {
         return actual == null ? null : new Retained(receipt, actual.toString());
     }
 
+    /** A locator, not authority or a body hash. Recheck the canonical terminal receipt before a full read. */
+    public record CompleteText(int bytes,String receiptSha256) {
+        public CompleteText {
+            if(bytes<=MAX_OUTPUT||bytes>OwnerPythonOutputText.MAX_RAW)
+                throw new IllegalArgumentException("完整原输出的大小不可核对");
+            requireDigest(receiptSha256);
+        }
+        public JSONObject view()throws Exception{
+            return new JSONObject().put("bytes",bytes).put("receiptSha256",receiptSha256);
+        }
+    }
+    private static CompleteText completeTextFrom(JSONObject receipt)throws Exception{
+        Object size=receipt.opt("storedOutputBytes"), cursor=receipt.opt("logCursor");
+        if(!(size instanceof Integer||size instanceof Long)||!(cursor instanceof Integer||cursor instanceof Long))return null;
+        long bytes=((Number)size).longValue(), chunks=((Number)cursor).longValue();
+        if(bytes<=MAX_OUTPUT||bytes>OwnerPythonOutputText.MAX_RAW||chunks<=0||chunks>MAX_COMPLETE_LOG_CHUNKS||
+                !Boolean.TRUE.equals(receipt.opt("outputComplete"))||!Boolean.FALSE.equals(receipt.opt("outputTruncated"))||
+                !exactOutputBytes(receipt,"outputBytes",(int)bytes))return null;
+        return new CompleteText((int)bytes,ProjectSources.digest(receipt));
+    }
+
     /** Explicit second read of the same settled native job; the two actual pipe channels are never merged. */
     static JSONObject openOutput(ManagedProjectRuntime runtime, JSONObject plan, JSONObject route,
-                                 RunControl read, BooleanSupplier sameWindow,
+                                 RunControl read, BooleanSupplier sameWindow, CompleteText requested,
                                  java.util.function.Consumer<OwnerPythonOutputText> completeText) throws Exception {
         Original run = original(plan, route);
         RuntimeReceipt receipt = terminal(runtime, run, read, sameWindow);
         JSONObject before = receipt == null ? null : receipt.json();
         JSONObject observed = before == null ? null : exit(run, route, before);
         if (observed == null) return null;
-        JSONObject page = runtime.ownerPythonLog(run.ref, MAX_OUTPUT, sameWindow);
+        CompleteText eligible = completeText!=null&&"exit_code".equals(observed.opt("exitKind"))&&
+                Boolean.FALSE.equals(observed.opt("timedOut"))&&Boolean.FALSE.equals(observed.opt("cancelRequested"))
+                ? completeTextFrom(before) : null;
+        if(requested!=null&&!requested.equals(eligible))
+            throw new SecurityException("原输出范围或结束回执已变化，没有读取其他输出");
+        int limit=requested==null?MAX_OUTPUT:requested.bytes();
+        JSONObject page = runtime.ownerPythonLog(run.ref, limit, sameWindow);
         if (!run.source.id.equals(page.opt("operationId"))) throw new SecurityException("原脚本日志不匹配");
         JSONArray rows = page.getJSONArray("chunks");
         var stdout = new ByteArrayOutputStream();
@@ -503,7 +531,7 @@ public final class OwnerPythonRun {
                 throw new SecurityException("原脚本日志缺页");
             int stream = integer(row, "stream", 1, 2), count = integer(row, "bytes", 1, 8192);
             String encoded = row.getString("dataBase64");
-            if (encoded.length() > 10924 || count > MAX_OUTPUT - stdout.size() - stderr.size())
+            if (encoded.length() > 10924 || count > limit - stdout.size() - stderr.size())
                 throw new SecurityException("原脚本日志超出读取预算");
             byte[] chunk = Base64.getDecoder().decode(encoded);
             if (chunk.length != count) throw new SecurityException("原脚本日志字节数不一致");
@@ -520,15 +548,24 @@ public final class OwnerPythonRun {
             throw new SecurityException("原脚本退出回执或日志已变化");
         boolean truncated=more||incomplete||Boolean.TRUE.equals(page.opt("outputTruncated"))||!Boolean.TRUE.equals(before.opt("outputComplete"));
         int count=stdout.size()+stderr.size();
-        if(completeText!=null&&!truncated&&count>0&&cursor==originalCursor&&
+        boolean verifiedComplete=!truncated&&count>0&&cursor==originalCursor&&
                 Boolean.FALSE.equals(before.opt("outputTruncated"))&&exactOutputBytes(before,"storedOutputBytes",count)&&
-                exactOutputBytes(before,"outputBytes",count)&&!"no_child".equals(observed.opt("exitKind"))){
+                exactOutputBytes(before,"outputBytes",count)&&!"no_child".equals(observed.opt("exitKind"));
+        if(requested!=null&&(!verifiedComplete||count!=requested.bytes()||
+                !Boolean.FALSE.equals(page.opt("hasMore"))||!Boolean.FALSE.equals(page.opt("logIncompleteTail"))||
+                !Boolean.FALSE.equals(page.opt("outputTruncated"))))
+            throw new SecurityException("没有核对到完整的原输出，没有保存片段");
+        if(completeText!=null&&verifiedComplete){
             byte[] out=stdout.toByteArray(),err=stderr.toByteArray();
             try{
                 OwnerPythonOutputText captured=OwnerPythonOutputText.capture(scopeForPlan(plan),observed,out,err);
                 if(captured!=null)completeText.accept(captured);
+                else if(requested!=null)throw new SecurityException("完整原输出不是可保存的 UTF-8 文字");
             }finally{Arrays.fill(out,(byte)0);Arrays.fill(err,(byte)0);}
         }
+        if(requested!=null)return observed.put("completeText",requested.view());
+        if(eligible!=null&&more&&!incomplete&&Boolean.FALSE.equals(page.opt("outputTruncated")))
+            observed.put("completeText",eligible.view());
         return observed.put("stdout", stdout.toString(StandardCharsets.UTF_8.name()))
                 .put("stderr", stderr.toString(StandardCharsets.UTF_8.name())).put("stdoutBytesShown", stdout.size())
                 .put("stderrBytesShown", stderr.size()).put("truncated", truncated)
