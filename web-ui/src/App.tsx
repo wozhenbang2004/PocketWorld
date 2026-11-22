@@ -72,7 +72,7 @@ import {useNavigationGlass} from './useNavigationGlass';
 import {NavigationChrome} from './NavigationChrome';
 import {WorkObjectMenu} from './WorkObjectMenu';
 import {retainedLocalScriptOutputs,TaskCapabilityWorkspace} from './TaskCapabilityWorkspace';
-import {canReviewDirectWorkspaceFile, DeviceTaskScopeWorkspace, isUnstartedDirectWorkspaceWork} from './DeviceTaskScopeWorkspace';
+import {canReviewDirectWorkspace, DeviceTaskScopeWorkspace, isUnstartedDirectWorkspaceWork} from './DeviceTaskScopeWorkspace';
 import type {SentPhoneGoalFocus} from './devices-workspace';
 import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {OriginalWindowsWorkspaceOverview} from './OriginalWindowsTextRead';
@@ -1141,6 +1141,7 @@ export default function App(){
  const [phoneReviewError,setPhoneReviewError]=useState<{handle:string;message:string}|null>(null);
  const [phoneStart,setPhoneStart]=useState<PhoneStartReceipt|null>(null);
  const phoneAction=useRef(false),phoneWindow=useRef(0),phoneReviewLive=useRef(phoneReview);phoneReviewLive.current=phoneReview;
+ const fillPhoneReadExampleFlight=useRef(false);
  const phonePlacePicker=useRef<{pin:PhonePlaceReturn;navigation:number}|null>(null);
  const phonePresentation=useMemo(()=>phoneReview?{goal:phoneReview.goal,mode:phoneReview.mode,message:phoneReview.message,screenDisclosure:phoneReview.screenDisclosure,conversationId:phoneReview.conversationId,conversationTitle:phoneReview.conversationTitle,modelName:phoneReview.modelName,toolLimit:phoneReview.toolLimit,modelCallLimit:phoneReview.modelCallLimit,scopeMinutes:phoneReview.scopeMinutes,conditions:phoneReview.conditions,readCurrentOnce:phoneReview.readCurrentOnce}:null,[phoneReview]);
  const phoneExit=useClosingSnapshot(phonePresentation),phoneDisplay=phoneExit.display;
@@ -6620,7 +6621,7 @@ export default function App(){
     <section className="pw-task-overview pw-task-review" aria-label="这件工作的进展、决定与成果">
      {overviewActive&&<WorkExecutionPlace task={task} projects={projects} remoteProfiles={state.features?.remote?.profiles} canReadPhoneResources={!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')}/>}
      {mainPhoneRead&&<div className="pw-action-row"><Button variant="secondary" onClick={event=>openMainPhoneRead(task,mainPhoneRead,event.currentTarget)}>查看本轮已读到的主屏记录</Button></div>}
-     {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsWorkspaceOverview taskId={task.id}/>}
+     {overviewActive&&task.raw?.ownerDeviceWork?.directWorkspace&&!phoneViewerObscured&&!phoneViewerExpanded&&<OriginalWindowsWorkspaceOverview taskId={task.id} managePicker={workspaceFileOverview(task)}/>}
      {originalPhoneTool&&<div className="pw-action-row"><Button variant="secondary" leadingIcon={IconTool} onClick={event=>openOriginalPhoneTool(task,originalPhoneTool,event.currentTarget)}>查看本轮手机操作</Button></div>}
      {overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&can('history.read')&&<PhoneServiceRecovery key={JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch])} task={task} readiness={state.phoneReadiness} openSettings={can('settings.openSystem')?()=>act('settings.openSystem',{section:'accessibility'},task.id):undefined} review={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
      {taskOpen&&!taskOpening&&openedTaskId.current===task.id&&<PhoneMainOwnerStep key={'main-owner-step:'+task.id} task={task} visible={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&obj(snapshot?.view).taskId===task.id} run={act} can={can} onProcess={()=>showTaskLayer('process')}/>}
@@ -6833,7 +6834,7 @@ export default function App(){
    return <footer className="pw-task-footer" data-fixed-draft-acceptance={original?true:undefined}>{taskResultDecision(task,disabled)}</footer>;
   }
   if(taskLayer==='overview'&&actions.includes('tasks.resume')){
-   if(workspaceFileOverview(task)&&review?.task?.id===task.id&&can('tasks.resume')&&canReviewDirectWorkspaceFile(task.id,snapshot))return null;
+   if(workspaceFileOverview(task)&&review?.task?.id===task.id&&can('tasks.resume')&&canReviewDirectWorkspace(task.id,snapshot))return null;
    const note=projectFeedback[projectFeedbackKey(task)]||'';
    if(next&&note==='')return <footer className="pw-task-footer"><PressButton key="build-review-prefill" label="填写构建核对内容"
     disabled={disabled||continuationBlocks(continuations[task.id])} onClick={()=>prepareNextBuildNote(task,next)}/></footer>;
@@ -7633,6 +7634,38 @@ export default function App(){
   draftKey.startsWith('new:')&&draftModelPreference.scopeKey==='draft:'+draftKey&&draftModelPreference.inherited===true&&draftModelPreference.target===null&&
   composer.independentReportSourceIndex==null&&composer.independentReportDiscardEmpty!==true&&
   ['setup.read','models.snapshot','connections.enter','connections.leave'].every(can);
+ const localPhoneReadExampleInput=(live:ReturnType<typeof bridge.getState>)=>{
+  const {state:owner,composer:draft}=live,phone=obj(live.phoneDraft),view=obj(live.view),preference=obj(owner.conversationModel);
+  if(view.section!==null||view.taskId!==null||owner.conversationId||owner.conversationReader||owner.filePath!==null||
+   owner.queuedInputsPage||owner.attachmentWorkspace?.open||owner.chatAttachmentPickerOpen||owner.chatSubmitting||owner.phoneSubmitting||
+   owner.modelSelectionBusy!==false||conversationModelName(owner)||draft?.ready!==true||
+   typeof draft.key!=='string'||!draft.key.startsWith('new:')||draft.conversationId!==''||draft.text!==''||
+   preference.scopeKey!=='draft:'+draft.key||preference.inherited!==true||preference.target!==null||
+   phone.phone!==true||phone.mode!=='main_screen'||phone.channelOrigin!==false||phone.sourceState!=='none'||phone.text!==''||
+   ![draft.epoch,draft.revision,phone.epoch,phone.revision,phone.sourceEditTicket,phone.localMainReadExampleRevision]
+    .every(value=>Number.isSafeInteger(value)&&value>=0)||
+   !['phone.draft.edit','phone.draft.saveOriginal',localMainReadAction].every(action=>live.capabilities.commands.includes(action)))return null;
+  return {localMainReadExampleRevision:phone.localMainReadExampleRevision,key:draft.key,epoch:draft.epoch,revision:draft.revision,
+   phoneEpoch:phone.epoch,phoneRevision:phone.revision,sourceEditTicket:phone.sourceEditTicket};
+ };
+ const phoneReadExample=ready&&route==='butler'&&intent==='main_screen'&&text===''&&!taskOpen&&!taskOpening&&!workOpen&&!commandOpen&&
+  !preparationTarget&&!phoneReview&&!phoneReviewPending&&!draftSwitching&&!reportDraftSwitching&&!voiceReview&&!isListening&&!document.hidden?
+  localPhoneReadExampleInput(snapshot):null;
+ const fillPhoneReadExample=(source:NonNullable<typeof phoneReadExample>)=>{
+  const editor=workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)');
+  const doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const current=()=>!document.hidden&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&
+   openedTaskId.current===null&&!phoneAction.current&&!draftSwitchPending()&&
+   phoneText.currentValue()===''&&chatDraft.currentValue()===''&&
+   JSON.stringify(localPhoneReadExampleInput(bridge.getState()))===JSON.stringify(source);
+  if(fillPhoneReadExampleFlight.current||!editor||editor.value!==''||!current())return;
+  fillPhoneReadExampleFlight.current=true;
+  editor.focus({preventScroll:true});
+  // Do not optimistically set text: a newer native draft wins the empty-only edit.
+  void bridge.command('phone.draft.edit',source).catch(()=>{
+    if(current())toast.error('填入示例尚未确认。请核对原输入，也可以直接输入。');
+  }).finally(()=>{fillPhoneReadExampleFlight.current=false});
+ };
  const composerRegion=<div className="pw-composer-region">
    {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context">
     <Button variant="ghost" size="small" leadingIcon={homeHostMessage?IconServer:IconChat} onClick={homeHostMessage?continueSavedHostFromHome:foregroundTurn&&!pendingHere?returnToForegroundReply:()=>void navigate('chat')} aria-label={homeHostMessage?`${continueSavedHostLabel}：${currentConversation?.title||'原交办'}`:pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}>
@@ -7686,6 +7719,7 @@ export default function App(){
       (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
    </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')&&!shownLocalMainRead||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
+     {phoneReadExample&&<div className="pw-action-row"><Button variant="ghost" size="small" onClick={()=>fillPhoneReadExample(phoneReadExample)}>填入只读数字示例</Button></div>}
      <BlankPhoneOriginal enabled={(route==='butler'||route==='chat')&&ready&&!taskOpen&&!workOpen&&!commandOpen&&
        !preparationTarget&&!phoneReview&&!phoneReviewPending&&!draftSwitching&&!reportDraftSwitching&&!voiceReview&&!isListening}
        mode={intent==='chat'?null:intent} text={text} editorText={phoneText.currentValue} navigation={navigationRevision} navigationCurrent={value=>navigationWindow.current===value}

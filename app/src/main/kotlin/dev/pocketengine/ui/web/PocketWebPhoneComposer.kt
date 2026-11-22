@@ -128,6 +128,33 @@ internal class PocketWebPhoneComposer(
         .put("saveFirstOriginalReady",firstOriginalEligible())
         // Eligibility is input identity; Android readiness, live reviews and admission are separate.
         .putOpt("localMainReadOnceEligible", true.takeIf { source == "current" && exactLocalMainGoal(pin) != null })
+        .putOpt("localMainReadExampleRevision", controller.composerDraft?.let { draft ->
+            reviewGeneration.takeIf { firstMainReadExampleEligible(draft.key, controller.composerViewEpoch, draft.revision) }
+        })
+    }
+
+    private val localMainReadExample = "仅读取眼前计算器的数字，不要点击"
+
+    private fun firstMainReadExampleEligible(key: String, epoch: Int, revision: Long): Boolean =
+        !isClosed() && phoneIntent && phoneExecutionMode == "main_screen" && phoneDraft.isEmpty() &&
+            picked == null && !pinLost && heldLinkedGoal == null && phoneStartReceipt == null &&
+            firstDraftScope == null && savingFirstOriginal == null && firstOriginalOffer == null && phoneReviews.isEmpty() &&
+            CurrentMainInspection.matchesGoal(localMainReadExample) && controller.firstPhoneOriginalEditorCurrent(key, epoch, revision)
+
+    /** The one fixed example is a conditional edit of the still-empty native phone draft, not a saved original. */
+    fun fillLocalMainReadExample(args: JSONObject): JSONObject {
+        require(args.keys().asSequence().toSet() == setOf("localMainReadExampleRevision", "key", "epoch", "revision", "phoneEpoch", "phoneRevision", "sourceEditTicket"))
+        val key = requiredString(args, "key")
+        check(requiredLong(args, "localMainReadExampleRevision") == reviewGeneration &&
+            requiredInt(args, "phoneEpoch") == presentationEpoch && requiredLong(args, "phoneRevision") == phoneDraftRevision &&
+            requiredLong(args, "sourceEditTicket") == sourceEditTicket &&
+            firstMainReadExampleEligible(key, requiredInt(args, "epoch"), requiredLong(args, "revision"))) {
+            "原空白手机草稿已变化，没有替换文字"
+        }
+        editDraft(JSONObject().put("text", localMainReadExample).put("epoch", presentationEpoch)
+            .put("sourceEditTicket", sourceEditTicket).put("draftConversation", ""))
+        firstDraftScope = FirstDraftScope(key, phoneDraftRevision)
+        return JSONObject().put("filled", true)
     }
 
     private fun firstOriginalEligible():Boolean{

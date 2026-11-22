@@ -653,40 +653,99 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!businessReady()||owner==null||originalDeviceSourceRoutes==null)throw new SecurityException("原设备工作区尚未准备。");
         return tasks.reviewOwnerWindowsWorkspaceRead(task,path,owner.nativeOutgoingGrants(),window);
     }
-    /** The real unstarted Work admits one native tool, in competition with its ordinary first start. */
+    public TaskStore.OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspaceDirectory(String task,
+            java.util.function.BooleanSupplier window)throws Exception {
+        var owner=deviceWorkspaceOwner;
+        if(!businessReady()||owner==null||originalDeviceSourceRoutes==null)throw new SecurityException("原设备工作区尚未准备。");
+        return tasks.reviewOwnerWindowsWorkspaceDirectory(task,owner.nativeOutgoingGrants(),window);
+    }
+    public TaskStore.OwnerWindowsListedFileReview reviewOwnerWindowsListedFile(String id,String run,int epoch,String operation,int index,
+            java.util.function.BooleanSupplier window)throws Exception {
+        if(!businessReady())throw new SecurityException("原工作暂不可用。");
+        var selected=tasks.activeOwnerWindowsPicker(id,capabilityControls.get(id));
+        if(selected==null)throw new SecurityException("原工作已不再等待选择文件；可查看已留存目录。");
+        return selected.reviewListedFile(run,epoch,operation,index,window);
+    }
+    private OriginalDeviceSourceRoutes requireWindowsReadQueue(){
+        var routes=originalDeviceSourceRoutes;
+        if(!businessReady()||routes==null||deviceControlWorkers.isShutdown())throw new IllegalStateException("原设备读取队列暂不可用。");
+        return routes;
+    }
+    /** The real unstarted Work admits the initial native operation in competition with its ordinary first start. */
     public JSONObject startOwnerWindowsWorkspaceRead(TaskStore.OwnerWindowsWorkspaceReadReview review)throws Exception {
         synchronized(assistantAdmissions){
-            var routes=originalDeviceSourceRoutes;
-            if(!businessReady()||routes==null||deviceControlWorkers.isShutdown())throw new IllegalStateException("原设备读取队列暂不可用。");
+            var routes=requireWindowsReadQueue();
             var admitted=java.util.Objects.requireNonNull(review).start();String id=admitted.taskId();RunControl original=admitted.control();
             if(capabilityControls.putIfAbsent(id,original)!=null){
-                try{admitted.finish();}finally{original.cancel();pushTask(id);}
-                throw new SecurityException("原工作控制已变化，没有派发文件读取。");
+                try{admitted.finish(false);}finally{closeWindowsWorkspaceControl(admitted);pushTask(id);}
+                throw new SecurityException("原工作控制已变化，没有派发读取。");
             }
-            try{deviceControlWorkers.execute(()->{
-                CapabilityPort candidate=null;
-                try{
-                    original.check();candidate=routes.forOriginalRun(id,original);
-                    if(!(candidate instanceof dev.pocketengine.features.devices.DeviceCapabilityPort port))
-                        throw new SecurityException("没有原工作区的实际已签路由。");
-                    admitted.read(port);
-                }catch(Exception unavailable){/* No replacement route or second send. Finish from the original SQL evidence. */}
-                finally{
-                    try{admitted.finish();}catch(Exception unconfirmed){error("原文件读取回执登记尚未核对，请回原工作查看。");}
-                    finally{original.cancel();capabilityControls.remove(id,original);if(candidate!=null)try{candidate.close();}catch(Exception ignored){}pushTask(id);}
-                }
-            });}catch(java.util.concurrent.RejectedExecutionException unavailable){
-                try{admitted.finish();}finally{original.cancel();capabilityControls.remove(id,original);pushTask(id);}
-            }
-            pushTask(id);return admitted.registration();
+            queueWindowsWorkspaceOperation(admitted,routes);return admitted.registration();
         }
+    }
+    public JSONObject startOwnerWindowsListedFile(TaskStore.OwnerWindowsListedFileReview review)throws Exception {
+        synchronized(assistantAdmissions){
+            var routes=requireWindowsReadQueue();var admitted=java.util.Objects.requireNonNull(review).original();
+            if(tasks.activeOwnerWindowsPicker(admitted.taskId(),capabilityControls.get(admitted.taskId()))!=admitted)
+                throw new SecurityException("原选择已关闭；没有开始读取文件。");
+            JSONObject registered=review.start();
+            queueWindowsWorkspaceOperation(admitted,routes);return registered;
+        }
+    }
+    private void closeWindowsWorkspaceControl(TaskStore.OwnerWindowsWorkspaceReadRun admitted){
+        RunControl original=admitted.control();
+        main.removeCallbacksAndMessages(admitted);
+        original.cancel();capabilityControls.remove(admitted.taskId(),original);admitted.releasePicker();
+    }
+    private void queueWindowsWorkspaceOperation(TaskStore.OwnerWindowsWorkspaceReadRun admitted,OriginalDeviceSourceRoutes routes)throws Exception {
+        String id=admitted.taskId();RunControl original=admitted.control();TaskStore store=tasks;
+        try{deviceControlWorkers.execute(()->{
+            CapabilityPort candidate=null;
+            try{
+                original.check();candidate=routes.forOriginalRun(id,original);
+                if(!(candidate instanceof dev.pocketengine.features.devices.DeviceCapabilityPort port))
+                    throw new SecurityException("没有原工作区的实际已签路由。");
+                admitted.read(port);
+            }catch(Exception unavailable){/* No substitute or retry. Resolve only the original SQL operation. */}
+            finally{
+                if(candidate!=null)try{candidate.close();}catch(Exception ignored){}
+                boolean terminal=true;
+                try{terminal=admitted.finish(true);}catch(Exception unconfirmed){
+                    try{store.markCapabilitySettlementUnconfirmed(id,original.hostRunIdentity().runId(),1,original);}catch(Exception ignored){}
+                    error("原读取回执登记尚未核对，请回原工作查看。");
+                }finally{
+                    if(terminal)closeWindowsWorkspaceControl(admitted);else scheduleWindowsPickerExpiry(admitted,store);
+                    pushTask(id);
+                }
+            }
+        });}catch(java.util.concurrent.RejectedExecutionException unavailable){
+            try{admitted.finish(false);}finally{closeWindowsWorkspaceControl(admitted);pushTask(id);}
+            return;
+        }
+        pushTask(id);
+    }
+    private void scheduleWindowsPickerExpiry(TaskStore.OwnerWindowsWorkspaceReadRun admitted,TaskStore store){
+        String id=admitted.taskId();RunControl original=admitted.control();
+        // Local retirement only; no route resolution, remote probe, cancel message or queued file read.
+        main.postAtTime(()->{
+            if(tasks!=store||capabilityControls.get(id)!=original)return;
+            try{capabilityWorkers.execute(()->{
+                if(tasks!=store||capabilityControls.get(id)!=original)return;
+                try{if(admitted.retirePicker(false)){closeWindowsWorkspaceControl(admitted);pushTask(id);}}
+                catch(Exception unsettled){error("原选择期限已到；请查看原工作的本机记录。");}
+            });}catch(java.util.concurrent.RejectedExecutionException unavailable){/* Host closed; no native execution survives. */}
+        },admitted,android.os.SystemClock.uptimeMillis()+Math.max(1L,admitted.deadline()-System.currentTimeMillis()));
     }
     private JSONObject stopOwnerWindowsWorkspaceRead(String id,String run,int epoch)throws Exception {
         JSONObject actual=tasks.get(id,false);RunControl original=capabilityControls.get(id);
         if(!dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead.marked(actual)||!run.equals(actual.opt("runId"))||epoch!=actual.optInt("coordinatorEpoch"))
             throw new SecurityException("原文件工作已变化，没有停止其他工作。");
-        if(original!=null&&original.matchesHostRun(id,run,epoch)){try{tasks.requestCancel(id,run);}finally{original.cancel();pushTask(id);}}
-        // Do not send operation.cancel; a stateless read already sent may still have its original receipt.
+        if(original!=null&&original.matchesHostRun(id,run,epoch)){
+            var picker=tasks.activeOwnerWindowsPicker(id,original);
+            try{if(picker==null)tasks.requestCancel(id,run);else if(picker.retirePicker(true))closeWindowsWorkspaceControl(picker);}
+            finally{original.cancel();pushTask(id);}
+        }
+        // Do not send operation.cancel; an already sent stateless operation may still have its original receipt.
         return tasks.get(id,false);
     }
     /** The owner page retains the native review/session. No model route or AgentRunner is used. */

@@ -28,7 +28,7 @@ internal class PocketWebDeviceTaskScope(
     )
     private class WorkspaceFileReview(
         val id: String, val taskId: String, val current: () -> Boolean,
-        val native: dev.pocketengine.store.TaskStore.OwnerWindowsWorkspaceReadReview
+        val startAction: String, val start: () -> JSONObject
     )
     private val main = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
@@ -42,7 +42,12 @@ internal class PocketWebDeviceTaskScope(
         const val REVIEW_WORKSPACE_FILE = "deviceTaskScope.reviewWorkspaceFile"
         const val START_WORKSPACE_FILE = "deviceTaskScope.startWorkspaceFile"
         const val DISMISS_WORKSPACE_FILE = "deviceTaskScope.dismissWorkspaceFile"
-        val WORKSPACE_FILE_COMMANDS = setOf(REVIEW_WORKSPACE_FILE, START_WORKSPACE_FILE, DISMISS_WORKSPACE_FILE)
+        private const val REVIEW_WORKSPACE_DIRECTORY = "deviceTaskScope.reviewWorkspaceDirectory"
+        private const val START_WORKSPACE_DIRECTORY = "deviceTaskScope.startWorkspaceDirectory"
+        private const val REVIEW_WORKSPACE_LISTED_FILE = "deviceTaskScope.reviewWorkspaceListedFile"
+        private const val START_WORKSPACE_LISTED_FILE = "deviceTaskScope.startWorkspaceListedFile"
+        val WORKSPACE_FILE_COMMANDS = setOf(REVIEW_WORKSPACE_FILE, START_WORKSPACE_FILE, DISMISS_WORKSPACE_FILE,
+            REVIEW_WORKSPACE_DIRECTORY, START_WORKSPACE_DIRECTORY, REVIEW_WORKSPACE_LISTED_FILE, START_WORKSPACE_LISTED_FILE)
         val COMMANDS = setOf("deviceTaskScope.prepare", "deviceTaskScope.open", "deviceTaskScope.readPhoneDispatchFact", "deviceTaskScope.close", "deviceTaskScope.review",
             "deviceTaskScope.confirm", "deviceTaskScope.dismissReview", "deviceTaskScope.reviewImport", "deviceTaskScope.confirmImport") + WORKSPACE_FILE_COMMANDS
         private fun fields(value: JSONObject, vararg allowed: String) = PocketWebGroupReviews.fields(value, *allowed)
@@ -129,19 +134,45 @@ internal class PocketWebDeviceTaskScope(
     fun dispatch(action: String, input: JSONObject, done: (JSONObject?, String?) -> Unit) {
         if (action in WORKSPACE_FILE_COMMANDS) {
             when (action) {
-                REVIEW_WORKSPACE_FILE -> {
-                    require(input.keys().asSequence().toSet() == setOf("taskId", "path"))
+                REVIEW_WORKSPACE_FILE, REVIEW_WORKSPACE_DIRECTORY, REVIEW_WORKSPACE_LISTED_FILE -> {
+                    val expected = when (action) {
+                        REVIEW_WORKSPACE_FILE -> setOf("taskId", "path")
+                        REVIEW_WORKSPACE_DIRECTORY -> setOf("taskId")
+                        else -> setOf("taskId", "runId", "epoch", "directoryOperationId", "entryIndex")
+                    }
+                    require(input.keys().asSequence().toSet() == expected)
                     val task = text(input, "taskId")
-                    val path = input.opt("path") as? String ?: error("请输入一份工作区相对文件路径。")
-                    require(path.length in 1..2048)
-                    val epoch = generation; val owner = controller.webWindowTicket()
-                    fun current() = epoch == generation && visible(task) && owner == controller.webWindowTicket()
+                    val generationAtReview = generation; val owner = controller.webWindowTicket()
+                    fun current() = generationAtReview == generation && visible(task) && owner == controller.webWindowTicket()
                     check(current() && !busy.get()) { "请回到这份原私人工作。" }
                     synchronized(lifetime) { workspaceFileReview = null }
                     work(null, task, done) {
-                        val native = controller.nativeButlerHost().reviewOwnerWindowsWorkspaceRead(task, path, ::current)
-                        val created = WorkspaceFileReview(UUID.randomUUID().toString(), task, ::current, native)
-                        val value = native.view().put("reviewHandle", created.id)
+                        val host = controller.nativeButlerHost()
+                        val startAction: String
+                        val prepared: Pair<JSONObject, () -> JSONObject>
+                        when (action) {
+                            REVIEW_WORKSPACE_FILE -> {
+                                val path = input.opt("path") as? String ?: error("请输入一份工作区相对文件路径。")
+                                require(path.length in 1..2048)
+                                val native = host.reviewOwnerWindowsWorkspaceRead(task, path, ::current)
+                                startAction = START_WORKSPACE_FILE
+                                prepared = Pair(native.view(), { host.startOwnerWindowsWorkspaceRead(native) })
+                            }
+                            REVIEW_WORKSPACE_DIRECTORY -> {
+                                val native = host.reviewOwnerWindowsWorkspaceDirectory(task, ::current)
+                                startAction = START_WORKSPACE_DIRECTORY
+                                prepared = Pair(native.view(), { host.startOwnerWindowsWorkspaceRead(native) })
+                            }
+                            else -> {
+                                val native = host.reviewOwnerWindowsListedFile(task, text(input, "runId"),
+                                    integer(input, "epoch", 1, 1).toInt(), text(input, "directoryOperationId"),
+                                    integer(input, "entryIndex", 0, 199).toInt(), ::current)
+                                startAction = START_WORKSPACE_LISTED_FILE
+                                prepared = Pair(native.view(), { host.startOwnerWindowsListedFile(native) })
+                            }
+                        }
+                        val created = WorkspaceFileReview(UUID.randomUUID().toString(), task, ::current, startAction, prepared.second)
+                        val value = prepared.first.put("reviewHandle", created.id)
                         synchronized(lifetime) {
                             check(current()) { "原私人工作窗口已变化，没有读取。" }
                             workspaceFileReview = created
@@ -149,18 +180,20 @@ internal class PocketWebDeviceTaskScope(
                         value
                     }
                 }
-                START_WORKSPACE_FILE -> {
+                START_WORKSPACE_FILE, START_WORKSPACE_DIRECTORY, START_WORKSPACE_LISTED_FILE -> {
                     require(input.keys().asSequence().toSet() == setOf("reviewHandle"))
                     val handle = text(input, "reviewHandle")
                     val selected = synchronized(lifetime) {
-                        check(!busy.get()) { "请等待原文件审阅。" }
-                        val original = requireNotNull(workspaceFileReview?.takeIf { it.id == handle && it.current() }) { "原文件审阅已关闭或使用。" }
+                        check(!busy.get()) { "请等待原审阅。" }
+                        val original = requireNotNull(workspaceFileReview?.takeIf { it.id == handle && it.startAction == action && it.current() }) {
+                            "原审阅已关闭、使用或不属于这项确认。"
+                        }
                         workspaceFileReview = null
                         original
                     }
                     work(null, selected.taskId, done) {
                         check(selected.current()) { "原私人工作窗口已变化，没有开始。" }
-                        controller.nativeButlerHost().startOwnerWindowsWorkspaceRead(selected.native)
+                        selected.start()
                     }
                 }
                 DISMISS_WORKSPACE_FILE -> {

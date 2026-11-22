@@ -12,6 +12,7 @@ import android.database.sqlite.SQLiteDatabase;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.devices.DeviceExecutionAdmission;
 import dev.pocketengine.features.devices.DeviceTaskEnvelope;
+import dev.pocketengine.features.devices.OwnerWindowsWorkspaceRead;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -544,19 +545,20 @@ public final class TaskStoreDeviceTasks {
     private record WindowsTextClaim(DirectedWorkspaceTarget target, DeviceTaskEnvelope wire, String wireHash,
                                     String preparation, String knownJob) {}
 
-    /** A local read proof for one original workspace.read. Neither a send ticket nor an accepted job. */
+    /** Local proof of one original exact read or typed root list. Never a send ticket or a job. */
     public final class OwnerWindowsTextEvidence {
         private final String id, run, operation, here;
         private final int epoch;
+        private final boolean rootList;
         private final WindowsTextClaim selected;
-        private OwnerWindowsTextEvidence(String id,String run,int epoch,String operation,String here,WindowsTextClaim selected) {
-            this.id=id; this.run=run; this.epoch=epoch; this.operation=operation; this.here=here; this.selected=selected;
+        private OwnerWindowsTextEvidence(String id,String run,int epoch,String operation,String here,WindowsTextClaim selected,boolean rootList) {
+            this.id=id; this.run=run; this.epoch=epoch; this.operation=operation; this.here=here; this.selected=selected;this.rootList=rootList;
         }
         public DirectedWorkspaceTarget target(){return selected.target();}
         public DeviceTaskEnvelope wire(){return selected.wire();}
         /** If the genuine callback settled meanwhile, its original per-operation job must match too. */
         public String requireCurrentJob() throws Exception {
-            WindowsTextClaim live=windowsTextClaim(id,run,epoch,operation,here);
+            WindowsTextClaim live=windowsTextClaim(id,run,epoch,operation,here,rootList);
             if(!selected.target().equals(live.target())||!selected.wireHash().equals(live.wireHash())
                     ||!selected.preparation().equals(live.preparation())
                     ||!selected.knownJob().isEmpty()&&!selected.knownJob().equals(live.knownJob()))
@@ -566,9 +568,13 @@ public final class TaskStoreDeviceTasks {
     }
     public OwnerWindowsTextEvidence ownerWindowsTextEvidence(String id,String run,int epoch,String operation,String here)throws Exception {
         DeviceProtocol.identifier(id,"taskId"); DeviceProtocol.identifier(run,"runId"); DeviceProtocol.identifier(operation,"operationId");
-        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here));
+        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,false),false);
     }
-    private WindowsTextClaim windowsTextClaim(String id,String run,int epoch,String operation,String here)throws Exception {
+    OwnerWindowsTextEvidence ownerWindowsRootListEvidence(String id,String run,int epoch,String operation,String here)throws Exception {
+        DeviceProtocol.identifier(id,"taskId"); DeviceProtocol.identifier(run,"runId"); DeviceProtocol.identifier(operation,"operationId");
+        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,true),true);
+    }
+    private WindowsTextClaim windowsTextClaim(String id,String run,int epoch,String operation,String here,boolean rootList)throws Exception {
         synchronized(owner){
             JSONObject parent=task(id), marker=parent.optJSONObject("ownerDeviceWork");
             if(!id.equals(parent.opt("id"))||!"owner".equals(parent.opt("actorId"))||!"private".equals(parent.opt("spaceId"))
@@ -576,7 +582,9 @@ public final class TaskStoreDeviceTasks {
                     ||!"".equals(parent.opt("conversationId"))||!run.equals(parent.opt("runId"))||epoch<1||epoch!=parent.optInt("coordinatorEpoch",-1)
                     ||Boolean.FALSE.equals(parent.opt("contextAvailable"))||parent.optBoolean("contextWithdrawn")||parent.optBoolean("sourceCurrentReadRequired")
                     ||marker==null||!"pocketworld.owner-device-work.v1".equals(marker.opt("format"))||!id.equals(marker.opt("requestId"))
-                    ||!marker.optString("requestDigest").matches("[a-f0-9]{64}")||parent.has("ownerPhoneControl"))
+                    ||!marker.optString("requestDigest").matches("[a-f0-9]{64}")||parent.has("ownerPhoneControl")||
+                    rootList&&(!Boolean.TRUE.equals(parent.opt(OwnerWindowsWorkspaceRead.FIELD))||
+                        !OwnerWindowsWorkspaceRead.PICKER_FORMAT.equals(parent.getJSONObject(OwnerWindowsWorkspaceRead.PICKER).opt("format"))))
                 throw new SecurityException("请回到原私人电脑工作的同一次执行，未联系设备。");
             DirectedWorkspaceTarget target=DirectedWorkspaceTarget.fromTask(parent);
             if(target==null)throw new SecurityException("原工作没有固定电脑，未联系设备。");
@@ -607,8 +615,8 @@ public final class TaskStoreDeviceTasks {
                 JSONObject resource=DeviceProtocol.validateResourceBinding("workspace-v1",wire.resourceBinding());
                 var tool=wire.toolInvocation(); Object path=tool.arguments().opt("path");
                 if(!allocation.equals(DeviceProtocol.allocationId(id,target.deviceId(),resource,"tool_session",null))
-                        ||!"workspace.read".equals(tool.toolName())||!"read".equals(tool.effect())
-                        ||!(path instanceof String relative)||relative.isEmpty()||relative.length()>2048||tool.arguments().length()!=1)
+                        ||!(rootList?OwnerWindowsWorkspaceRead.LIST:OwnerWindowsWorkspaceRead.READ).equals(tool.toolName())||!"read".equals(tool.effect())
+                        ||!(path instanceof String relative)||relative.isEmpty()!=rootList||relative.length()>2048||tool.arguments().length()!=1)
                     throw new SecurityException(unavailable);
                 String job="";
                 if(journal.has("nativeDeviceAcceptedBinding")){

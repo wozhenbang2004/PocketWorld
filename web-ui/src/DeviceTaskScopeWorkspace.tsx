@@ -3,6 +3,7 @@ import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextFi
 import { bridge, type PocketSnapshot } from './bridge';
 import { deviceChoiceCode, materialPath, phoneTextOnly, routeDraft, routeTitle, routeUseSummary, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
 import { OriginalPhoneDispatchStatus } from './OriginalPhoneDispatchStatus';
+import { originalWindowsWorkspacePickerAt, validWindowsWorkspaceFilePath as validWorkspaceFilePath } from './OriginalWindowsTextRead';
 import { usePocketSnapshot } from './usePocketSnapshot';
 
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -22,7 +23,7 @@ const routeName = (route:Data, names:Data[]):string => {
 
 const tools = (value: any): string => Array.isArray(value) ? value.map(row => row.toolName).join('、') : value && typeof value === 'object' ? Object.keys(value).join('、') : '未提供';
 
-type WorkspaceReadFacts = { id: string; actions: string; readsFile: boolean };
+type WorkspaceReadFacts = { id: string; actions: string; readsFile: boolean; listsDirectory: boolean };
 
 /** Present the exact native workspace and read declarations, not a path or a new permission. */
 function workspaceReadFacts(value: Data, original?: OriginalDevice): WorkspaceReadFacts | undefined {
@@ -39,7 +40,7 @@ function workspaceReadFacts(value: Data, original?: OriginalDevice): WorkspaceRe
     (name !== 'workspace.list' && name !== 'workspace.read'))) return;
   const agreed = new Set(entries.map(([name]) => name));
   if (agreed.size !== entries.length) return;
-  return { id: binding.environmentId, readsFile: agreed.has('workspace.read'),
+  return { id: binding.environmentId, readsFile: agreed.has('workspace.read'), listsDirectory: agreed.has('workspace.list'),
     actions: [agreed.has('workspace.list') && '列目录', agreed.has('workspace.read') && '读小型 UTF-8 文本'].filter(Boolean).join('、') };
 }
 
@@ -96,8 +97,15 @@ type OriginalDevice = { deviceId: string; instanceId: string; certificateFingerp
 const workspaceFileReview = 'deviceTaskScope.reviewWorkspaceFile';
 const workspaceFileStart = 'deviceTaskScope.startWorkspaceFile';
 const workspaceFileDismiss = 'deviceTaskScope.dismissWorkspaceFile';
+const workspaceDirectoryReview = 'deviceTaskScope.reviewWorkspaceDirectory';
+const workspaceDirectoryStart = 'deviceTaskScope.startWorkspaceDirectory';
+const workspaceListedReview = 'deviceTaskScope.reviewWorkspaceListedFile';
+const workspaceListedStart = 'deviceTaskScope.startWorkspaceListedFile';
 const workspaceFileCommands = (snapshot: PocketSnapshot) => [workspaceFileReview, workspaceFileStart, workspaceFileDismiss]
   .every(action => snapshot.capabilities.commands.includes(action));
+const workspacePickerCommands = (snapshot: PocketSnapshot) =>
+  [workspaceDirectoryReview, workspaceDirectoryStart, workspaceListedReview, workspaceListedStart, workspaceFileDismiss]
+    .every(action => snapshot.capabilities.commands.includes(action));
 const record = (value: unknown): Data | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Data : undefined;
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -129,36 +137,39 @@ export function isUnstartedDirectWorkspaceWork(taskId: string, snapshot: PocketS
   const work = originalWorkspaceFileWork(snapshot, taskId);
   return !!work && workspaceFileUnstarted(work);
 }
-function workspaceFileChoice(work: WorkspaceFileWork, taskId: string) {
+function workspaceFileChoice(work: WorkspaceFileWork, taskId: string, directory = false) {
   if (!workspaceFileUnstarted(work)) return;
+  const toolBudget = directory ? 2 : 1;
   const scope = record(work.raw.deviceSourceScope), execution = record(work.raw.executionScope), now = Date.now();
   if (!execution || scope?.format !== 'pocketworld.native-device-source-scope.v1' || scope.taskId !== taskId || scope.contextMode !== 'goal_only' ||
     !Number.isSafeInteger(scope.revision) || scope.revision < 1 || !Number.isSafeInteger(scope.parentScopeRevision) ||
     scope.parentScopeRevision !== execution.revision || !Number.isSafeInteger(execution.deadlineAt) ||
     execution.deadlineAt > 0 && execution.deadlineAt <= now || execution.executionPhase === 'planning' ||
-    !Number.isSafeInteger(execution.toolLimit) || !Number.isSafeInteger(execution.toolsUsed) || execution.toolLimit - execution.toolsUsed < 2 ||
+    !Number.isSafeInteger(execution.toolLimit) || !Number.isSafeInteger(execution.toolsUsed) || execution.toolLimit - execution.toolsUsed < 2 * toolBudget ||
     !Array.isArray(scope.routes) || scope.routes.length !== 1) return;
   const route = record(scope.routes[0]), facts = route && workspaceReadFacts(route, work.original);
-  if (!route || !facts?.readsFile || route.contextMode !== 'goal_only' || route.toolBudget !== 1 || route.localToolShare !== 1 ||
+  if (!route || !facts?.readsFile || directory && !facts.listsDirectory ||
+    route.contextMode !== 'goal_only' || route.toolBudget !== toolBudget || route.localToolShare !== toolBudget ||
     route.modelBudget !== 0 || route.localModelShare !== 0 || !emptyRows(route.files) || !emptyRows(route.projects) || !emptyRows(route.downstreamShares) ||
     !Number.isSafeInteger(route.deadline) || route.deadline <= now || typeof route.optionId !== 'string' || !route.optionId ||
     typeof route.grantId !== 'string' || !route.grantId || !digest(route.grantFingerprint) ||
     !Number.isSafeInteger(route.authorizationEpoch) || route.authorizationEpoch < 1) return;
-  return { workspaceId: facts.id, key: JSON.stringify([scope.revision, scope.parentScopeRevision, route.optionId,
+  return { workspaceId: facts.id, key: JSON.stringify([toolBudget, scope.revision, scope.parentScopeRevision, route.optionId,
     route.grantId, route.grantFingerprint, route.authorizationEpoch, route.resourceBinding.binding, route.deadline]) };
 }
-export function canReviewDirectWorkspaceFile(taskId: string, snapshot: PocketSnapshot) {
+export function canReviewDirectWorkspace(taskId: string, snapshot: PocketSnapshot) {
   const work = originalWorkspaceFileWork(snapshot, taskId);
-  return !!work && workspaceFileCommands(snapshot) && !!workspaceFileChoice(work, taskId);
+  return !!work && (workspaceFileCommands(snapshot) && !!workspaceFileChoice(work, taskId) ||
+    workspacePickerCommands(snapshot) && !!workspaceFileChoice(work, taskId, true));
 }
 
-const validWorkspaceFilePath = (path: string) => path.length > 0 && path.length <= 2048 &&
-  !/[\\<>:"|?*\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(path) && path.split('/').every(part =>
-    !!part && !/[. ]$/.test(part) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part));
 type WorkspaceFileModelStart = { disabled: boolean; start: () => void };
-type WorkspaceFileDraft = { work: string; choice: string; epoch: number; workspace: string; path: string;
+type WorkspaceReadSource = { kind: 'file'; path: string } | { kind: 'directory' } |
+  { kind: 'listed'; path: string; runId: string; directoryOperationId: string; entryIndex: number };
+type WorkspaceFileDraft = WorkspaceReadSource & { work: string; choice: string; epoch: number; workspace: string;
   reviewing?: boolean; review?: { handle: string; expiresAt: number }; error?: string };
-type WorkspaceFileAttempt = { work: string; epoch: number; state: 'pending' | 'registered' | 'unknown'; runId?: string };
+type WorkspaceFileAttempt = { work: string; epoch: number; kind: WorkspaceReadSource['kind'];
+  state: 'pending' | 'registered' | 'unknown'; runId?: string };
 
 function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack, onPending }: { taskId: string; active: boolean;
   disabled: boolean; modelStart?: WorkspaceFileModelStart; registerBack: (handler: (() => boolean) | null) => void; onPending: (value: boolean) => void }) {
@@ -166,6 +177,7 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
   activeRef.current = active; disabledRef.current = disabled;
   const [draft, setDraft] = useState<WorkspaceFileDraft | null>(null), currentDraft = useRef<WorkspaceFileDraft | null>(null);
   const [attempt, setAttempt] = useState<WorkspaceFileAttempt | null>(null), currentAttempt = useRef<WorkspaceFileAttempt | null>(null);
+  const [, redrawDeadline] = useState(0);
   const reviewSummary = useRef<HTMLParagraphElement>(null);
   const change = (value: WorkspaceFileDraft | null) => { currentDraft.current = value; setDraft(value); };
   const writeAttempt = (value: WorkspaceFileAttempt) => { currentAttempt.current = value; setAttempt(value); };
@@ -180,12 +192,20 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
   };
   const draftCurrent = (value: WorkspaceFileDraft) => {
     const work = workInWindow(value.work, value.epoch);
-    return !!work && workspaceFileCommands(bridge.getState()) && workspaceFileChoice(work, taskId)?.key === value.choice;
+    if (!work) return false;
+    const live = bridge.getState();
+    if (value.kind === 'file') return workspaceFileCommands(live) && workspaceFileChoice(work, taskId)?.key === value.choice;
+    if (!workspacePickerCommands(live)) return false;
+    if (value.kind === 'directory') return workspaceFileChoice(work, taskId, true)?.key === value.choice;
+    const picker = originalWindowsWorkspacePickerAt(live, taskId), directory = picker?.directory;
+    return !!picker?.canChoose && picker.runId === value.runId && !!directory &&
+      directory.operationId === value.directoryOperationId && directory.received.identity === value.choice &&
+      directory.workspaceId === value.workspace && directory.choices.some(row => row.entryIndex === value.entryIndex && row.path === value.path);
   };
   const back = () => {
     const value = currentDraft.current;
     if (!value) return false;
-    if (value.review && draftCurrent(value)) change({ ...value, review: undefined, error: undefined });
+    if (value.kind === 'file' && value.review && draftCurrent(value)) change({ ...value, review: undefined, error: undefined });
     else change(null);
     retire(value.review?.handle, value.epoch);
     return true;
@@ -218,45 +238,78 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
     const timer = window.setTimeout(() => {
       if (currentDraft.current !== draft || !draftCurrent(draft)) return;
       retire(draft.review?.handle, draft.epoch);
-      change({ ...draft, review: undefined, error: '这次核对已到期，请重新核对这个路径。' });
+      change({ ...draft, review: undefined, error: draft.kind === 'file' ? '这次核对已到期，请重新核对这个路径。' : '这次核对已到期，请重新核对。' });
     }, Math.max(0, draft.review.expiresAt - Date.now()));
     return () => window.clearTimeout(timer);
   }, [draft]);
 
-  const begin = () => {
-    const live = bridge.getState(), work = originalWorkspaceFileWork(live, taskId), epoch = bridge.getDocumentEpoch();
-    const choice = work && workspaceFileChoice(work, taskId);
-    if (!work || !choice || !workspaceFileCommands(live) || !epoch || !workInWindow(work.key, epoch) ||
-      disabledRef.current || currentDraft.current || currentAttempt.current) return;
-    change({ work: work.key, choice: choice.key, epoch, workspace: choice.workspaceId, path: '' });
-  };
   const check = () => {
     const value = currentDraft.current;
-    if (!value || value.reviewing || value.review || disabledRef.current || !draftCurrent(value) || !validWorkspaceFilePath(value.path)) return;
-    const flight = { ...value, reviewing: true, error: undefined };
+    if (!value || value.reviewing || value.review || disabledRef.current || !draftCurrent(value) ||
+      value.kind === 'file' && !validWorkspaceFilePath(value.path)) return;
+    const flight: WorkspaceFileDraft = { ...value, reviewing: true, error: undefined };
+    const action = flight.kind === 'file' ? workspaceFileReview : flight.kind === 'directory' ? workspaceDirectoryReview : workspaceListedReview;
+    const args = flight.kind === 'file' ? { taskId, path: flight.path } : flight.kind === 'directory' ? { taskId } :
+      { taskId, runId: flight.runId, epoch: 1, directoryOperationId: flight.directoryOperationId, entryIndex: flight.entryIndex };
     change(flight);
-    void bridge.command(workspaceFileReview, { taskId, path: flight.path }).then(result => {
+    void bridge.command(action, args).then(result => {
       const reply = record(result);
-      if (reply?.format !== 'pocketworld.owner-windows-workspace-read-review.v1' || reply.taskId !== taskId ||
-        reply.workspaceId !== flight.workspace || reply.exactPath !== flight.path || !uuid(reply.reviewHandle) ||
-        !Number.isSafeInteger(reply.expiresAt) || reply.maxDisplayBytes !== 8192 || reply.modelCalls !== 0 || reply.executionAuthorized !== false)
+      if (!reply || reply.taskId !== taskId || reply.workspaceId !== flight.workspace || !uuid(reply.reviewHandle) ||
+        !Number.isSafeInteger(reply.expiresAt) || reply.modelCalls !== 0 || reply.executionAuthorized !== false ||
+        (flight.kind === 'file' ? reply.format !== 'pocketworld.owner-windows-workspace-read-review.v1' ||
+          reply.exactPath !== flight.path || reply.maxDisplayBytes !== 8192 :
+          flight.kind === 'directory' ? reply.format !== 'pocketworld.owner-windows-workspace-directory-review.v1' ||
+            reply.relativeDirectory !== '' || reply.remoteToolLimit !== 2 :
+            reply.format !== 'pocketworld.owner-windows-workspace-listed-file-review.v1' || reply.exactPath !== flight.path || reply.maxDisplayBytes !== 8192 ||
+            reply.runId !== flight.runId || reply.epoch !== 1 || reply.directoryOperationId !== flight.directoryOperationId || reply.entryIndex !== flight.entryIndex))
         throw new Error('unmatched review');
       if (currentDraft.current !== flight || !draftCurrent(flight)) { retire(reply.reviewHandle, flight.epoch); return; }
       if (reply.expiresAt <= Date.now() || reply.expiresAt > Date.now() + 120_000) { retire(reply.reviewHandle, flight.epoch); throw new Error('expired review'); }
       change({ ...flight, reviewing: false, review: { handle: reply.reviewHandle, expiresAt: reply.expiresAt } });
     }).catch(() => {
-      if (currentDraft.current === flight && draftCurrent(flight)) change({ ...value, error: '未核对到这个文件的读取范围。请检查相对路径、原电脑连接和已保存范围。' });
+      if (currentDraft.current !== flight || !draftCurrent(flight)) return;
+      change({ ...value, error: flight.kind === 'file' ? '未核对到这个文件的读取范围。请检查相对路径、原电脑连接和已保存范围。' :
+        flight.kind === 'directory' ? '未核对到原电脑工作区的列目录范围，没有联系电脑读取。' :
+          '未核对到刚选的原目录文件。目录记录仍保留，没有读取其他文件。' });
     });
   };
+  const begin = (kind: 'file' | 'directory') => {
+    const live = bridge.getState(), work = originalWorkspaceFileWork(live, taskId), epoch = bridge.getDocumentEpoch();
+    const choice = work && workspaceFileChoice(work, taskId, kind === 'directory');
+    if (!work || !choice || !(kind === 'file' ? workspaceFileCommands(live) : workspacePickerCommands(live)) ||
+      !epoch || !workInWindow(work.key, epoch) || disabledRef.current || currentDraft.current || currentAttempt.current) return;
+    const captured = { work: work.key, choice: choice.key, epoch, workspace: choice.workspaceId };
+    if (kind === 'file') change({ ...captured, kind, path: '' });
+    else { change({ ...captured, kind }); check(); }
+  };
+  const beginListed = (shown: NonNullable<ReturnType<typeof originalWindowsWorkspacePickerAt>>, entryIndex: number) => {
+    const live = bridge.getState(), work = originalWorkspaceFileWork(live, taskId), epoch = bridge.getDocumentEpoch();
+    const picker = originalWindowsWorkspacePickerAt(live, taskId), directory = picker?.directory, displayed = shown.directory;
+    const option = directory?.choices.find(row => row.entryIndex === entryIndex);
+    if (!work || !epoch || !workInWindow(work.key, epoch) || !workspacePickerCommands(live) || !picker?.canChoose ||
+      picker.runId !== shown.runId || !directory || !displayed || directory.operationId !== displayed.operationId ||
+      directory.received.identity !== displayed.received.identity || !option ||
+      disabledRef.current || currentDraft.current || currentAttempt.current?.state === 'pending' || currentAttempt.current?.kind === 'listed') return;
+    change({ work: work.key, choice: directory.received.identity, epoch, workspace: directory.workspaceId, kind: 'listed', path: option.path,
+      runId: picker.runId, directoryOperationId: directory.operationId, entryIndex: option.entryIndex });
+    check();
+  };
   const confirm = () => {
-    const value = currentDraft.current;
-    if (!value?.review || disabledRef.current || currentAttempt.current || !draftCurrent(value) || value.review.expiresAt <= Date.now()) return;
-    const pending: WorkspaceFileAttempt = { work: value.work, epoch: value.epoch, state: 'pending' };
+    const value = currentDraft.current, attempted = currentAttempt.current;
+    if (!value?.review || disabledRef.current || (value.kind === 'listed' ? attempted?.kind === 'listed' || attempted?.state === 'pending' : !!attempted) ||
+      !draftCurrent(value) || value.review.expiresAt <= Date.now()) return;
+    const pending: WorkspaceFileAttempt = { work: value.work, epoch: value.epoch, kind: value.kind, state: 'pending',
+      runId: value.kind === 'listed' ? value.runId : undefined };
+    const action = value.kind === 'file' ? workspaceFileStart : value.kind === 'directory' ? workspaceDirectoryStart : workspaceListedStart;
     writeAttempt(pending); onPending(true); change(null);
-    void bridge.command(workspaceFileStart, { reviewHandle: value.review.handle }).then(result => {
+    void bridge.command(action, { reviewHandle: value.review.handle }).then(result => {
       const reply = record(result);
-      if (reply?.format !== 'pocketworld.owner-windows-workspace-read-start.v1' || reply.taskId !== taskId || !uuid(reply.runId) ||
-        reply.epoch !== 1 || reply.state !== 'registered' || reply.modelCalls !== 0 || reply.receiptConfirmed !== false || reply.replayAllowed !== false)
+      if (!reply || reply.taskId !== taskId || !uuid(reply.runId) || reply.epoch !== 1 || reply.state !== 'registered' ||
+        reply.modelCalls !== 0 || reply.replayAllowed !== false ||
+        (value.kind === 'directory' ? reply.format !== 'pocketworld.owner-windows-workspace-directory-start.v1' || reply.directoryReceiptConfirmed !== false :
+          reply.receiptConfirmed !== false || (value.kind === 'file' ? reply.format !== 'pocketworld.owner-windows-workspace-read-start.v1' :
+            reply.format !== 'pocketworld.owner-windows-workspace-listed-file-start.v1' || reply.runId !== value.runId ||
+            reply.directoryOperationId !== value.directoryOperationId)))
         throw new Error('unmatched registration');
       if (currentAttempt.current === pending) writeAttempt({ ...pending, state: 'registered', runId: reply.runId });
     }).catch(() => {
@@ -264,38 +317,94 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
     }).finally(() => { if (currentAttempt.current) onPending(false); });
   };
 
-  const visible = active && !document.hidden && workspaceFileCommands(snapshot);
-  const work = visible ? originalWorkspaceFileWork(snapshot, taskId) : undefined;
-  const choice = work && workspaceFileChoice(work, taskId);
-  const sameAttempt = work && attempt && attempt.work === work.key ? attempt : undefined;
-  const stillWaiting = work && sameAttempt && (workspaceFileUnstarted(work) || sameAttempt.runId === work.raw.runId &&
-    work.raw.coordinatorEpoch === 1 && ['preparing', 'queued', 'running'].includes(work.raw.status));
+  const work = active && !document.hidden ? originalWorkspaceFileWork(snapshot, taskId) : undefined;
+  const choice = work && workspaceFileCommands(snapshot) && workspaceFileChoice(work, taskId);
+  const directoryChoice = work && workspacePickerCommands(snapshot) && workspaceFileChoice(work, taskId, true);
+  const picker = work && originalWindowsWorkspacePickerAt(snapshot, taskId), directory = picker?.directory;
+  const sameAttempt = work && attempt && attempt.work === work.key && attempt.epoch === bridge.getDocumentEpoch() ? attempt : undefined;
+  const canChoose = picker?.canChoose === true && workspacePickerCommands(snapshot) &&
+    sameAttempt?.state !== 'pending' && sameAttempt?.kind !== 'listed';
+  const deadline = picker?.phase === 'waiting_for_file' ? picker.expiresAt : undefined;
+  useEffect(() => {
+    if (deadline === undefined || deadline <= Date.now()) return;
+    const timer = window.setTimeout(() => redrawDeadline(value => value + 1), deadline - Date.now());
+    return () => window.clearTimeout(timer);
+  }, [deadline]);
+  const stillWaiting = work && sameAttempt && sameAttempt.kind !== 'listed' && !picker &&
+    (workspaceFileUnstarted(work) || sameAttempt.runId === work.raw.runId &&
+      work.raw.coordinatorEpoch === 1 && ['preparing', 'queued', 'running'].includes(work.raw.status));
+  const listedAttempt = sameAttempt?.kind === 'listed' && sameAttempt.runId === picker?.runId ? sameAttempt : undefined;
+  const directoryStatus = !picker ? undefined :
+    picker.phase === 'ended' ? picker.fileReceived ? undefined : directory ?
+      directory.choices.length ? '没有可核对的原文本；仍可查看当时的目录。' : '原目录没有可选择的 8 KiB 以内文件。' :
+      '尚未核对到这次的原目录或文本回执。' :
+    picker.phase === 'listing' ? '正在等待原电脑的目录回执，没有读取文件。' :
+    picker.phase === 'reading' || listedAttempt?.state === 'registered' ? '已登记文件读取，尚未核实文本回执。' :
+    listedAttempt?.state === 'unknown' ? '这次文件读取尚未核实，不会重新提交。' :
+    listedAttempt?.state === 'pending' ? '正在登记选中的文件，还没有收到文本。' :
+    canChoose && directory?.choices.length ? undefined :
+    canChoose ? '原目录没有可选择的 8 KiB 以内文件。' :
+    directory ? '目前不能继续选择文件；已收到的目录仍可查看。' : '尚未核对到可查看的原目录。';
+  const reviewTitle = draft?.kind === 'directory' ? '核对列出目录' : draft?.kind === 'listed' ? '核对所选原文件' :
+    draft?.review ? '确认从原电脑读取' : '核对原电脑文件';
   return <>
-    {choice && !attempt && <div className="pw-form-actions">
-      <Button onClick={begin} disabled={disabled}>读取一个电脑文件</Button>
+    {(choice || directoryChoice) && !attempt && <div className="pw-form-actions">
+      <Button onClick={() => begin(directoryChoice ? 'directory' : 'file')} disabled={disabled}>{directoryChoice ? '浏览电脑文件' : '读取一个电脑文件'}</Button>
       {modelStart && <Button variant="ghost" disabled={disabled || modelStart.disabled} onClick={() => {
         if (!currentDraft.current && !currentAttempt.current && !disabledRef.current && activeRef.current && !document.hidden &&
-          canReviewDirectWorkspaceFile(taskId, bridge.getState())) modelStart.start();
+          canReviewDirectWorkspace(taskId, bridge.getState())) modelStart.start();
       }}>使用模型开始</Button>}
     </div>}
-    {stillWaiting && sameAttempt && <p className="pw-field-hint" role="status">{sameAttempt.state === 'pending' ? '正在登记这次读取…' :
-      sameAttempt.state === 'registered' ? '已登记这次读取，尚未核实电脑回执。请在本工作查看结果。' :
-      '尚未核实这次读取是否登记。没有重新开始，请在原工作核对状态。'}</p>}
-    <SettingsDialog isOpen={!!draft && draftCurrent(draft)} onClose={back}
-      title={draft?.review ? '确认从原电脑读取' : '核对原电脑文件'} closeLabel={draft?.review ? '返回修改路径' : '返回原工作'}>
+    {stillWaiting && sameAttempt && <p className="pw-field-hint" role="status">{sameAttempt.state === 'pending' ?
+      sameAttempt.kind === 'directory' ? '正在登记列出目录…' : '正在登记这次读取…' :
+      sameAttempt.state === 'registered' ? sameAttempt.kind === 'directory' ? '已登记列出目录，尚未核实电脑回执。' : '已登记这次读取，尚未核实电脑回执。请在本工作查看结果。' :
+      sameAttempt.kind === 'directory' ? '是否已登记列出目录仍待核对。没有重新开始，请在原工作核对状态。' :
+        '尚未核实这次读取是否登记。没有重新开始，请在原工作核对状态。'}</p>}
+    {directoryStatus && <p className="pw-field-hint" role="status">{directoryStatus}</p>}
+    {picker && directory && <section className="pw-operation-entry" aria-label="这次从原电脑收到的目录">
+      {canChoose && directory.choices.length > 0 ? <>
+        <h4>选择一个文件</h4>
+        <p className="pw-muted">最多列出 8 个可选文件。尚未读取正文；确认后只用原连接读取选中的相对路径。</p>
+        <ul>{directory.choices.map(row => <li key={row.entryIndex}>
+          <Button variant="secondary" disabled={disabled} onClick={() => beginListed(picker, row.entryIndex)}>
+            <bdi style={{ overflowWrap: 'anywhere' }}>{row.path}</bdi>
+          </Button>
+        </li>)}</ul>
+        {directory.received.truncated && <p>电脑只返回了部分目录项。</p>}
+      </> : <Accordion variant="divided" className="pw-compact-disclosures">
+        <AccordionItem id="workspace-picker-original-directory" headingLevel={4} title="查看当时列出的目录">
+          <p className="pw-muted">当时返回 {directory.received.returned} 项；这不是当前目录。</p>
+          {directory.choices.length > 0 ? <ul>{directory.choices.map(row =>
+            <li key={row.entryIndex}><bdi style={{ overflowWrap: 'anywhere' }}>{row.path}</bdi></li>)}</ul> :
+            directory.received.entries.length > 0 && <ul>{directory.received.entries.map((row, index) =>
+              <li key={index}><bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi> · {row.kind === 'file' ? '文件' : row.kind === 'directory' ? '目录' : '不可选'}</li>)}</ul>}
+          {directory.choices.length ? <p>仅列出当时可选择的前 8 个文件。</p> :
+            directory.received.entries.length < directory.received.returned && <p>这里只显示留存的前 8 项。</p>}
+          {directory.received.truncated && <p>电脑只返回了部分目录项。</p>}
+        </AccordionItem>
+      </Accordion>}
+    </section>}
+    <SettingsDialog isOpen={!!draft && draftCurrent(draft)} onClose={back} title={reviewTitle}
+      closeLabel={draft?.kind === 'file' && draft.review ? '返回修改路径' : draft?.kind === 'listed' ? '返回原目录' : '返回原工作'}>
       {draft && <section className="pw-collaboration-dialog">
         <p>电脑工作区 <bdi>{draft.workspace}</bdi></p>
-        {draft.review ? <><p ref={reviewSummary} tabIndex={-1}>只读 <bdi style={{ overflowWrap: 'anywhere' }}>{draft.path}</bdi>。可完整显示 8 KiB 以内的 UTF-8 文本，不调用模型，不改动电脑文件。</p>
-          <div className="pw-form-actions"><Button variant="secondary" onClick={back}>返回修改</Button>
-            <Button disabled={disabled} onClick={confirm}>确认读取一次</Button></div></> : <>
-          <TextField label="工作区内的相对路径" hint="例如 notes/readme.txt。核对路径不会读取文件。" value={draft.path}
+        {draft.review ? <>
+          <p ref={reviewSummary} tabIndex={-1}>{draft.kind === 'directory' ? '只列出这个工作区的根目录，不读文件正文。接下来仍须单独确认一个文件。' :
+            <>只读 <bdi style={{ overflowWrap: 'anywhere' }}>{draft.path}</bdi>。可完整显示 8 KiB 以内的 UTF-8 文本。{draft.kind === 'listed' && '读取确认时该路径的内容，文件可能已变化。'}</>} 不调用模型，不改动电脑文件。</p>
+          <div className="pw-form-actions"><Button variant="secondary" onClick={back}>{draft.kind === 'file' ? '返回修改' : draft.kind === 'listed' ? '返回原目录' : '返回原工作'}</Button>
+            <Button disabled={disabled} onClick={confirm}>{draft.kind === 'directory' ? '确认列出目录' : '确认读取一次'}</Button></div>
+        </> : <>
+          {draft.kind === 'file' && <><TextField label="工作区内的相对路径" hint="例如 notes/readme.txt。核对路径不会读取文件。" value={draft.path}
             isDisabled={draft.reviewing || disabled} maxLength={2048} onChange={path => {
               if (currentDraft.current === draft && !draft.reviewing && draftCurrent(draft)) change({ ...draft, path, error: undefined });
             }}/>
-          {draft.path && !validWorkspaceFilePath(draft.path) && <p className="pw-field-hint">请输入一个准确的相对文件路径，用 / 分隔，不用盘符、通配符或上级路径。</p>}
-          {draft.reviewing && <p role="status">正在核对所选工作区和路径…</p>}{draft.error && <p className="pw-error" role="alert">{draft.error}</p>}
-          <div className="pw-form-actions"><Button variant="secondary" onClick={back}>返回原工作</Button>
-            <Button disabled={disabled || draft.reviewing || !validWorkspaceFilePath(draft.path)} onClick={check}>核对读取范围</Button></div>
+            {draft.path && !validWorkspaceFilePath(draft.path) && <p className="pw-field-hint">请输入一个准确的相对文件路径，用 / 分隔，不用盘符、通配符或上级路径。</p>}
+          </>}
+          {draft.reviewing && <p role="status">{draft.kind === 'directory' ? '正在核对原工作区范围…' : '正在核对所选工作区和路径…'}</p>}
+          {draft.error && <p className="pw-error" role="alert">{draft.error}</p>}
+          <div className="pw-form-actions"><Button variant="secondary" onClick={back}>{draft.kind === 'listed' ? '返回原目录' : '返回原工作'}</Button>
+            {draft.kind === 'file' && <Button disabled={disabled || draft.reviewing || !validWorkspaceFilePath(draft.path)} onClick={check}>核对读取范围</Button>}
+          </div>
         </>}
       </section>}
     </SettingsDialog>
@@ -428,7 +537,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const workspaceFiles = directedWorkspace && !directed && !directedManual;
   const workspaceSnapshot = bridge.getState();
   const workspaceWork = workspaceFiles && workspaceFileActive ? originalWorkspaceFileWork(workspaceSnapshot, taskId) : undefined;
-  const workspaceFileReady = workspaceWork && workspaceFileCommands(workspaceSnapshot) && !!workspaceFileChoice(workspaceWork, taskId);
+  const workspaceFileReady = workspaceWork && canReviewDirectWorkspace(taskId, workspaceSnapshot);
   const workspaceFileRun = !!workspaceWork && workspaceWork.raw.ownerWindowsWorkspaceRead === true &&
     uuid(workspaceWork.raw.runId) && workspaceWork.raw.coordinatorEpoch === 1;
   const devicesLabel = openWindowsConnection ? '核对原电脑连接记录' : directedId ? '查看这份工作的原设备连接' : '管理设备与连接';
@@ -442,7 +551,9 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     {!startedPhone && directedId && !open && onOpenOriginal && <Button variant="ghost" disabled={busy} onClick={onOpenOriginal}>查看原派单与结果</Button>}
     {!open && !workspaceFileRun && <p>{directedId ? `固定目标：${deviceName(directedId, peers)}。` : ''}{openWindowsConnection ? '核对范围只使用原连接；核对连接记录只读本机。' : scopeReadNote}{showDispatch?'核对范围与读取原派单是两件事。':'不会自动连接、读取画面或派发。'}</p>}
     {!open && !workspaceFileReady && workspaceWork && workspaceFileCommands(workspaceSnapshot) && workspaceFileUnstarted(workspaceWork) &&
-      <p className="pw-field-hint">想不经模型读取一个文本？先保存一个允许读取文件的原电脑工作区，并将对端工具份额设为 1，另留 1 次本机派发。</p>}
+      <p className="pw-field-hint">{workspacePickerCommands(workspaceSnapshot) ?
+        '不用模型读取文件？先选择并保存原电脑的只读范围。已知路径选 1 次；先列目录再选文件需要列目录权限和 2 次。' :
+        '想不经模型读取一个文本？先保存一个允许读取文件的原电脑工作区，并将对端工具份额设为 1，另留 1 次本机派发。'}</p>}
     {notice && <p role="status">{notice}</p>}
     <SettingsDialog isOpen={open} onClose={() => requestExit('close')} title={review ? review.kind === 'import' ? '核对原项目包导入' : '核对本任务设备范围' : directedId ? '核对' + scopeLabel : view?.humanInputOnly ? '选择一个手控手机屏幕' : '选择远端手机或电脑'}>
       <div className="pw-collaboration-dialog">
@@ -476,12 +587,17 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
                     workspace?.readsFile && Number(option.toolBudgetMaximum) >= 1 && <>
                       {draft.tools === '1' ? <p className="pw-field-hint">只保留这一个工作区与一次工具份额，确认保存范围后即可在原工作直接读取一个文本，不用模型。</p> :
                         <Button variant="ghost" disabled={busy} onClick={() => update({ ...draft, tools: '1' })}>单文件读取：设为 1 次</Button>}
+                      {workspace.listsDirectory && workspacePickerCommands(workspaceSnapshot) && Number(option.toolBudgetMaximum) >= 2 &&
+                        Number(view.toolsAvailable) >= 4 && (draft.tools === '2' ?
+                          <p className="pw-field-hint">只保留这一个工作区，保存后在原工作先核对目录，再选一个文件；不自动开始。另留 2 次本机派发。</p> :
+                          <Button variant="ghost" disabled={busy} onClick={() => update({ ...draft, tools: '2' })}>先列目录再选文件：设为 2 次</Button>)}
                     </>}
                   {option.kind === 'goal' && <TextField label={'模型总份额（最多 ' + option.modelBudgetMaximum + ' 次）'} value={draft.models} inputMode="numeric" isDisabled={busy} onChange={models => update({ ...draft, models })} />}
                   <p>本次截止：{time(draft.deadline)}</p><div className="pw-form-actions">
                     {(view.humanInputOnly ? [1,5] : phoneTextOnly(option) ? [3,10] : [15,60]).map(minutes => <Button key={minutes} variant="ghost" disabled={busy} onClick={() => update({ ...draft, deadline: String(Math.min(Date.now() + minutes * 60_000, Number(view.deadlineMaximum), Number(option.deadlineMaximum))) })}>从现在起 {minutes} 分钟内</Button>)}
                   </div>
-                  {view.humanInputOnly ? <p>只接收你在原手控页的每次明确操作，不启动代理；换设备或屏幕必须重新准备和审阅。画面仅在本页短时显示，不自动刷新，不是实时视频。</p> : option.kind === 'goal' ? <p>只将本次目标交给对端已授权模型；对端仍核对本机策略，不继承本机账号或私人记忆。</p> : <p>由本任务模型调用对端明确工具。手机主屏与独立屏不互相兜底；电脑工具也不依赖 Codex 或 Claude 安装。</p>}
+                  {view.humanInputOnly ? <p>只接收你在原手控页的每次明确操作，不启动代理；换设备或屏幕必须重新准备和审阅。画面仅在本页短时显示，不自动刷新，不是实时视频。</p> : option.kind === 'goal' ? <p>只将本次目标交给对端已授权模型；对端仍核对本机策略，不继承本机账号或私人记忆。</p> : workspace && workspaceFiles ? <p>保存范围不会开始读取。你可以回原工作选择已可用的只读操作，或明确使用模型开始。</p> :
+                    <p>由本任务模型调用对端明确工具。手机主屏与独立屏不互相兜底；电脑工具也不依赖 Codex 或 Claude 安装。</p>}
                   <Accordion>
                     <RouteMaterials kind="files" option={option} view={view} draft={draft} disabled={busy} update={update} />
                     <RouteMaterials kind="projects" option={option} view={view} draft={draft} disabled={busy} update={update} />

@@ -3407,7 +3407,16 @@ internal class PocketWebBridge(
                 if (section == previous) { leaveConnection(); reviews.clear() }
             }
             "usage.close" -> controller.closeNativeInferenceHistory()
-            "phone.draft.edit" -> phoneComposer.editDraft(args)
+            "phone.draft.edit" -> {
+                if (args.has("localMainReadExampleRevision")) {
+                    check(section == null && taskViewId == null && controller.state.filePath == null && controller.conversationReader == null &&
+                        controller.queuedInputsPage == null && !controller.attachmentOutcomes.state.open && controller.webPrivateOwnerVisible()) {
+                        "请从原空白私人主屏草稿填入示例"
+                    }
+                    return phoneComposer.fillLocalMainReadExample(args)
+                }
+                phoneComposer.editDraft(args)
+            }
             "phone.deadline" -> controller.selectNewTaskDeadline(requiredInt(args, "minutes"))
             "background.refresh" -> controller.refreshBackgroundSetup()
             "background.discover" -> {

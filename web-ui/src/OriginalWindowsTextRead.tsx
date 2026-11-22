@@ -17,7 +17,13 @@ type Snapshot = { text: string; bytes: number; recordedAt: number };
 type Received = { identity: string; requestDigest: string; content: string; bytes: number; version: string };
 const directoryKinds = { directory: '目录', file: '文件', reparse_point: '重解析点，未跟随', unsupported: '其他' };
 type DirectoryEntry = { name: string; kind: keyof typeof directoryKinds };
-type ReceivedDirectory = { identity: string; returned: number; truncated: boolean; entries: DirectoryEntry[]; linkedFileIndex?: number };
+type ListedFile = { entryIndex: number; path: string };
+type ReceivedDirectory = { identity: string; returned: number; truncated: boolean; entries: DirectoryEntry[]; linkedFileIndex?: number;
+  picker?: { workspaceId: string; choices: ListedFile[]; linkedPath?: string } };
+
+export const validWindowsWorkspaceFilePath = (path: string) => path.length > 0 && path.length <= 2048 &&
+  !/[\\<>:"|?*\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(path) && path.split('/').every(part =>
+    !!part && !/[. ]$/.test(part) && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part));
 type ReceivedFile = { original: Original; received: Received; path: string; position: number };
 
 /** Visible local tool row only. Native rechecks the actual Work, wire, claim and current peer. */
@@ -39,7 +45,7 @@ export function originalWindowsTextAt(task: TaskHeader, op: TaskOperation): Orig
   return originalWindowsReadAt(task, op, 'workspace.read');
 }
 
-function currentReceivedWorkDigest(raw: TaskHeader['raw'], original: Original): string | undefined {
+function currentReceivedWorkDigest(raw: TaskHeader['raw'], original: Omit<Original, 'operationId'>): string | undefined {
   const work = raw?.ownerDeviceWork, pin = work?.directWorkspace;
   return raw?.id === original.taskId && raw.runId === original.runId && raw.coordinatorEpoch === original.epoch &&
     raw.actorId === 'owner' && raw.spaceId === 'private' && raw.kind === 'assistant' && raw.executionMode === 'capabilities' &&
@@ -86,7 +92,7 @@ function receivedOriginalWindowsReadAt(task: TaskHeader, op: TaskOperation, orig
   const workspace = nativeId(audience.grantId) && Number.isSafeInteger(audience.authorizationEpoch) && audience.authorizationEpoch > 0
     ? JSON.stringify([requestDigest, audience.callerDeviceId, audience.grantId, audience.authorizationEpoch,
       resource.environmentId, resource.binding, send.allocationId]) : undefined;
-  return { proof, requestDigest, data: record(result.payload), args, workspace, job, acceptedAt: accepted.acceptedAt };
+  return { proof, requestDigest, data: record(result.payload), args, workspace, workspaceId: resource.environmentId, job, acceptedAt: accepted.acceptedAt };
 }
 type OriginalRead = NonNullable<ReturnType<typeof receivedOriginalWindowsReadAt>>;
 
@@ -109,7 +115,7 @@ function receivedWindowsText(held: OriginalRead): Received | undefined {
 }
 
 function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation, page: AuditPage,
-  file?: { read: OriginalRead; operation: TaskOperation; bytes: number }): ReceivedDirectory | undefined {
+  file?: { read: OriginalRead; operation: TaskOperation; bytes: number }, rootPicker = false): ReceivedDirectory | undefined {
   const original = originalWindowsReadAt(task, op, 'workspace.list');
   const held = original && receivedOriginalWindowsReadAt(task, op, original, page);
   if (!held?.data || !held.args || Object.keys(held.args).some(key => key !== 'path')) return;
@@ -118,29 +124,35 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
   // The initial Windows workspace.list has its own checked directory identity.
   // A locally generated summary, later query wrapper, or POSIX list is not it.
   if (typeof path !== 'string' || path.length > 2048 || data.path !== path || Object.keys(data).length !== 4 ||
+    rootPicker && (path !== '' || args.path !== '' || !held.workspace) ||
     !Array.isArray(data.directoryIdentity) || data.directoryIdentity.length !== 3 ||
     !data.directoryIdentity.every((part: unknown) => typeof part === 'number' && Number.isInteger(part) && part >= 0 && part <= 0xffffffff) ||
     typeof data.truncated !== 'boolean' || !Array.isArray(data.files) || data.files.length > 200) return;
-  const prefix = path ? path + '/' : '', names = new Set<string>(), entries: DirectoryEntry[] = [];
+  const prefix = path ? path + '/' : '', names = new Set<string>(), entries: DirectoryEntry[] = [], choices: ListedFile[] = [];
   const linkedPath = file && held.workspace && file.read.workspace === held.workspace && file.read.job !== held.job &&
     held.acceptedAt <= file.read.acceptedAt && typeof op.position === 'number' && typeof file.operation.position === 'number' &&
     op.position < file.operation.position ? file.read.args?.path : undefined;
   let linkedFileIndex: number | undefined;
-  for (const raw of data.files) {
+  for (const [entryIndex, raw] of data.files.entries()) {
     const entry = record(raw), name: unknown = entry?.name, kind: unknown = entry?.kind;
     if (!entry || Object.keys(entry).length !== 5 || typeof name !== 'string' || !name || [...name].length > 255 ||
       name === '.' || name === '..' || /[/\\]/.test(name) || names.has(name) || entry.path !== prefix + name ||
       !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || !Number.isSafeInteger(entry.modifiedAt) ||
-      typeof kind !== 'string' || !Object.hasOwn(directoryKinds, kind)) return;
+      rootPicker && entry.modifiedAt < 0 || typeof kind !== 'string' || !Object.hasOwn(directoryKinds, kind)) return;
     names.add(name);
+    // Preserve the raw index, even if earlier directory entries were not selectable.
+    if (rootPicker && choices.length < 8 && kind === 'file' && entry.bytes <= RECEIVED_TEXT_LIMIT && validWindowsWorkspaceFilePath(name))
+      choices.push({ entryIndex, path: name });
     if (entries.length < 8) {
       if (file && typeof linkedPath === 'string' && entry.path === linkedPath && kind === 'file' && entry.bytes === file.bytes)
         linkedFileIndex = entries.length;
       entries.push({ name: name.replace(/\p{C}/gu, '�'), kind: kind as DirectoryEntry['kind'] });
     }
   }
-  return { identity: JSON.stringify([...proof, op.position, data.directoryIdentity, data.truncated, data.files.length, linkedFileIndex]),
-    returned: data.files.length, truncated: data.truncated, entries, linkedFileIndex };
+  const picker = rootPicker ? { workspaceId: held.workspaceId, choices,
+    linkedPath: choices.find(row => row.path === linkedPath)?.path } : undefined;
+  return { identity: JSON.stringify([...proof, op.position, data.directoryIdentity, data.truncated, data.files.length, linkedFileIndex, ...(picker ? [picker] : [])]),
+    returned: data.files.length, truncated: data.truncated, entries, linkedFileIndex, picker };
 }
 
 const displayText = (content: string) => content.replace(/\r\n?/g, '\n').replace(/\p{C}/gu, ch => ch === '\n' || ch === '\t' ? ch : '�');
@@ -179,7 +191,7 @@ function receivedTextPageEnds(text: string): number[] {
   return ends;
 }
 
-function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
+function originalWindowsOverviewTask(snapshot: PocketSnapshot, taskId: string) {
   const view = record(snapshot.view), tasks: unknown = snapshot.state.tasks;
   const resumeRevision: unknown = view?.resumeRevision;
   if (view?.section !== null || view.taskId !== taskId || typeof resumeRevision !== 'number' || !Number.isSafeInteger(resumeRevision) || resumeRevision < 0 ||
@@ -188,11 +200,85 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
   if (rows.length !== 1) return;
   const task = rows[0], raw = task.raw;
   if (!raw?.ownerDeviceWork?.directWorkspace || raw.status !== task.status || !nativeId(raw.runId)) return;
+  return { task, raw, resumeRevision };
+}
+
+function originalWindowsOverviewAudit(task: TaskHeader) {
   let page: AuditPage;
-  try { page = taskAuditPage(raw.historyOperationPage, taskId, 'operations'); } catch { return; }
+  try { page = taskAuditPage(task.raw?.historyOperationPage, task.id, 'operations'); } catch { return; }
   // Bounded/partial pages still belong in the existing per-operation view.
   if (page.completeHistory !== true || page.readLimited !== false || page.hasMore !== false || page.entries[0]?.position !== page.upperPosition) return;
-  const calls = getTaskOperations({ id: taskId, raw: { historyOperationPage: page } }).filter(op => op.tool === 'device_invoke_tool');
+  return { page, calls: getTaskOperations({ id: task.id, raw: { historyOperationPage: page } }).filter(op => op.tool === 'device_invoke_tool') };
+}
+
+function ownerWindowsPickerMarker(task: TaskHeader) {
+  const raw = task.raw, pin = record(raw?.ownerDeviceWork?.directWorkspace), marker = record(raw?.ownerWindowsWorkspacePicker);
+  if (!raw || !pin || raw.ownerWindowsWorkspaceRead !== true || raw.coordinatorEpoch !== 1 || !nativeId(raw.runId) ||
+    !deviceId(pin.deviceId) || !nativeId(pin.instanceId) || !digest(pin.certificateFingerprint) ||
+    !currentReceivedWorkDigest(raw, { taskId: task.id, runId: raw.runId, epoch: 1, deviceId: pin.deviceId,
+      instanceId: pin.instanceId, fingerprint: pin.certificateFingerprint }) ||
+    marker?.format !== 'pocketworld.owner-windows-workspace-picker.v1' ||
+    !Number.isSafeInteger(marker.expiresAt) || marker.expiresAt <= 0 ||
+    !['listing', 'waiting_for_file', 'reading', 'ended'].includes(marker.phase)) return;
+  return { runId: raw.runId, phase: marker.phase as 'listing' | 'waiting_for_file' | 'reading' | 'ended', expiresAt: marker.expiresAt as number,
+    directoryOperationId: nativeId(marker.directoryOperationId) ? marker.directoryOperationId : undefined,
+    liveChoice: marker.canChooseListedFile === true };
+}
+
+function originalPickerDirectory(task: TaskHeader, marker: NonNullable<ReturnType<typeof ownerWindowsPickerMarker>>,
+  audit: NonNullable<ReturnType<typeof originalWindowsOverviewAudit>>) {
+  if (!marker.directoryOperationId) return;
+  const operations = audit.calls.filter(op => op.runId === marker.runId);
+  const rows = operations.filter(op => op.operationId === marker.directoryOperationId);
+  if (rows.length !== 1) return;
+  const operation = rows[0], folder = receivedOriginalWindowsDirectoryAt(task, operation, audit.page, undefined, true);
+  if (folder?.picker) return { operation, operations, folder, choices: folder.picker.choices, workspaceId: folder.picker.workspaceId };
+}
+
+function originalPickerText(task: TaskHeader, directory: NonNullable<ReturnType<typeof originalPickerDirectory>>, page: AuditPage) {
+  if (task.status !== 'completed' || directory.operations.length !== 2) return;
+  const operation = directory.operations.find(row => row !== directory.operation);
+  const original = operation && originalWindowsTextAt(task, operation);
+  const read = operation && original && receivedOriginalWindowsReadAt(task, operation, original, page);
+  const received = read && receivedWindowsText(read);
+  const linked = operation && read && received && receivedOriginalWindowsDirectoryAt(task, directory.operation, page,
+    { read, operation, bytes: received.bytes }, true);
+  // This is the later verified read of the listed path, not the old listing's bytes.
+  if (original && received && linked?.picker?.linkedPath) return { original, received, exactPath: linked.picker.linkedPath };
+}
+
+/** Local projection only, from the exact Work's authenticated root-list receipt. No history command. */
+export function originalWindowsWorkspacePickerAt(snapshot: PocketSnapshot, taskId: string) {
+  const shown = originalWindowsOverviewTask(snapshot, taskId);
+  const marker = shown && ownerWindowsPickerMarker(shown.task);
+  if (!shown || !marker) return;
+  const audit = marker.directoryOperationId && originalWindowsOverviewAudit(shown.task);
+  const data = audit ? originalPickerDirectory(shown.task, marker, audit) : undefined;
+  const directory = data && marker.directoryOperationId ? { operationId: marker.directoryOperationId,
+    received: data.folder, choices: data.choices, workspaceId: data.workspaceId } : undefined;
+  const fileReceived = marker.phase === 'ended' && !!(audit && data && originalPickerText(shown.task, data, audit.page));
+  return { ...marker, directory, fileReceived, canChoose: !!directory && data?.operations.length === 1 && marker.phase === 'waiting_for_file' &&
+    marker.liveChoice && shown.raw.status === 'running' && shown.raw.cancelRequested === false && shown.raw.hasUnresolvedOperations === false &&
+    Date.now() < marker.expiresAt };
+}
+type WindowsOverviewRead = { resumeRevision: number } & (
+  { kind: 'files'; files: ReceivedFile[] } |
+  { kind: 'directory'; received: ReceivedDirectory; linked?: {original: Original; received: Received}; managedPicker?: true } |
+  { kind: 'text'; original: Original; received: Received; exactPath?: string }
+);
+
+function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string): WindowsOverviewRead | undefined {
+  const shown = originalWindowsOverviewTask(snapshot, taskId), audit = shown && originalWindowsOverviewAudit(shown.task);
+  if (!shown || !audit) return;
+  const { task, raw, resumeRevision } = shown, { page, calls } = audit;
+  const marker = ownerWindowsPickerMarker(task);
+  if (marker) {
+    const directory = originalPickerDirectory(task, marker, audit);
+    if (!directory) return;
+    const text = marker.phase === 'ended' ? originalPickerText(task, directory, page) : undefined;
+    if (text) return { kind: 'text', ...text, resumeRevision };
+    return { kind: 'directory' as const, received: directory.folder, resumeRevision, managedPicker: true };
+  }
   if (calls.some(op => {
     const name = record(op.arguments)?.toolName;
     return !nativeId(op.runId) || op.runId === raw.runId && (!op.bodyAvailable || typeof name !== 'string' || !name);
@@ -230,11 +316,11 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string) {
 
 /** Mount only in the active Work overview. Explicitly disclose an already-received
  * result; never open Process, ask the Windows peer, or start a new audit read. */
-export function OriginalWindowsWorkspaceOverview({ taskId }: { taskId: string }) {
+export function OriginalWindowsWorkspaceOverview({ taskId, managePicker = false }: { taskId: string; managePicker?: boolean }) {
   const snapshot = usePocketSnapshot();
   const documentEpoch = useSyncExternalStore(bridge.subscribeDocumentEpoch, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
   const source = documentEpoch > 0 ? overviewWindowsRead(snapshot, taskId) : undefined;
-  if (!source) return null;
+  if (!source || source.kind === 'directory' && source.managedPicker && managePicker) return null;
   const { resumeRevision } = source, sourceRevision = String(snapshot.state.traceSourceRevision ?? 0);
   if (source.kind === 'files') {
     const key = JSON.stringify([documentEpoch, resumeRevision, sourceRevision, source.files.map(file => [file.position, file.received.identity])]);
