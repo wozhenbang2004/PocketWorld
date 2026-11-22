@@ -373,6 +373,18 @@ public final class AttachmentOutcomeHost {
                     throw new SecurityException("原答复固定文档已不可用");},
                 (destination,c)->{throw new SecurityException("请在原工作内选择其他文件操作");});
     }
+    /** The existing verified reply reader picked this immutable file. Recheck just its
+     * native reply and its canonical index row; do not open bytes or enumerate Book. */
+    public JSONObject originalReplyAttachmentRow(OriginalReplyDocument.Target target,RunControl control)throws Exception{
+        control.checkpoint();
+        OriginalReplyDocument pin=tasks.originalReplyDocumentForOwner(target);
+        if(pin==null)throw new SecurityException("原答复文档或范围已变化");
+        JSONObject row=repository.book.get(pin.id());
+        if(!pin.matchesBook(row,target.task(),target.run())||!pin.equals(tasks.originalReplyDocumentForOwner(target)))
+            throw new SecurityException("原答复的固定文件已变化，没有选择其他附件");
+        control.checkpoint();
+        return pin.view();
+    }
     private OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control,boolean recordedDocument)throws Exception {
         requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);
         if(recordedDocument){

@@ -548,12 +548,13 @@ internal class PocketWebBridge(
         projectLivePreview = PocketWebProjectLivePreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
         remoteTasks.attachPreview(container)
     }
-    fun foreground(value: Boolean) { if (!value) { receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { if (!value) { retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
         if (closed) return
         closed = true
+        retireReplyPicker()
         controller.closeOwnerWorkRequestHistory()
         controller.forgetHeldPhoneImage()
         started = false
@@ -592,6 +593,28 @@ internal class PocketWebBridge(
     internal fun acceptsWindow(ticket: PocketWebWindowTicket): Boolean =
         ticket.accepts(commandFence.ticket(), controller.webWindowTicket())
 
+    private fun ordinaryDetachedHistoryEpoch(conversation:String):Int? {
+        if(closed||documentId==null||section!=null||taskViewId!=null||!controller.webPrivateOwnerVisible()||
+            controller.hasChannelPhoneOrigin||phoneComposer.intent||controller.state.filePath!=null||
+            controller.state.chatAttachmentPickerOpen||controller.queuedInputsPage!=null||controller.attachmentOutcomes.state.open||
+            conversation!=controller.state.conversationId)return null
+        val draft=controller.composerDraft?:return null
+        return controller.composerViewEpoch.takeIf { draft.key=="conversation:$conversation"&&draft.conversationId==conversation }
+    }
+
+    private fun stageDetachedHistoryPosition(page:dev.pocketengine.ui.ConversationReadPage,args:JSONObject):Boolean {
+        val epoch=ordinaryDetachedHistoryEpoch(page.conversation)?:return false
+        if(page.detachedHistoryEpoch!=epoch)return false
+        val place=args.optJSONObject("detachedPosition")?:return false
+        // A painted index is a hint. The current same native row must still match its ID and revision.
+        return runCatching {
+            require(place.keys().asSequence().toSet()==setOf("index","offset","messageId","sourceRevision"))
+            val index=requiredInt(place,"index");val offset=requiredInt(place,"offset")
+            if(args.has("index")||args.has("offset"))require(index==requiredInt(args,"index")&&offset==requiredInt(args,"offset"))
+            controller.rememberDetachedHistoryPosition(page.window,index,offset,requiredString(place,"messageId"),requiredLong(place,"sourceRevision"))
+        }.getOrDefault(false)
+    }
+
     private fun freshLibraryEntry(): (() -> Boolean)? {
         val document = documentId ?: return null
         val ticket = captureWindow()
@@ -613,6 +636,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        retireReplyPicker()
         savedLocalReturn = null
         openedRetainedDraftCopy = null
         controller.closeOwnerWorkRequestHistory()
@@ -680,13 +704,22 @@ internal class PocketWebBridge(
         var projection: JSONObject? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
+            val exactPicker=currentReplyPicker()
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume) {
                 liveReplyDocument(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly)?.file
+            }
+            exactPicker?.let {
+                projection?.getJSONObject("state")?.put("originalReplyAttachmentPicker",
+                    JSONObject().put("requestId",it.request).put("draftKey",it.key).put("draftEpoch",it.epoch).put("sourceWindow",it.sourceWindow)
+                        .put("file",PocketWebState.attachment(it.file)).put("checking",replyPickerChecking!=null))
             }
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
             }
             val state = controller.state
+            state.conversationId?.takeIf { ordinaryDetachedHistoryEpoch(it)!=null&&controller.savedDetachedHistory(it) }?.let {
+                projection?.getJSONObject("state")?.put("detachedHistoryResumeAvailable",true)
+            }
             state.requestedReminderNotice?.takeIf { state.requestedConnectionSection == "automation" && state.requestedConnectionRevision == it.connectionRevision }?.let {
                 projection?.getJSONObject("state")?.put("requestedReminderNotice", JSONObject()
                     .put("id", it.id).put("ruleId", it.ruleId).put("revision", it.revision).put("occurrenceAt", it.occurrenceAt)
@@ -1051,6 +1084,15 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebTeamEvidence.COMMANDS) {
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
+            }
+            if(action=="attachments.openPicker"&&args.has("replyDocument")){
+                openReplyPicker(id,args);return
+            }
+            if(action=="attachments.toggle"&&replyPicker!=null){
+                toggleReplyPicker(id,args);return
+            }
+            if(action in setOf("attachments.openPicker","attachments.pick","attachments.toggle")){
+                check(replyPicker==null&&replyPickerOpening==null){"请先关闭这份原答复的附件选择"}
             }
             if (action == "attachments.open" || action == "conversation.reader.attachment") {
                 val source = checkedMessageAttachmentSource(args)
@@ -1497,6 +1539,22 @@ internal class PocketWebBridge(
                     "edit"->controller.editOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),requiredString(args,"text",true),requiredString(args,"mode"),done)
                     "send"->controller.sendOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),requiredString(args,"clientMessageId"),done)
                     "query"->controller.queryOwnerWorkSupplement(expected,requiredString(args,"key"),requiredString(args,"clientMessageId"),done)
+                }
+                return
+            }
+            if (action == "conversation.reader.open" && args.has("resume")) {
+                require(args.keys().asSequence().toSet()==setOf("conversationId","resume")&&requiredBoolean(args,"resume"))
+                val conversation=requiredString(args,"conversationId")
+                val epoch=ordinaryDetachedHistoryEpoch(conversation)?:error("请回到原私聊浏览上次位置")
+                val window=captureWindow();val document=requireNotNull(documentId);val foreground=controller.displayedPhoneWindowVersion()
+                fun bodyCurrent()=!closed&&documentId==document&&commandFence.accepts(window.bridge)&&taskViewId==null&&
+                    controller.displayedPhoneWindowAlive(foreground)&&controller.composerViewEpochForScopedRead==epoch
+                fun current()=bodyCurrent()&&acceptsWindow(window)&&ordinaryDetachedHistoryEpoch(conversation)==epoch
+                require(current()&&controller.conversationReader==null&&controller.savedDetachedHistory(conversation)) {
+                    "原阅读位置暂不可核对，可以浏览最新记录"
+                }
+                controller.resumeDetachedHistory(conversation,epoch,::current,::bodyCurrent){value,error->
+                    complete(id,value,error,retainValue=false,replayHint="请从同一原私聊重新核对阅读位置");publishState()
                 }
                 return
             }
@@ -2868,6 +2926,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
+                    retireReplyPicker()
                     controller.projectPackages.retireDirectViteExport()
                     documentId = nextDocument; background.clear(); remoteInbox.clear(); phoneViewer.clear(); phoneComposer.documentChanged(); taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
                     controller.voiceInputTypeChanged(phoneComposer.intent)
@@ -2972,9 +3031,19 @@ internal class PocketWebBridge(
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到原对话查看历史" }
                 val conversation = requiredString(args, "conversationId")
                 require(conversation == controller.state.conversationId) { "原对话已切换，请重新打开历史" }
-                controller.openConversationReader(conversation)
+                val epoch=if(args.has("rememberDetachedPosition")){
+                    checkedPayload(args,setOf("conversationId","rememberDetachedPosition"))
+                    require(requiredBoolean(args,"rememberDetachedPosition"))
+                    ordinaryDetachedHistoryEpoch(conversation)
+                }else null
+                controller.openConversationReader(conversation,epoch)
             }
-            "conversation.reader.close" -> { requireConversationReader(args, closing = true); controller.closeConversationReader() }
+            "conversation.reader.close" -> {
+                val page=requireConversationReader(args,closing=true)
+                if(stageDetachedHistoryPosition(page,args))
+                    controller.closeOrdinaryDetachedHistory(controller.conversationReader?:page){publishState()}
+                else controller.closeConversationReader()
+            }
             "conversation.reader.earlier" -> { requireConversationReader(args, earlier = true); controller.loadEarlierConversationReader() }
             "conversation.reader.refresh" -> { requireConversationReader(args); controller.refreshConversationReader() }
             "conversation.reader.position" -> {
@@ -2982,6 +3051,7 @@ internal class PocketWebBridge(
                 val index = requiredInt(args, "index"); val offset = requiredInt(args, "offset")
                 require(index >= 0 && index < page.messages.size && offset >= 0) { "原阅读位置不可核对" }
                 controller.saveConversationReading(page.window, index, offset)
+                stageDetachedHistoryPosition(page,args)
             }
             "conversation.reader.select" -> {
                 val page = requireConversationReader(args)
@@ -3004,7 +3074,9 @@ internal class PocketWebBridge(
                 val request = if (args.has("pickerRequestId")) {
                     checkedPayload(args, setOf("pickerRequestId")); requiredString(args, "pickerRequestId")
                 } else null
-                controller.closeChatAttachmentPicker(request)
+                val exact=replyPicker
+                if(exact!=null){check(request==exact.request){"原附件选择编号已变化"};retireReplyPicker()}
+                else controller.closeChatAttachmentPicker(request)
             }
             "attachments.remove" -> { requireComposer(args); controller.removeChatAttachment(requiredString(args, "id"), requiredString(args, "key"), requiredInt(args, "epoch")) }
             "attachments.toggle" -> {
@@ -3825,10 +3897,93 @@ internal class PocketWebBridge(
         }
         return VisibleMessageAttachment(file,original)
     }
+    private data class ReplyPicker(val request:String,val key:String,val epoch:Int,val sourceWindow:String,val file:UiChatAttachment,
+        val target:OriginalReplyDocument.Target,val current:()->Boolean)
+    @Volatile private var replyPicker:ReplyPicker?=null
+    @Volatile private var replyPickerOpening:Any?=null
+    @Volatile private var replyPickerChecking:Any?=null
+    private fun retireReplyPicker(){
+        val original=replyPicker
+        replyPicker=null;replyPickerOpening=null;replyPickerChecking=null
+        if(original!=null&&controller.chatAttachmentPickerRequest()==original.request)
+            controller.closeChatAttachmentPicker(original.request)
+    }
+    private fun currentReplyPicker():ReplyPicker?{
+        val original=replyPicker?:return null
+        if(controller.chatAttachmentPickerRequest()==original.request&&original.current())return original
+        retireReplyPicker();return null
+    }
+    private fun openReplyPicker(id:String,args:JSONObject){
+        checkedPayload(args,setOf("key","epoch","revision","replyDocument"))
+        requireComposer(args);requireAttachmentDraft(args)
+        check(replyPicker==null&&replyPickerOpening==null&&!controller.state.chatAttachmentPickerOpen){"请先关闭原附件选择"}
+        val source=checkedPayload(args.getJSONObject("replyDocument"),setOf("windowId","frameId","viewerId"))
+        val sourceWindow=requiredString(source,"windowId")
+        val original=attachmentPages.replyAttachment(sourceWindow,requiredString(source,"frameId"),
+            requiredString(source,"viewerId"))?:error("请从已核对的原答复文档选择附件")
+        val target=original.target;val file=original.file
+        val document=documentId?:error("原私聊页面已关闭")
+        val key=requiredString(args,"key");val epoch=requiredInt(args,"epoch");val revision=requiredLong(args,"revision")
+        check(key=="conversation:${target.conversation()}"){"只能选择到原话题草稿"}
+        val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
+        val history=controller.conversationReaderRevision;val sourceRevision=controller.messageAttachmentSourceRevision
+        fun sameDraft(picking:Boolean):Boolean {
+            val s=controller.state;val draft=controller.composerDraft
+            if(closed||documentId!=document||!ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())||
+                controller.conversationReaderRevision!=history||controller.messageAttachmentSourceRevision!=sourceRevision||
+                draft==null||draft.key!=key||draft.conversationId!=target.conversation()||controller.composerViewEpoch!=epoch||
+                s.chatAttachmentPickerOpen!=picking||s.chatBusy||s.chatSubmitting||s.phoneSubmitting||
+                controller.composerPending.any{it.draftKey==key})return false
+            val row=s.messages.singleOrNull{it.id==target.message()&&it.sourceRevision==target.revision()}?:return false
+            val pinned=liveReplyDocument(row,inOwnReader=!picking,inOwnPicker=picking)
+            return pinned!=null&&pinned.target==target&&pinned.file==file
+        }
+        val attempt=Any();replyPickerOpening=attempt
+        fun beforeClose()=replyPickerOpening===attempt&&controller.composerDraft?.revision==revision&&sameDraft(false)&&original.owns()
+        controller.verifyOriginalReplyAttachment(target,::beforeClose){row,error->
+            try{
+                check(row!=null&&error==null&&beforeClose()&&ChatInputRules.attachment(row)==file){
+                    error?:"原答复文档或草稿已变化，未打开附件选择"
+                }
+                val request=controller.openOriginalReplyAttachmentPicker {
+                    beforeClose()&&original.close()
+                }?:error("原草稿或模型配置暂不可核对，未打开附件选择")
+                replyPicker=ReplyPicker(request,key,epoch,sourceWindow,file,target){ sameDraft(true) }
+                complete(id,JSONObject().put("opened",true).put("requestId",request),null,retainValue=false)
+            }catch(failure:Exception){complete(id,null,failure.message?:"原附件选择未确认",retainValue=false)}
+            finally { if(replyPickerOpening===attempt)replyPickerOpening=null;publishState() }
+        }
+    }
+    private fun toggleReplyPicker(id:String,args:JSONObject){
+        checkedPayload(args,setOf("key","epoch","revision","pickerRequestId","id","sha256","selected"))
+        requireComposer(args);requireAttachmentDraft(args)
+        val original=currentReplyPicker()?:error("这份原答复附件选择已关闭")
+        val requested=requiredBoolean(args,"selected")
+        check(requiredString(args,"pickerRequestId")==original.request&&requiredString(args,"id")==original.file.id&&
+            requiredString(args,"sha256")==original.file.sha256&&replyPickerChecking==null){"只可选择这份已核对的原答复文档"}
+        val revision=requiredLong(args,"revision");val checking=Any();replyPickerChecking=checking
+        fun current()=replyPicker===original&&replyPickerChecking===checking&&
+            controller.chatAttachmentPickerRequest()==original.request&&controller.composerDraft?.revision==revision&&original.current()
+        controller.verifyOriginalReplyAttachment(original.target,::current){row,error->
+            try{
+                check(row!=null&&error==null&&current()&&ChatInputRules.attachment(row)==original.file){error?:"原附件已变化，草稿保留"}
+                requireComposer(args);requireAttachmentDraft(args)
+                val already=controller.state.selectedChatAttachments.singleOrNull{it.id==original.file.id}
+                check(already==null||already.sha256==original.file.sha256){"草稿选的是另一版本，没有替换"}
+                if(requested!=(already!=null))controller.toggleChatAttachment(row)
+                check(controller.state.selectedChatAttachments.any{it.id==original.file.id&&it.sha256==original.file.sha256}==requested){
+                    controller.state.error?:"没有确认这次选择，草稿保留"
+                }
+                complete(id,accepted(),null,retainValue=false)
+            }catch(failure:Exception){complete(id,null,failure.message?:"未确认选择这份原件",retainValue=false)}
+            finally { if(replyPickerChecking===checking)replyPickerChecking=null;publishState() }
+        }
+        publishState()
+    }
     private data class LiveReplyDocument(val file:UiChatAttachment,val target:OriginalReplyDocument.Target)
     /** Only the already displayed ordinary private native reply and sole original submission.
      * This projection does not fetch Work/Audit history or verify files in the background. */
-    private fun liveReplyDocument(row:UiMessage,inOwnReader:Boolean=false):LiveReplyDocument? {
+    private fun liveReplyDocument(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false):LiveReplyDocument? {
         val reply=row.replyContext?:return null
         val file=reply.originalGeneratedDocument?:return null
         val nativeReply=reply.replyId?:return null
@@ -3838,7 +3993,7 @@ internal class PocketWebBridge(
         val composer=controller.composerDraft
         val workspace=controller.attachmentOutcomes.state
         if(section!=null||taskViewId!=null||!controller.webPrivateOwnerVisible()||controller.conversationReader!=null||
-            controller.queuedInputsPage!=null||state.filePath!=null||state.chatAttachmentPickerOpen||
+            controller.queuedInputsPage!=null||state.filePath!=null||state.chatAttachmentPickerOpen&&!inOwnPicker||
             phoneComposer.intent||controller.hasChannelPhoneOrigin||workspace.open&&!(inOwnReader&&workspace.messageReplyDocumentOnly)||
             composer?.key!="conversation:${source.conversation}"||composer?.conversationId!=source.conversation||
             row.role!="assistant"||row.phoneResult!=null||row.taskResult!=null||row.originalHostFinal!=null||
@@ -3856,7 +4011,7 @@ internal class PocketWebBridge(
         val task=state.tasks.singleOrNull{it.id==reply.taskId}?:return null
         val audit=task.raw
         if(task.status !in setOf("completed","needs_confirmation")||!OwnerWorkTask.isButlerSource(audit)||
-            !inOwnReader&&(audit.opt("taskProjection")!="detail_window"||audit.opt("taskCoreReadLimited")!=false)||
+            !inOwnReader&&!inOwnPicker&&(audit.opt("taskProjection")!="detail_window"||audit.opt("taskCoreReadLimited")!=false)||
             audit.opt("conversationId")!=source.conversation||audit.opt("runId")!=reply.runId||
             OriginalReplyDocument.integer(audit.opt("coordinatorEpoch"))!=reply.epoch.toLong()||
             audit.optBoolean("cancelRequested")||audit.opt("hasUnresolvedOperations")!=false)return null

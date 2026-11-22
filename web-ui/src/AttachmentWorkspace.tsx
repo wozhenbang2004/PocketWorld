@@ -29,7 +29,7 @@ type Props={
  onAdoptFileNote?:(note:SavedFileNote,frame:AttachmentFrame,closeOriginal:()=>Promise<unknown>)=>Promise<void>;
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
- standaloneDocumentAttachmentDraft?:FileDraftTarget;
+ standaloneDocumentAttachmentDraft?:FileDraftTarget;replyAttachmentDraft?:FileDraftTarget;
  readWorkTextVisit?:(taskId:string)=>WorkTextVisit|undefined;
  quotedDraftArrival?:QuotedDraftArrival;
 };
@@ -266,7 +266,7 @@ function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:J
  return excerptPdfSource(view,taskId);
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,readWorkTextVisit,quotedDraftArrival}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,replyAttachmentDraft,readWorkTextVisit,quotedDraftArrival}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  const lastLiveMessageFileWindow=useRef<string|undefined>(undefined);
  if(incoming.open===true&&incoming.ready===true)
@@ -736,6 +736,25 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    draftHasFile&&<p className="pw-file-draft-status" role="status">文件位置已关联到「{draftTarget.label}」；未作为附件。</p>}
  </>;
  const original=obj(view.originalFile),canSaveOriginal=privateFiles&&hasFile&&view.canSaveOriginal===true;
+ const offerReplyAttachment=mode==='original'&&replyDocumentOnly&&view.ready===true&&!!replyAttachmentDraft&&
+  !!selection&&original.sourceUnavailable===false&&original.busy===false&&!original.error&&typeof original.id==='string'&&
+  original.sha256===selection.sha256&&original.mimeType===file.mimeType&&original.size===file.size;
+ const chooseReplyAttachment=async()=>{
+  const draft=replyAttachmentDraft;
+  if(!offerReplyAttachment||!draft||!selection||busy||view.exportPending||attachmentFlight.current)return;
+  const live=obj(bridge.getState().state.attachmentWorkspace),reader=obj(live.originalFile),target=obj(live.file),frame=attachmentFrame(live);
+  if(!frame||live.messageReplyDocumentOnly!==true||frame.windowId!==view.windowId||reader.id!==original.id||
+     target.id!==selection.fileId||target.sha256!==selection.sha256)return;
+  attachmentFlight.current=true;setPending(count=>count+1);setError('');
+  try{
+   const reply=await bridge.command('attachments.openPicker',{key:draft.key,epoch:draft.epoch,revision:draft.revision,
+    replyDocument:{...frame,viewerId:reader.id}});
+   if(reply?.opened!==true||typeof reply.requestId!=='string'||!reply.requestId)throw new Error('未确认打开附件选择，草稿没有改动。');
+  }catch(failure){
+   const current=obj(bridge.getState().state.attachmentWorkspace);
+   if(current.open===true&&current.windowId===frame.windowId)setError(failure instanceof Error?failure.message:'尚未打开原附件选择。');
+  }finally{attachmentFlight.current=false;setPending(count=>count-1)}
+ };
  const canEditDocument=!scopedResultOnly&&privateFiles&&!!selection&&(file.sourceKind||file.source?.kind)==='created_document'&&
   editableDocumentMimes.has(file.mimeType)&&!!exactFileTarget(obj(file.editableSource||file.source?.editableSource));
  const canReturnGeneratedDraft=!onReturnToSearch&&(mode==='detail'||mode==='original')&&!!generatedDraftHandoff(view);
@@ -1321,7 +1340,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {privateFiles&&hasFile&&view.taskId&&view.ready&&(mode==='detail'||mode==='original')&&view.continuationDraft?.available===false&&
   <p className="pw-error" role="alert">{view.continuationDraft.error||'原版本补充草稿暂不可读取，请重新读取这份成果。'}</p>}
  </div>
- {mode==='original'&&privateFiles&&hasFile&&view.ready&&(!scopedResultOnly||useInTopic||canMoveReportOriginal)&&<div className="pw-file-use-footer" role="group" aria-label={file.role==='source'?'使用来源文件':'使用此成果'}>
+ {mode==='original'&&privateFiles&&hasFile&&view.ready&&(!scopedResultOnly||useInTopic||canMoveReportOriginal||offerReplyAttachment)&&<div className="pw-file-use-footer" role="group" aria-label={replyDocumentOnly?'使用原答复文档':file.role==='source'?'使用来源文件':'使用此成果'}>
+  {offerReplyAttachment&&<Button variant="secondary" disabled={busy||draftBusy||view.exportPending}
+   onClick={()=>void chooseReplyAttachment()}>选作草稿附件…</Button>}
   {canMoveReportOriginal&&<>
    <Button variant="primary" disabled={busy||draftBusy||view.exportPending} aria-busy={reportFlight.current||undefined} onClick={()=>void openReportOriginalWork()}>到原工作另存这份</Button>
    <p className={'pw-file-draft-status'+(reportError?' pw-error':'')} role={reportError?'alert':undefined}>{reportError||'汇报中只读。进入原工作后，再选择保存位置。'}</p>

@@ -304,7 +304,7 @@ class ComposeActivity : ComponentActivity() {
             listOf<() -> Unit>(
                 { controller.projectLivePreviewForeground(false) }, { controller.notificationPreviewsForeground(false) },
                 { (application as EngineApplication).remoteOwnerWorkflows?.setForeground(this, false) },
-                { if (businessCurrent()) controller.persistOwnerComposer() }, { controller.projectFileImports.foreground(false) },
+                { if (businessCurrent()) controller.persistOwnerComposerAtReadingExit() }, { controller.projectFileImports.foreground(false) },
                 { controller.projectPackages.foreground(false) }, { controller.ownerArchives.foreground(false) },
                 { controller.projectStorage.foreground(false) }, { controller.projectGitImports.foreground(false) },
                 { controller.attachmentOutcomes.foreground(false) }, { controller.realtimeForeground(false) }
@@ -488,7 +488,7 @@ class ComposeActivity : ComponentActivity() {
             super.onSaveInstanceState(outState)
             return
         }
-        controller.persistOwnerComposer()
+        controller.persistOwnerComposerAtReadingExit()
         outState.putString("channelPhoneEventId", controller.channelPhoneEventId)
         if (::webHost.isInitialized) outState.putString("libraryWebPresentation", webHost.savePresentationState())
         outState.putString("ownerImportTask", legacyImportTarget?.taskId); outState.putString("ownerImportProject", legacyImportTarget?.projectId); outState.putString("ownerExportPath", exportPath)

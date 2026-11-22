@@ -20,6 +20,7 @@ import './conversation-history-window.css';
 
 type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string;revision?:number};
+type DetachedPlace={scope:string;messageId:string;sourceRevision:number;offset:number};
 const readerScope=(page:Json|null|undefined)=>page?JSON.stringify([bridge.getDocumentEpoch(),page.window,page.conversation]):'';
 const exactRow=(page:Json|null|undefined,id:string,revision?:number):Json|null=>{
  const matches=Array.isArray(page?.messages)?page.messages.filter((row:Json)=>row.id===id):[];
@@ -50,6 +51,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   (!searchOnly||action==='conversation.reader.close'||action==='conversation.reader.earlier');
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef(''),position=useRef<Position>({index:0,offset:0,anchor:''});
+ const detachedPlace=useRef<DetachedPlace|null>(null);
  const closingFromReader=useRef(''),unresolved=useRef(''),programScroll=useRef<{scope:string;top:number}|null>(null);
  const [positionNote,setPositionNote]=useState<{scope:string;text:string}|null>(null);
  const [quoteNote,setQuoteNote]=useState('');
@@ -106,7 +108,9 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   if(!row)return false;
   const origin=returning?Array.from(row.querySelectorAll<HTMLButtonElement>('[data-quote-target]')).find(item=>item.dataset.quoteTarget===visit.target&&Number(item.dataset.quoteStart)===visit.offset&&Number(item.dataset.quoteSize)===visit.chars):null;
   const anchor=origin&&!origin.disabled?origin:row;anchor.focus({preventScroll:true});
-  box.scrollTop+=anchor.getBoundingClientRect().top-box.getBoundingClientRect().top-(returning&&origin?visit.returnInset:0);return true;
+  box.scrollTop+=anchor.getBoundingClientRect().top-box.getBoundingClientRect().top-(returning&&origin?visit.returnInset:0);
+  if(native.detachedHistory===true)programScroll.current={scope,top:box.scrollTop};
+  return true;
  };
  const returnFromQuote=()=>{const v=visibleVisit;if(!v)return false;setQuoteVisit(null);if(!moveToQuoteRow(v,true))setQuoteNote('当前窗口还没有读到引用它的原请求，没有跳到其他消息。');return true};
  useEffect(()=>{
@@ -119,7 +123,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   }
  },[quoteVisit,nativePage,scope]);
  useEffect(()=>{setQuoteNote('')},[scope]);
- useEffect(()=>{const retire=()=>{if(document.hidden){setQuoteVisit(null);setQuoteNote('');setFirstQuote(null);setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
+ useEffect(()=>{const retire=()=>{if(document.hidden){detachedPlace.current=null;setQuoteVisit(null);setQuoteNote('');setFirstQuote(null);setHistorySource(null);setHistoryMemory(null)}};document.addEventListener('visibilitychange',retire);return()=>document.removeEventListener('visibilitychange',retire)},[]);
 
  const [inputNotice,setInputNotice]=useState<{window:number;messageId:string;error?:string}|null>(null);
  const [resultNotice,setResultNotice]=useState<{window:number;messageId:string;revision:number;error?:string}|null>(null);
@@ -133,14 +137,26 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   return Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-reader-id]')||[]).find(row=>row.dataset.readerId===messageId&&
    (revision===undefined||Number(row.dataset.readerRevision)===revision));
  };
- const remember=()=>{
+ const remember=(painted=false)=>{
   const node=scroll.current,h=live.current;
+  if(painted)detachedPlace.current=null;
   if(!node||!readyPage(h)||restored.current!==scope||unresolved.current===scope)return;
-  const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
-  const row=items.find(item=>item.getBoundingClientRect().bottom>node.getBoundingClientRect().top)||items.at(-1);
+  const box=node.getBoundingClientRect(),items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
+  const row=items.find(item=>item.getBoundingClientRect().bottom>box.top)||items.at(-1);
   const anchor=row?.dataset.readerId,revision=Number(row?.dataset.readerRevision);
   if(!row||!anchor||!Number.isSafeInteger(revision)||!exactRow(h,anchor,revision))return;
-  position.current={index:Number(row.dataset.readerIndex),offset:Math.max(0,Math.round(node.getBoundingClientRect().top-row.getBoundingClientRect().top)),anchor,revision};
+  const rect=row.getBoundingClientRect(),offset=Math.max(0,Math.round(box.top-rect.top));
+  position.current={index:Number(row.dataset.readerIndex),offset,anchor,revision};
+  if(painted&&h.detachedHistory===true&&!visibleVisit&&!reviewing&&!shownSource&&!shownMemory&&!phoneOriginal&&!document.hidden&&
+    row.isConnected&&row.getClientRects().length&&rect.bottom>box.top&&rect.top<box.bottom&&revision>0&&offset<=1_000_000)detachedPlace.current={scope,messageId:anchor,sourceRevision:revision,offset};
+ };
+ const exactDetachedPlace=(actual:Json)=>{
+  const place=detachedPlace.current,shown=position.current;
+  if(!place||document.hidden||actual.detachedHistory!==true||place.scope!==scope||readerScope(actual)!==scope||
+     readerScope(live.current)!==scope||!readyPage(live.current)||!readyPage(actual)||
+     shown.anchor!==place.messageId||shown.revision!==place.sourceRevision||shown.offset!==place.offset)return;
+  const row=exactRow(actual,place.messageId,place.sourceRevision);
+  if(row)return {index:actual.messages.indexOf(row),messageId:place.messageId,sourceRevision:place.sourceRevision,offset:place.offset};
  };
  const restoreReaderRow=(original:Json,message:Json,trigger:HTMLButtonElement,box:HTMLElement)=>{
   const ticket=readerScope(original),id=String(message.id),revision=Number(message.sourceRevision);
@@ -189,21 +205,29 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const saved=exactRow(actual,place.anchor,place.revision);
   if(!saved)return;
   const index=actual.messages.indexOf(saved);
-  try{await act('conversation.reader.position',{window:actual.window,conversationId:actual.conversation,index,offset:place.offset})}
+  const detached=exactDetachedPlace(actual);
+  try{await act('conversation.reader.position',{window:actual.window,conversationId:actual.conversation,index,offset:place.offset,
+    ...(detached?.index===index&&detached.offset===place.offset?{detachedPosition:detached}:{})})}
   catch{/* The original place can still be used locally, never substitute a different row. */}
  };
  const saveReading=()=>{
   const prior=programScroll.current;programScroll.current=null;
   if(sending.current||prior?.scope===scope&&Math.abs((scroll.current?.scrollTop??0)-prior.top)<1)return;
-  remember();if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>void persist(),180);
+  remember(true);if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>void persist(),180);
  };
  const invoke=async(action:string,extra:Json={})=>{
   const original=live.current;if(!original||sending.current||document.hidden||original.workRequest&&action!=='conversation.reader.close')return;
   if(action!=='conversation.reader.close')closingFromReader.current='';
   sending.current=true;setPending(true);setError('');remember();
   try{
-   const saved=persist();
-   if(action==='conversation.reader.earlier'||action==='conversation.reader.refresh')await saved;
+   if(action==='conversation.reader.close'&&original.detachedHistory===true){
+    if(timer.current){clearTimeout(timer.current);timer.current=null}
+    const actual=bridge.getState().state.conversationReader,place=actual&&exactDetachedPlace(actual);
+    if(place)extra={...extra,detachedPosition:place};
+   }else{
+    const saved=persist();
+    if(action==='conversation.reader.earlier'||action==='conversation.reader.refresh')await saved;
+   }
    if(!document.hidden&&readerScope(live.current)===scope&&readerScope(bridge.getState().state.conversationReader)===scope)
     await act(action,{window:original.window,conversationId:original.conversation,...extra});
   }catch(failure){
@@ -285,6 +309,22 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    }
    row.focus({preventScroll:true});return true;
   }
+  const bookmark=shownPage?.detachedHistoryResumeRevision;
+  if(shownPage?.detachedHistory===true&&Number.isSafeInteger(bookmark)&&bookmark>0&&restored.current!==scope){
+   const node=scroll.current,native=bridge.getState().state.conversationReader;
+   const anchor=shownPage.anchor,offset=shownPage.offset;
+   if(document.hidden||!node?.isConnected||!readyPage(shownPage)||!readyPage(native)||readerScope(native)!==scope||
+     native.detachedHistory!==true||native.detachedHistoryResumeRevision!==bookmark||native.anchor!==anchor||native.offset!==offset||
+     !Number.isInteger(offset)||offset<0||offset>1_000_000||typeof anchor!=='string'||!exactRow(native,anchor,bookmark))return false;
+   const row=shownRow(anchor,bookmark);
+   if(!row?.isConnected||!row.getClientRects().length)return false;
+   const measured=row.getBoundingClientRect();
+   const innerOffset=Math.min(offset,Math.max(0,Math.floor(measured.height)-1));
+   node.scrollTop+=measured.top-node.getBoundingClientRect().top+innerOffset;
+   programScroll.current={scope,top:node.scrollTop};restored.current=scope;
+   position.current={index:Number(row.dataset.readerIndex),offset:innerOffset,anchor,revision:bookmark};
+   row.focus({preventScroll:true});return true;
+  }
   const message=live.current?.workRequest?.messageId||live.current?.originalReportMessageId;
   if(!message||!scroll.current)return false;
   const report=Array.from(scroll.current.querySelectorAll<HTMLElement>('[data-reader-id]')).find(row=>row.dataset.readerId===message);
@@ -311,11 +351,11 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  useEffect(()=>{registerBack(back);return()=>registerBack(null)});
  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current)},[]);
  useLayoutEffect(()=>{
-  if(!nativePage){restored.current='';unresolved.current='';return}
+  if(!nativePage){restored.current='';unresolved.current='';detachedPlace.current=null;return}
   const node=scroll.current;
   if(!readyPage(page)||!node||!page)return;
   const first=restored.current!==scope;
-  if(first&&page.searchAnchor){focusOpenedRow();return;}
+  if(first&&(page.searchAnchor||page.detachedHistoryResumeRevision)){focusOpenedRow();return;}
   const saved:Position=first?{index:Number(page.index||0),offset:Number(page.offset||0),anchor:String(page.anchor||'')}:position.current;
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
   // A native bookmark identifies a saved message. Its former index is no
@@ -347,7 +387,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
    {shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
    {page&&positionNote?.scope===scope&&<div className="pw-action-row"><p className="pw-muted" role="status">{positionNote.text}</p>
-    {!!rows.length&&<Button variant="ghost" size="small" disabled={pending||shown.loading} onClick={()=>{setMissingPlace(false);remember();void persist()}}>从这里继续阅读</Button>}</div>}
+    {!!rows.length&&<Button variant="ghost" size="small" disabled={pending||shown.loading} onClick={()=>{setMissingPlace(false);remember(true);void persist()}}>从这里继续阅读</Button>}</div>}
    {page&&quoteNote&&<p className="pw-muted" role="status">{quoteNote}</p>}
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}

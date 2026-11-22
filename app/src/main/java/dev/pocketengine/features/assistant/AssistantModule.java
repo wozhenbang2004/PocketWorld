@@ -301,6 +301,10 @@ public final class AssistantModule implements EngineModule {
         if(!durable()||migrationInProgress)throw new IllegalStateException("本机原文暂不可定位");
         return historyRepository.windowAtOwnerSearchHit(conversation,locator,control);
     }
+    public JSONObject readOriginalDetachedHistory(String conversation,OwnerDetachedHistoryPosition position,RunControl control,Runnable current)throws Exception{
+        if(!durable()||migrationInProgress)throw new IllegalStateException("本机原阅读位置暂不可定位");
+        return historyRepository.windowAtOwnerDetachedHistory(conversation,position,control,current);
+    }
     public JSONObject deleteOriginalImportedRecord(String conversation,String record,long version)throws Exception{
         if(version<1||version==Long.MAX_VALUE)throw new IllegalArgumentException("内部recordVersion无效");synchronized(admission){idle(conversation);if(!durable())throw new IllegalStateException("先审核导入原件，再按内部记录版本删除");historyRepository.transaction(()->{historyRepository.deleteImportedMessage(conversation,record,version);return null;});sourceGeneration++;synchronizationPending=true;}synchronizeSources();return new JSONObject().put("deleted",true).put("recordId",record).put("recordVersion",version+1).put("historicalRevision",JSONObject.NULL);
     }

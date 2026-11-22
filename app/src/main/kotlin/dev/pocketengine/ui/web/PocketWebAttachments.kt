@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebResourceResponse
 import dev.pocketengine.features.attachments.creation.DocumentDraft
+import dev.pocketengine.features.attachments.OriginalReplyDocument
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Fields
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Format
 import dev.pocketengine.features.attachments.creation.OwnerStandaloneDocumentDraftStore.Pin
@@ -21,6 +22,7 @@ import dev.pocketengine.ui.AttachmentOutcomeState
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.AttachmentWorkReturn
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.UiChatAttachment
 import dev.pocketengine.ui.objects
 import dev.pocketengine.ui.web.PocketWebStandaloneDocumentDrafts.TextSeed
 import dev.pocketengine.features.local.project.OriginalNodeCompilerDelivery
@@ -53,6 +55,9 @@ internal class PocketWebAttachments(
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket, val accepts: (PocketWebWindowTicket) -> Boolean)
+    private data class ReplyDocumentVisit(val window:Window,val file:UiChatAttachment,val target:OriginalReplyDocument.Target)
+    data class ReplyAttachment(val file:UiChatAttachment,val target:OriginalReplyDocument.Target,
+        val owns:()->Boolean,val ready:()->Boolean,val close:()->Boolean)
     private data class WorkPdfShare(val work: AttachmentWorkReturn, val page: AttachmentPdfPageText)
     private data class Frame(val location: String, val files: List<JSONObject>,
         val libraryPdfResume: PocketWebOriginalFiles.LibraryPdfResume?, val displayedPdfPage: AttachmentPdfPageText?,
@@ -63,6 +68,7 @@ internal class PocketWebAttachments(
     private data class DraftDocumentReview(val id: String, val windowId: String,
         val edit: PocketWebStandaloneDocumentDrafts.Edit, val outputFormat: Format, val planDigest: String, val expires: Long)
     private var window: Window? = null
+    @Volatile private var replyDocumentVisit:ReplyDocumentVisit?=null
     private val frames = linkedMapOf<String, Frame>()
     private var review: Review? = null
     private var processingReview: ProcessingReview? = null
@@ -404,9 +410,34 @@ internal class PocketWebAttachments(
     /** Only the original live message may hold this read-only viewer window. */
     fun openMessagePdf(file:dev.pocketengine.ui.UiChatAttachment,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
         openMessageOriginal(ticket,current){flow.openMessagePdf(file,it)}
-    fun openReplyDocument(file:dev.pocketengine.ui.UiChatAttachment,
-        target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
-        openMessageOriginal(ticket,current){flow.openReplyDocument(file,target,it)}
+    fun openReplyDocument(file:UiChatAttachment,
+        target:OriginalReplyDocument.Target,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject {
+        val opened=openMessageOriginal(ticket,current){flow.openReplyDocument(file,target,it)}
+        replyDocumentVisit=ReplyDocumentVisit(checkNotNull(window),file,target)
+        return opened
+    }
+    /** A Web frame selects only the native reader it is currently showing, never a file ID. */
+    fun replyAttachment(windowId:String,frameId:String,viewerId:String):ReplyAttachment? {
+        val visit=replyDocumentVisit?:return null
+        val frame=frames[frameId]?:return null
+        val source=flow.state.originalFile?:return null
+        if(visit.window.id!=windowId)return null
+        fun owns():Boolean {
+            val live=flow.state
+            return replyDocumentVisit===visit&&window===visit.window&&visit.window.accepts(visit.window.ticket)&&
+                live.open&&live.messageReplyDocumentOnly&&!live.busy&&!flow.exportPending&&live.originalFile===source&&
+                source.sha256==visit.file.sha256&&source.mimeType==visit.file.mimeType&&source.sizeBytes==visit.file.size&&
+                live.file?.opt("id")==visit.file.id&&frame.location==location(live)
+        }
+        fun ready():Boolean {
+            val rendered=viewer.snapshot()?:return false
+            return owns()&&viewer.matchesOriginal(flow.state.file)&&rendered.opt("id")==viewerId&&
+                rendered.opt("sourceUnavailable")==false&&rendered.opt("busy")==false&&rendered.isNull("error")
+        }
+        return ReplyAttachment(visit.file,visit.target,::owns,::ready){
+            if(!ready())false else { clear();!flow.state.open }
+        }.takeIf{ready()}
+    }
     private fun openMessageOriginal(ticket:PocketWebWindowTicket,current:()->Boolean,start:(()->Boolean)->Unit):JSONObject {
         check(!flow.state.open&&!flow.exportPending&&controller.webPrivateOwnerVisible()&&current())
         clear()
@@ -1245,7 +1276,7 @@ internal class PocketWebAttachments(
         deviceTaskCurrent=null; scopedResultCurrent=null
         if((scoped || focusedDraft) && flow.state.open)flow.close()
         flow.discardLibraryDocumentReturn()
-        window = null; frames.clear(); review = null; processingReview = null; viewer.clear()
+        window = null; replyDocumentVisit=null; frames.clear(); review = null; processingReview = null; viewer.clear()
     }
     fun close() { clear(); viewer.close() }
 }

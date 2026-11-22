@@ -1,5 +1,6 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.features.assistant.OwnerDetachedHistoryPosition
 import org.json.JSONObject
 
 private fun originalRecordVersion(value: Any?): Long? = when (value) { is Int -> value.toLong(); is Long -> value; else -> null }
@@ -64,7 +65,9 @@ internal data class ConversationReadPage(
     val loading: Boolean = true, val error: String? = null, val notice: String? = null,
     val rowBytes: Map<String,Int> = emptyMap(), val limited: Boolean = false, val index: Int = 0, val offset: Int = 0, val anchor: String = "", val bytes: Int = 0, val initialized: Boolean = false,
     val quoteTrail: ConversationQuoteTrail = ConversationQuoteTrail(), val reportAnchor: OwnerReportHistoryAnchor? = null,
-    val workRequestAnchor: OwnerWorkRequestHistoryAnchor? = null, val searchAnchor: OwnerSearchHistoryAnchor? = null
+    val workRequestAnchor: OwnerWorkRequestHistoryAnchor? = null, val searchAnchor: OwnerSearchHistoryAnchor? = null,
+    val detachedHistoryEpoch: Int? = null, val detachedHistoryResumeRevision: Long? = null,
+    val detachedHistoryPosition: OwnerDetachedHistoryPosition? = null
 ) {
     private companion object { const val MAX_PAGE_BYTES = 1024L * 1024L }
 

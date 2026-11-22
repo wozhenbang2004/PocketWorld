@@ -203,7 +203,9 @@ type DraftAcceptanceClick=OriginalProjectDraft&{window:TaskReviewWindow;reviewHa
 type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;documentEpoch?:number;originalDraft?:{composer:string;conversation:string;ownerEpoch:number;revision:number;origin:number};requestId?:string;draftRequestId?:string;provider?:string};
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type OriginalOwnerRequest={work:WorkIdentity;draftEpoch:number;resume:number;nativeTaskRequest:number};
-type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number};phoneDelivery?:{result:PhoneResult;resume:number};ownerRequest?:OriginalOwnerRequest};
+type ChatReportLink={target:ReportTarget;deliveryId:string;revision:number;writer:WorkIdentity;replyId:string};
+type ChatReportReturn={link:ChatReportLink;draftEpoch:number;resume:number;nativeTaskRequest:number};
+type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number};phoneDelivery?:{result:PhoneResult;resume:number};ownerRequest?:OriginalOwnerRequest;reportReply?:ChatReportReturn};
 type ChatMessageOriginalKind='messagePdf'|'replyDocument';
 type ChatMessageOriginalVisit={kind:ChatMessageOriginalKind;source:MessageAttachmentSource;input:ModelSetupInput;anchor:ChatWorkReturn;navigation:number;resume:number;windowId:string};
 type ChatWorkRowOrigin={work:WorkIdentity;conversation:string;draftEpoch:number;documentEpoch:number;resumeRevision:number;navigation:number;nativeTaskRequest:number;trigger:HTMLButtonElement;question?:true;composerRail?:true};
@@ -274,6 +276,39 @@ const ordinaryMessageWorkChat=(live:ReturnType<typeof bridge.getState>,conversat
   phone.phone===false&&phone.channelOrigin===false&&draft?.ready===true&&draft.conversationId===conversation&&
   draft.key===`conversation:${conversation}`&&Number.isSafeInteger(epoch)&&draft.epoch===epoch;
 };
+// A consumed Work result and the actual saved reply already live in this
+// private snapshot. Do not look up old reports, or infer them from the prose.
+function originalChatReportLinks(live:ReturnType<typeof bridge.getState>,conversation:string){
+ const links=new Map<string,ChatReportLink>();
+ if(!conversation||live.state.conversationId!==conversation)return links;
+ const reports=new Map<string,{target:ReportTarget;deliveryId:string}|null>();
+ for(const task of asArray<Task>(live.state.ownerWork)){
+  const target=completedDirectoryReport(task),deliveryId=task.raw?.ownerWork?.handling?.deliveryId,teams=task.raw?.ownerWorkTeams;
+  if(target?.conversationId!==conversation||typeof deliveryId!=='string'||!deliveryId||
+     task.raw?.ownerWorkTeamsUnavailable===true||!Array.isArray(teams)||teams.length||task.raw?.ownerWork?.relatedTaskCount>0)continue;
+  reports.set(target.reportMessageId,reports.has(target.reportMessageId)?null:{target,deliveryId});
+ }
+ if(!reports.size)return links;
+ const replies=new Map<string,Message|null>(),deliveries=new Map<string,TaskResult|null>();
+ for(const row of asArray<Message>(live.state.messages)){
+  if(row.id&&reports.has(row.id))replies.set(row.id,replies.has(row.id)?null:row);
+  const delivery=messageTaskResult(row);
+  if(delivery?.kind==='owner_work'&&delivery.status==='completed'&&delivery.noticeKind===null)
+   deliveries.set(delivery.deliveryId,deliveries.has(delivery.deliveryId)?null:delivery);
+ }
+ for(const [id,report] of reports){
+  const row=replies.get(id),writer=messageReplyContext(row),delivery=report&&deliveries.get(report.deliveryId);
+  if(!report||!row||row.quoteAvailable!==true||row.phoneResult||row.taskResult||row.hostGoalTaskId||row.originalHostFinal||
+     !Number.isSafeInteger(row.sourceRevision)||Number(row.sourceRevision)<1||!writer?.replyId||writer.deliveryId!==null||
+     writer.taskId===report.target.taskId||!delivery||workIdentityKey(delivery)!==workIdentityKey(report.target))continue;
+  const {taskId,runId,epoch,replyId}=writer;
+  links.set(id,{...report,revision:Number(row.sourceRevision),writer:{taskId,runId,epoch},replyId});
+ }
+ return links;
+}
+const sameChatReportLink=(link:ChatReportLink|undefined,expected:ChatReportLink)=>!!link&&sameHomeReport(link.target,expected.target)&&
+ link.deliveryId===expected.deliveryId&&link.revision===expected.revision&&link.replyId===expected.replyId&&
+ workIdentityKey(link.writer)===workIdentityKey(expected.writer);
 function ownerRequestWorkMatches(task:Task|undefined,conversation:string,pin:OriginalOwnerRequest){
  const work=ordinaryChatWorkRow(task,conversation);
  return !!work&&workIdentityKey(work)===workIdentityKey(pin.work);
@@ -694,6 +729,7 @@ export default function App(){
  useEffect(()=>{const cancel=()=>{if(document.hidden){conversationReturnRequest.current++;setReturningConversation('');setCarriedTeamRoster(null)}};document.addEventListener('visibilitychange',cancel);return()=>document.removeEventListener('visibilitychange',cancel)},[]);
  const historyWindowBack=useRef<(()=>boolean)|null>(null);
  const chatHistoryReturn=useRef<{conversationId:string;document:number;navigation:number;trigger:HTMLButtonElement}|null>(null);
+ const chatHistoryBrowse=useRef<HTMLButtonElement>(null);
  const registerHistoryWindowBack=useCallback((handler:(()=>boolean)|null)=>{historyWindowBack.current=handler},[]);
  const queuedInputsBack=useRef<(()=>boolean)|null>(null);
  const registerQueuedInputsBack=useCallback((handler:(()=>boolean)|null)=>{queuedInputsBack.current=handler},[]);
@@ -991,6 +1027,11 @@ export default function App(){
  const wrongNoticeRun=!!noticeBinding&&(!noticeCandidate||noticeCandidate.raw?.runId!==noticeBinding.runId||noticeCandidate.raw?.coordinatorEpoch!==noticeBinding.epoch);
  const noticeNotReady=!!noticeBinding&&(wrongNoticeRun||phoneNotification?.token!==noticeBinding.token||!phoneNotification?.current||openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId);
  const taskCandidate=tasks.find(x=>x.id===taskId),expectedProjectRun=projectReading?.sourcePackageRun??projectReading?.expected;
+ const chatDrawerOrigin=chatWorkReturn.current;
+ const chatReportVisit=route==='chat'&&chatDrawerOrigin&&chatDrawerOrigin.taskId===taskId&&chatDrawerOrigin.navigation===navigationRevision?
+  chatDrawerOrigin.reportReply:undefined;
+ const chatReportRound=chatReportVisit?.link.target;
+ const wrongChatReportRun=!!chatReportRound&&(taskCandidate?.raw?.runId!==chatReportRound.runId||taskCandidate?.raw?.coordinatorEpoch!==chatReportRound.epoch);
  const wrongProjectRun=!!expectedProjectRun&&(taskCandidate?.raw?.runId!==expectedProjectRun.runId||taskCandidate?.raw?.coordinatorEpoch!==expectedProjectRun.epoch);
  const returningTeamWork=route!=='teams'&&relatedOrigin.current?.route===route?relatedOrigin.current.task?.teamResult?.source:undefined;
  const teamWorkNotReady=!!returningTeamWork&&returningTeamWork.parentTaskId===taskId&&
@@ -1003,7 +1044,7 @@ export default function App(){
  const latestOriginalRequestWork=ownerRequestOrigin?ordinaryChatWorkRow(taskCandidate,ownerRequestOrigin.conversation):null;
  const ownerRequestAnotherRound=latestOriginalRequestWork&&ownerRequestOrigin?.ownerRequest&&
    workIdentityKey(latestOriginalRequestWork)!==workIdentityKey(ownerRequestOrigin.ownerRequest.work);
- const taskHidden=noticeNotReady||reportSourceChanged||wrongProjectRun||teamWorkNotReady||
+ const taskHidden=noticeNotReady||reportSourceChanged||wrongProjectRun||wrongChatReportRun||teamWorkNotReady||
    projectReading&&(openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId||state.projectId!==projectReading.projectId);
  const selectedTask=taskHidden?undefined:ownerRequestWindow?ownerRequestTask:taskCandidate;const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
  useLayoutEffect(()=>{
@@ -1184,6 +1225,10 @@ export default function App(){
  const run=useCallback((action:string,args:Json={},onAccepted?:(value:any)=>void)=>{void act(action,args).then(value=>{onAccepted?.(value)}).catch(error=>{if(!action.startsWith('tasks.')||!args.id)setLocalError(error instanceof Error?error.message:String(error))});},[act]);
  const closeChatAttachmentPicker=useCallback(()=>{
   setPermissionOptionsOpen(current=>typeof current==='object'?false:current);
+  const native=bridge.getState().state,exact=obj(native.originalReplyAttachmentPicker);
+  if(typeof exact.requestId==='string'&&exact.requestId===native.chatAttachmentPickerRequest&&can('attachments.closePicker')){
+   run('attachments.closePicker',{pickerRequestId:exact.requestId});return true;
+  }
   if(reopenedAttachmentPicker&&reopenedPickerCurrent(reopenedAttachmentPicker)&&can('attachments.closePicker')){
    run('attachments.closePicker',{pickerRequestId:reopenedAttachmentPicker.requestId});return true;
   }
@@ -1438,6 +1483,15 @@ export default function App(){
       live.state.requestedTaskRevision!==nativeTaskRequest||view.taskId!==null&&view.taskId!==work.taskId||
       rows.length!==1||rows[0].role!=='user'||rows[0].quoteAvailable!==true||rows[0].sourceRevision!==origin.revision)return;
   }
+  if(origin.reportReply){
+   const {link,draftEpoch,resume,nativeTaskRequest}=origin.reportReply,view=obj(live.view);
+   const row=rows.length===1?rows[0]:undefined,reply=messageReplyContext(row);
+   // Returning to B needs the same original saved message, not a fresh view
+   // of A or an alternate head of either Work.
+   if(!ordinaryMessageWorkChat(live,origin.conversation,draftEpoch)||view.resumeRevision!==resume||
+      live.state.requestedTaskRevision!==nativeTaskRequest||view.taskId!==null&&view.taskId!==link.target.taskId||
+      !row||row.sourceRevision!==origin.revision||row.quoteAvailable!==true||!reply||reply.replyId!==link.replyId||reply.deliveryId!==null)return;
+  }
   if(origin.phoneDelivery){
    const {result:phone,resume}=origin.phoneDelivery,view=obj(live.view),owner=live.state;
    const saved=rows.length===1&&rows[0].sourceRevision===origin.revision?messagePhoneResult(rows[0]):null;
@@ -1462,7 +1516,7 @@ export default function App(){
   const {node,article}=position;
   stopFollowing();
   node.scrollTop=origin.top;node.scrollTop+=article.getBoundingClientRect().top-node.getBoundingClientRect().top-origin.offset;
-  const sameTrigger=origin.trigger.isConnected&&!origin.trigger.disabled&&(!(origin.result||origin.phoneDelivery||origin.ownerRequest)||article.contains(origin.trigger));
+  const sameTrigger=origin.trigger.isConnected&&!origin.trigger.disabled&&(!(origin.result||origin.phoneDelivery||origin.ownerRequest||origin.reportReply)||article.contains(origin.trigger));
   const target=sameTrigger?origin.trigger:article;
   target.focus({preventScroll:true});
   return true;
@@ -2191,9 +2245,13 @@ export default function App(){
   setTaskToolsPlace(null);setChatQuestionOrigin(questionOrigin);
   rememberTaskPosition();const request=++reviewRequest.current;const readReview=entry!=='homeReport'&&(entry==='review'||entry==='scope'||tasks.some(task=>task.id===id&&attention(task)));openedTaskId.current=null;setReviewPending(false);setTaskOpening(true);setWorkOpen(false);setCommandOpen(false);setTaskId(id);setTaskLayer(entry==='review'?'overview':entry);setTaskOpen(true);setReview(null);setReviewNote('');setReviewFeedbackOpen(false);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const ownerRequestSource=chatWorkOpen?.returnTo?.ownerRequest?chatWorkOpen.returnTo:null;
+  const reportSource=chatWorkOpen?.returnTo?.reportReply?chatWorkOpen.returnTo:null;
   const fromOwnerRequest=!!ownerRequestSource;
   ownerRequestWindowId.current=fromOwnerRequest?id:null;
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
+  // Back can return to the clicked report while A is still opening. This is
+  // a position only; no report or file read is allowed until the native ACK.
+  if(reportSource&&chatWorkOpen)chatWorkReturn.current={...reportSource,taskId:id,navigation:chatWorkOpen.navigation,resumeRevision:window.resumeRevision};
   // Open the original host window before obtaining its single-use review handle.
   // Internal task opens do not emit another external-navigation request.
   let acknowledged=false;
@@ -2205,12 +2263,13 @@ export default function App(){
     Number(obj(bridge.getState().view).resumeRevision||0)!==window.resumeRevision||document.hidden);
    if(!current())return false;
    const args={id,requestNavigation:false,...origin,...(searchQuery===undefined?{}:{searchQuery}),...(projectSource&&!projectSource.sourcePackageRun?{expectedProjectId:projectSource.projectId,...(projectSource.checkoutId?{expectedCheckoutId:projectSource.checkoutId}:{})}:{}),...(expected?{expectedRunId:expected.runId,expectedEpoch:expected.epoch}:{})};
-   const opened=await (fromOwnerRequest||questionOrigin?bridge.command<Json>('tasks.open',args):act('tasks.open',args,id));
+   const opened=await (fromOwnerRequest||questionOrigin||reportSource?bridge.command<Json>('tasks.open',args):act('tasks.open',args,id));
    acknowledged=opened?.taskId===id&&opened.readOnly===true&&opened.executionAuthorized===false;
    if(questionOrigin)return acknowledged&&!!await awaitPickerProjection(current,()=>{
     const live=bridge.getState();
     return currentChatWorkVisit(questionOrigin,'work',live)?sameChatWorkRun(questionOrigin,live):undefined;
    });
+   if(reportSource)return acknowledged;
    if(!ownerRequestSource)return true;
    return acknowledged&&!!await awaitPickerProjection(current,()=>currentOriginalRequestWork(ownerRequestSource,bridge.getState()));
   };
@@ -2333,7 +2392,7 @@ export default function App(){
    const project=projectTaskReturn.current;
    // Search is a parent of the chat, not of a work drawer opened from its message.
    const returnToMessage=route==='chat'&&!!source&&source.taskId===taskId&&
-    (source.ownerRequest||openedTaskId.current===taskId&&view.taskId===taskId)&&
+    (source.ownerRequest||source.reportReply||openedTaskId.current===taskId&&view.taskId===taskId)&&
     source.navigation===navigationWindow.current&&source.resumeRevision===Number(view.resumeRevision||0)&&
     !live.state.conversationReader&&!!chatWorkLocation(source,undefined,true);
    const returnFromPendingQuestion=taskOpening&&route==='chat'&&chatQuestionOrigin?.work.taskId===taskId&&
@@ -3551,6 +3610,7 @@ export default function App(){
   return reader.window===origin.window&&reader.conversation===origin.conversationId&&!reader.loading&&!reader.error&&!reader.limited?reader:null;
  };
  const messageOriginalReturn=useRef<ChatMessageOriginalVisit|null>(null),openingMessageOriginal=useRef(false);
+ const replyPickerReturn=useRef<{windowId:string}|null>(null);
  const messageOriginalView=obj(snapshot?.view);
  const mayOpenChatMessageOriginal=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&!draftSwitching&&!state.conversationReader&&
   composer.ready===true&&!!state.conversationId&&composer.key===`conversation:${state.conversationId}`&&
@@ -3970,6 +4030,22 @@ export default function App(){
      native.state.chatAttachmentPickerRequest!==origin.requestId||!Number.isSafeInteger(input.revision)||
      (origin.sourceMessage||origin.file.standaloneDocument)&&(input.revision!==composer.revision||fileInPicker(origin.file,origin.requestId,origin.sourceMessage)!==true))return;
   run('attachments.toggle',{id,sha256,selected,key:origin.draft.key,epoch:origin.draft.epoch,revision:input.revision,pickerRequestId:origin.requestId});
+ };
+ // The native single choice is not an attachments.list result and must not reveal the
+ // general catalogue, even briefly, if its exact projection has become unusable.
+ const hasReplyAttachmentPicker=state.originalReplyAttachmentPicker!=null;
+ const replyAttachmentPicker=obj(state.originalReplyAttachmentPicker),replyAttachmentRow=obj(replyAttachmentPicker.file);
+ const replyAttachmentTarget=exactFileTarget(replyAttachmentRow);
+ const replyAttachmentVisible=hasReplyAttachmentPicker&&!!replyAttachmentTarget&&typeof replyAttachmentPicker.requestId==='string'&&
+  state.chatAttachmentPickerRequest===replyAttachmentPicker.requestId&&route==='chat'&&intent==='chat'&&!draftSwitching&&!taskOpen&&
+  composer.ready===true&&composer.key===replyAttachmentPicker.draftKey&&composer.epoch===replyAttachmentPicker.draftEpoch&&
+  composer.key===`conversation:${state.conversationId}`;
+ const toggleReplyAttachment=(id:string,sha256:string,selected:boolean)=>{
+  const live=bridge.getState(),held=obj(live.state.originalReplyAttachmentPicker),row=obj(held.file),input=obj(live.composer);
+  if(!replyAttachmentVisible||held.requestId!==replyAttachmentPicker.requestId||held.requestId!==live.state.chatAttachmentPickerRequest||
+     held.checking!==false||row.id!==id||row.sha256!==sha256||input.key!==held.draftKey||input.epoch!==held.draftEpoch||
+     input.revision!==composer.revision||!Number.isSafeInteger(input.revision))return;
+  run('attachments.toggle',{id,sha256,selected,key:held.draftKey,epoch:held.draftEpoch,revision:input.revision,pickerRequestId:held.requestId});
  };
  const fileDraftConversationLoaded=(native:Json,conversationId:string,earlierRead?:string)=>{
   // Selecting a conversation can publish a blank composer before its original history is readable.
@@ -6082,22 +6158,42 @@ export default function App(){
  };
  const composerHasChatStop=isChatSurface&&intent==='chat'&&!!state.chatBusy&&!!currentCancelIdentity&&can('chat.cancel');
  const conversationActivity=conversationActivityLabel(state);
- const openChatHistory=async(trigger:HTMLButtonElement)=>{
-  const native=bridge.getState().state,conversationId=String(native.conversationId||'');
+ const openChatHistory=async(trigger:HTMLButtonElement,entry?:'browse'|'resume')=>{
+  const latest=bridge.getState(),native=latest.state,conversationId=String(native.conversationId||'');
   if(document.hidden||!conversationId||conversationId!==state.conversationId||native.conversationReader||!trigger.isConnected)return;
+  if(entry==='resume'&&(route!=='chat'||intent!=='chat'||native.detachedHistoryResumeAvailable!==true||
+    latest.composer?.ready!==true||latest.composer.key!=='conversation:'+conversationId||latest.composer.conversationId!==conversationId))return;
   const origin={conversationId,document:bridge.getDocumentEpoch(),navigation:navigationWindow.current,trigger};
   chatHistoryReturn.current=origin;
   stopFollowing();rememberChatPosition();
-  try{await act('conversation.reader.open',{conversationId})}
-  catch{if(chatHistoryReturn.current===origin)chatHistoryReturn.current=null;}
+  if(entry!=='resume'){
+   try{await act('conversation.reader.open',{conversationId,...(entry==='browse'?{rememberDetachedPosition:true}:{})})}
+   catch{if(chatHistoryReturn.current===origin)chatHistoryReturn.current=null;}
+   return;
+  }
+  const stillHere=()=>chatHistoryReturn.current===origin&&!document.hidden&&trigger.isConnected&&
+   origin.document===bridge.getDocumentEpoch()&&origin.navigation===navigationWindow.current&&bridge.getState().state.conversationId===conversationId;
+  try{
+   const ack=await bridge.command('conversation.reader.open',{conversationId,resume:true});
+   if(ack?.resumed!==true||ack.conversationId!==conversationId||!Number.isSafeInteger(ack.window)||ack.window<1)
+    throw new Error('原阅读位置没有确认，可以浏览最新记录。');
+   // A Web-only navigation may leave the same native C selected. Never retain
+   // its late admitted reader behind another screen; this ACK owns only its window.
+   if(!stillHere()&&origin.document===bridge.getDocumentEpoch())
+    void bridge.command('conversation.reader.close',{window:ack.window,conversationId}).catch(()=>{});
+  }catch(error){
+   if(stillHere())setLocalError(error instanceof Error?error.message:'原阅读位置暂不可核对，可以浏览最新记录。');
+   if(chatHistoryReturn.current===origin)chatHistoryReturn.current=null;
+  }
  };
  const focusAfterHistoryClose=()=>{
   const origin=chatHistoryReturn.current;chatHistoryReturn.current=null;
   const native=bridge.getState();
   if(!origin||document.hidden||route!=='chat'||taskOpen||native.state.conversationReader||native.state.attachmentWorkspace?.open||
    origin.conversationId!==native.state.conversationId||origin.document!==bridge.getDocumentEpoch()||
-   origin.navigation!==navigationWindow.current||!origin.trigger.isConnected||origin.trigger.disabled)return;
-  origin.trigger.focus({preventScroll:true});
+   origin.navigation!==navigationWindow.current)return;
+  const trigger=origin.trigger.isConnected?origin.trigger:chatHistoryBrowse.current;
+  if(trigger?.isConnected&&!trigger.disabled)trigger.focus({preventScroll:true});
  };
  const openTurnNotes=(original:WorkIdentity,layer:'overview'|'review'|'process',saved?:Message,trigger?:HTMLButtonElement|null)=>{
   const expected={runId:original.runId,epoch:original.epoch};
@@ -6854,6 +6950,58 @@ export default function App(){
    if(current())setLocalStatus('原工作或这条消息已变化，没有打开其他轮次。');
   },undefined,{returnTo,beforeTaskRequest,navigation});
  };
+ const openReportFromChat=(link:ChatReportLink,trigger:HTMLButtonElement)=>{
+  const {target,revision}=link,{taskId:id,conversationId,reportMessageId}=target;
+  const node=scroll.current,article=trigger.closest<HTMLElement>('article[data-message-id]');
+  const initial=bridge.getState(),view=obj(initial.view),resume=view.resumeRevision,nativeTaskRequest=initial.state.requestedTaskRevision;
+  if(route!=='chat'||intent!=='chat'||taskOpen||taskOpening||workOpen||commandOpen||preparationTarget||chatOpenFlight.current||
+     draftSwitchPending()||!node||article?.dataset.messageId!==reportMessageId||!node.contains(article)||
+     !trigger.isConnected||trigger.disabled||trigger.closest('[hidden],[inert]')||view.taskId!==null||
+     !Number.isSafeInteger(resume)||!Number.isSafeInteger(nativeTaskRequest)||
+     !['tasks.open','tasks.close','ownerWork.report.read'].every(can))return;
+  const doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,beforeTaskRequest=reviewRequest.current;
+  const unchanged=(live:ReturnType<typeof bridge.getState>)=>{
+   const shown=obj(live.view);
+   return !document.hidden&&doc===bridge.getDocumentEpoch()&&navigationWindow.current===navigation&&
+    shown.resumeRevision===resume&&live.state.requestedTaskRevision===nativeTaskRequest&&
+    (shown.taskId===null||shown.taskId===id)&&ordinaryMessageWorkChat(live,conversationId,draftEpoch)&&!live.state.chatAttachmentPickerOpen;
+  };
+  if(!unchanged(initial)||!sameChatReportLink(originalChatReportLinks(initial,conversationId).get(reportMessageId),link))return;
+  const searchRequest=++searchOpenRequest.current,request=beforeTaskRequest+1;
+  const currentSource=()=>{
+   const live=bridge.getState();
+   return searchOpenRequest.current===searchRequest&&unchanged(live)&&
+    sameChatReportLink(originalChatReportLinks(live,conversationId).get(reportMessageId),link);
+  };
+  const returnTo:ChatWorkReturn={document:doc,conversation:conversationId,message:reportMessageId,revision,trigger,
+   replyRun:link.writer,top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,
+   reportReply:{link,draftEpoch,resume,nativeTaskRequest}};
+  homeReport.current=null;homeWorkReturn.current=null;taskReading.current.delete(`${id}:homeReport`);
+  stopFollowing();rememberChatPosition();
+  const present=async()=>{
+   const visit=acknowledgedWorkVisit.current,ownsWork=()=>reviewRequest.current===request&&openedTaskId.current===id;
+   const current=()=>ownsWork()&&currentSource()&&!!visit&&acknowledgedWorkVisit.current===visit&&visit.taskId===id&&
+    visit.request===request&&visit.documentEpoch===doc&&visit.resumeRevision===resume;
+   const exactWork=()=>{
+    const live=bridge.getState(),rows=asArray<Task>(live.state.tasks).filter(row=>row.id===id);
+    return obj(live.view).taskId===id&&rows.length===1&&sameHomeReport(completedDirectoryReport(rows[0],true),target)&&
+     ownerWorkPresentation(rows[0])?.deliveryId===link.deliveryId;
+   };
+   if(!current())return;
+   setTaskOpening(true);
+   try{
+    if(!await awaitPickerProjection(current,()=>exactWork()?true:undefined)||!current()||!exactWork())return;
+    const original=await verifyHomeReport(target);
+    const pinned={...original,deliveryId:link.deliveryId};
+    if(current()&&exactWork()&&original.pin.expectedReportRevision===revision&&currentHomeReport(pinned))homeReport.current=pinned;
+   }catch{/* Keep Back to this reply. Never substitute another report. */}
+   finally{if(ownsWork())setTaskOpening(false);}
+  };
+  openTask(id,'homeReport',false,undefined,'',target,currentSource,undefined,()=>{
+   if(unchanged(bridge.getState())&&searchOpenRequest.current===searchRequest)
+    setLocalStatus('暂未核对到这条汇报的原工作，没有打开其他成果。');
+  },()=>{void present();},{beforeTaskRequest,navigation,returnTo});
+ };
  const openHostWorkFromChat=async(message:Message,trigger:HTMLButtonElement)=>{
   const task=message.hostGoalTaskId,source=message.id,revision=message.sourceRevision;
   const article=trigger.closest<HTMLElement>('article[data-message-id]'),scroller=scroll.current;
@@ -7118,6 +7266,9 @@ export default function App(){
  },[deliveredFileVisit]);
  const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onDeliveredFiles={currentConversation&&intent==='chat'&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?showDeliveredFiles:undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
  const latestSavedMessage=messages.at(-1),latestSavedWork=savedReplyDetails.at(-1);
+ const chatReports=useMemo(()=>route==='chat'&&intent==='chat'&&ready&&
+  ordinaryMessageWorkChat(snapshot,conversation,draftEpoch)&&['tasks.open','tasks.close','ownerWork.report.read'].every(can)?
+  originalChatReportLinks(snapshot,conversation):new Map<string,ChatReportLink>(),[route,intent,ready,snapshot,conversation,draftEpoch,can]);
  const messageWork=(()=>{
   const anchored=new Map<string,OwnerWorkRequestLink<Task>>();
   if(!ready||route!=='chat'||intent!=='chat'||!can('tasks.open')||!can('tasks.close')||
@@ -7144,7 +7295,10 @@ export default function App(){
  const readingChatOpening=chatOpening&&state.loadingFirstConversationMessages===true;
  const chatPage=<main className={`pw-chat-workspace${chatOpening&&!readingChatOpening?' pw-chat-empty':''}`}>
   <div ref={scroll} tabIndex={-1} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
-   {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<Button variant="ghost" size="small" leadingIcon={IconHistory} onClick={event=>void openChatHistory(event.currentTarget)}>浏览对话记录</Button>}
+   {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<div className="pw-action-row">
+    <Button ref={chatHistoryBrowse} variant="ghost" size="small" leadingIcon={IconHistory} onClick={event=>void openChatHistory(event.currentTarget,'browse')}>浏览对话记录</Button>
+    {intent==='chat'&&state.detachedHistoryResumeAvailable===true&&<Button variant="ghost" size="small" onClick={event=>void openChatHistory(event.currentTarget,'resume')}>继续上次浏览</Button>}
+   </div>}
    {!ready||readingChatOpening?<div className="pw-start" role={readingChatOpening?'status':undefined}><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>{readingChatOpening?'正在读取当前对话':'正在恢复当前工作'}</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:chatOpening?<ConversationOpening setup={!composerModelName&&!displayGate?modelSetupAction:undefined}
     editing={editingChat} pending={pendingHere} onDraft={stageExample}/>:null}
    {ready&&replyRows.length>0&&<div ref={chatMessageList} className="pw-message-stream">{replyRows.map(row=>{
@@ -7168,6 +7322,7 @@ export default function App(){
     const traceTaskId=phoneResult?.taskId||taskResult?.taskId||m.taskId;
     const linkedFeedback=linked&&!linkedProjectAction(linked)&&!m.hostGoalTaskId&&!phoneResult&&!taskResult&&!representedPhoneTaskIds.has(linked.id)&&linked.id!==chatAttention?.id&&!conversationWorkIds.has(linked.id)&&messageTaskAnchors.get(linked.id)===index?linked:null;
     const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
+    const chatReport=m.id?chatReports.get(m.id):undefined;
     const returnedWork=phoneResult||(taskResult?.noticeKind?null:taskResult);
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
@@ -7250,6 +7405,9 @@ export default function App(){
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||delivery||m.role==='assistant'||canQuote||savedAttachmentChoices.length>0||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
+       {chatReport&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
+        disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
+        onClick={event=>openReportFromChat(chatReport,event.currentTarget)}>查看原工作成果</Button>}
        {returnedWork&&(!phoneResult||!m.id||m.sourceRevision!==1)&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder} disabled={inlineResult&&!!openingChatResultId}
         onClick={event=>{
           if(inlineResult&&taskResult&&m.id)void openChatResult(m.id,taskResult,event.currentTarget);
@@ -7293,7 +7451,7 @@ export default function App(){
            returnFocus:article?.querySelector<HTMLButtonElement>('button[aria-label="消息操作与来源"]')};
           if(originalReminderChatCurrent(visit)){setMessageMenu(null);setOriginalReminderChat(visit)}
         }}>查看这条回复的提醒</Button>}
-        {m.role==='assistant'&&completedFeedback&&linkedFeedback&&can('tasks.open')&&<Button variant="ghost" aria-label={`查看任务详情：${linkedFeedback.goal}`} onClick={()=>{setMessageMenu(null);openTask(linkedFeedback.id)}}>查看任务详情</Button>}
+        {m.role==='assistant'&&!chatReport&&completedFeedback&&linkedFeedback&&can('tasks.open')&&<Button variant="ghost" aria-label={`查看任务详情：${linkedFeedback.goal}`} onClick={()=>{setMessageMenu(null);openTask(linkedFeedback.id)}}>查看任务详情</Button>}
         {!!m.content&&<Button variant="ghost" leadingIcon={IconBook} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);openReading({kind:'message',title:m.role==='assistant'?'阅读回复':'阅读消息',text:m.content,quoteSource:canQuote&&!state.chatSubmitting&&draftKey&&m.id&&Number.isSafeInteger(m.sourceRevision)&&Number(m.sourceRevision)>0?{target:{messageId:m.id,sourceRevision:Number(m.sourceRevision),key:draftKey,epoch:draftEpoch},documentEpoch:bridge.getDocumentEpoch()}:undefined,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>阅读与选字</Button>}
         {m.role!=='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)}/>}
         {m.role==='user'&&row.lastOfRole&&m.id&&m.quoteAvailable&&Number(m.sourceRevision)>0&&!!m.content.trim()&&can('phone.draft.fromMessage')&&can('phone.prepare')&&<Button variant="ghost" leadingIcon={IconMonitor} disabled={phoneReviewPending||!!state.chatSubmitting||!!state.chatBusy||!!state.phoneSubmitting||isListening||phoneStart?.status==='unknown'} onClick={()=>stageMessageForPhone(m,['changed','unverified'].includes(phoneDraft.sourceState))}>{['changed','unverified'].includes(phoneDraft.sourceState)?'保留手机草稿，关联这条原话':'准备手机任务'}</Button>}
@@ -7803,7 +7961,12 @@ export default function App(){
     onConversation={scopedSearchOriginal?undefined:()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={(event,messageOriginalWindow)=>{
    restoreTaskFileFocus(event);
-   if(messageOriginalWindow)restoreChatMessageOriginal(event,messageOriginalWindow);
+   if(messageOriginalWindow){
+    const exact=obj(bridge.getState().state.originalReplyAttachmentPicker),origin=messageOriginalReturn.current;
+    if(exact.sourceWindow===messageOriginalWindow&&origin?.windowId===messageOriginalWindow&&origin.kind==='replyDocument'){
+     replyPickerReturn.current={windowId:messageOriginalWindow};event.preventDefault();
+    }else restoreChatMessageOriginal(event,messageOriginalWindow);
+   }
    if(quotedDraftArrival&&bridge.getState().state.attachmentWorkspace?.open!==true){
     quotedDraftArrival.restoreFocus(event);setQuotedDraftArrival(previous=>previous===quotedDraftArrival?undefined:previous);
    }
@@ -7815,7 +7978,7 @@ export default function App(){
    onAdoptFileNote={fileResultTopic&&fileNoteTarget(snapshot,fileResultTopic)?(note,frame,close)=>adoptFileNote(fileResultTopic,note,frame,close):undefined}
    onVerifyReportFileWork={taskLayer==='homeReport'&&can('ownerWork.report.read')?verifyReportFileWork:undefined}
    standaloneDocumentAttachmentDraft={standaloneDocumentAttachmentDraft}
-   onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} readWorkTextVisit={readWorkTextVisit}/>
+   onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} replyAttachmentDraft={existingPrivateAttachmentDraft} readWorkTextVisit={readWorkTextVisit}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(compactChatQuestion){backFromTask();return}if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport())closeTask(true)}else setTaskOpen(true)}} direction={compactChatQuestion?'bottom':'right'} handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} data-chat-question={compactChatQuestion||undefined} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
@@ -7868,7 +8031,7 @@ export default function App(){
    if(target){event.preventDefault();if(target.tagName==='H2')target.tabIndex=-1;target.focus({preventScroll:true})}
   }} onEscapeKeyDown={event=>{if(taskMenuOpen){event.preventDefault();setTaskMenuOpen(false)}}}><header className="pw-drawer-header pw-task-header">
    <IconButton icon={IconArrowLeft} aria-label={compactChatQuestion?'返回原对话':taskLayer==='scope'?'返回工作目标':taskReconciliationOrigin.current?.openedId===taskId?'返回原工作':
-     ownerRequestOrigin||chatWorkReturn.current?.hostTaskId===taskId?'返回原话':taskLayer==='homeReport'&&route==='butler'?'返回管家':'返回原页面'} onClick={backFromTask}/>
+     ownerRequestOrigin||chatWorkReturn.current?.hostTaskId===taskId?'返回原话':chatReportVisit?'返回原汇报':taskLayer==='homeReport'&&route==='butler'?'返回管家':'返回原页面'} onClick={backFromTask}/>
    <div className="pw-task-header-copy"><Drawer.Title>{drawerCurrentTask?.goal||(compactChatQuestion?'原工作的问题':'工作')}</Drawer.Title><Drawer.Description id="pw-task-description" className="pw-sr-only">{compactChatQuestion?'回答这件工作的原问题，不会发送对话草稿。':taskLayer==='homeReport'?'原工作交付的只读汇报。返回后保留原页面和输入。':'这件工作的目标、成果、执行过程与当前决定。返回后保留原页面和输入。'}</Drawer.Description>
     {selectedPhoneSurface&&<p className="pw-field-hint pw-phone-surface-detail">{phoneSurfaceLabel(selectedPhoneSurface)}</p>}
     {selectedLocalPhone&&!selectedPhoneSurface&&selectedTask&&!terminal(selectedTask)&&<p className="pw-field-hint">原记录计划使用{(selectedTask.executionMode||selectedTask.raw?.executionMode)==='main_screen'?'主屏':'独立屏'}，当前未核实这次执行的手机连接。</p>}
@@ -7892,7 +8055,7 @@ export default function App(){
   </header>{drawerCurrentTask&&drawerStop&&drawerStopCopy&&<div className="pw-task-control-feedback">
    <p role="status"><strong>{drawerStopCopy.title}</strong>{drawerStop.phase!=='checking'&&<>。{drawerStopCopy.note}</>}</p>
    {drawerStop.phase!=='checking'&&taskLayer!=='process'&&can('history.read')&&<Button variant="ghost" size="small" onClick={seeDrawerStopProcess}>到过程核对</Button>}
-  </div>}{drawerCurrentTask&&selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={recheckSelectedWork}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&drawerCurrentTask&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{!compactChatQuestion&&taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{compactChatQuestion?questionBody:selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{ownerRequestUnavailable?(ownerRequestAnotherRound?'这件工作已进入另一轮。可返回原话，或到「我的工作」查看当前进展。':'暂未核对到这条消息打开的原轮次。可返回原话。'):taskLayer==='homeReport'?(route==='tasks'?'暂未核对到这份原汇报，请返回「我的工作」重试。':'原工作或汇报已变化，请返回管家首页核对。'):taskId&&taskErrors[taskId]||(expectedProjectRun?'原运行暂不可读取，没有用其他轮次代替。':'原任务暂不可读取，请重新读取原历史窗口。')}</p>{taskLayer!=='homeReport'&&!ownerRequestUnavailable&&!noticeBinding&&!expectedProjectRun&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{!compactChatQuestion&&selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
+  </div>}{drawerCurrentTask&&selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={recheckSelectedWork}>核对原任务状态</Button>}</div>}{taskLayer!=='homeReport'&&drawerCurrentTask&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{!compactChatQuestion&&taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{compactChatQuestion?questionBody:selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:<section className="pw-empty-small"><p className="pw-error" role="alert">{ownerRequestUnavailable?(ownerRequestAnotherRound?'这件工作已进入另一轮。可返回原话，或到「我的工作」查看当前进展。':'暂未核对到这条消息打开的原轮次。可返回原话。'):chatReportVisit?'暂未核对到这条汇报的原工作，可返回原对话。':taskLayer==='homeReport'?(route==='tasks'?'暂未核对到这份原汇报，请返回「我的工作」重试。':'原工作或汇报已变化，请返回管家首页核对。'):taskId&&taskErrors[taskId]||(expectedProjectRun?'原运行暂不可读取，没有用其他轮次代替。':'原任务暂不可读取，请重新读取原历史窗口。')}</p>{taskLayer!=='homeReport'&&!ownerRequestUnavailable&&!noticeBinding&&!expectedProjectRun&&!chatReportVisit&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{!compactChatQuestion&&selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
   <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={finishPhoneReviewExit}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PhoneScopeReview key={phoneExit.generation} shown={phoneDisplay} live={phoneReview} pending={phoneReviewPending} unknown={phoneStart?.status==='unknown'} onClose={()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onStart={can('phone.start')?startReviewedPhone:undefined} onCheck={can('phone.prepare')?preparePhone:undefined} onSettings={can('phone.review.settings')?openPhoneReviewSettings:undefined} onPlace={canVisitReviewedPlace?visitReviewedPhonePlace:undefined} error={phoneReviewError?.handle===phoneReview?.reviewHandle?phoneReviewError?.message:undefined}/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.draftRequestId?blankReceiptActions(phoneStart):phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
   <SettingsDialog isOpen={newProjectOpen||newFileOpen} title={createKind==='project'?'新项目':'新文件'} onClose={closeCreate} closeLabel="关闭创建" className="pw-create-dialog">
    <form className="pw-create-form" onSubmit={event=>{event.preventDefault();if(!createBusy&&(createKind==='project'?projectName:newPath).trim())createObject()}}>
@@ -7905,15 +8068,23 @@ export default function App(){
    profiles={savedHostProfiles(state.features?.remote?.profiles)} select={p=>void selectSavedHost(p)}
    configure={can('connections.enter')&&can('remote.saveProfile')?()=>void configureSavedHost():undefined}
    close={closeSavedHost} busy={savedHostBusy} error={savedHostError}/>
- <ComposerAttachmentPicker open={!!state.chatAttachmentPickerOpen&&!state.attachmentWorkspace?.open&&(filePickerVisible||reopenedPickerVisible||!fileAttachmentPicker&&!fileAttachmentPickerLaunch.current)}
-   inventory={fileAttachmentPicker?(focusedInventoryReady?obj(state.moduleResults)['attachments.list']:undefined):reopenedPickerVisible?(reopenedInventoryReady?obj(state.moduleResults)['attachments.list']:undefined):state.features?.attachments}
-   original={fileAttachmentPicker?{...fileAttachmentPicker.file,draftLabel:fileAttachmentPicker.draft.label}:undefined}
+ <ComposerAttachmentPicker open={!!state.chatAttachmentPickerOpen&&!state.attachmentWorkspace?.open&&(hasReplyAttachmentPicker?replyAttachmentVisible:filePickerVisible||reopenedPickerVisible||!fileAttachmentPicker&&!fileAttachmentPickerLaunch.current)}
+   inventory={hasReplyAttachmentPicker?(replyAttachmentVisible?{attachments:[replyAttachmentRow]}:undefined):
+    fileAttachmentPicker?(focusedInventoryReady?obj(state.moduleResults)['attachments.list']:undefined):reopenedPickerVisible?(reopenedInventoryReady?obj(state.moduleResults)['attachments.list']:undefined):state.features?.attachments}
+   original={hasReplyAttachmentPicker?(replyAttachmentTarget?{...replyAttachmentTarget,name:String(replyAttachmentRow.name||'原答复文档'),
+    draftLabel:currentConversation?.title||'原话题草稿'}:undefined):fileAttachmentPicker?{...fileAttachmentPicker.file,draftLabel:fileAttachmentPicker.draft.label}:undefined}
    selected={state.selectedChatAttachments} inputModel={state.chatAttachmentModel} importing={!!state.attachmentImporting}
    pagingDenied={isChatSurface&&intent==='chat'&&!taskOpen&&state.chatAttachmentPagingDenied===true}
    onReviewPagingRule={!reopenedPickerVisible&&can('attachments.closePicker')&&can('permissions.snapshot')&&can('permissions.save')?openAttachmentPagingRule:undefined}
-   openingPagingRule={!!attachmentPermission} onClose={closeChatAttachmentPicker}
-   onImport={!fileAttachmentPicker&&draftKey&&can('attachments.pick')?()=>run('attachments.pick',{key:draftKey,epoch:draftEpoch}):undefined}
-   onToggle={draftKey&&can('attachments.toggle')?(fileAttachmentPicker?toggleFocusedFileAttachment:(id,sha256)=>{
+   openingPagingRule={!!attachmentPermission} onClose={closeChatAttachmentPicker} onCloseAutoFocus={event=>{
+    const origin=replyPickerReturn.current;
+    if(origin&&bridge.getState().state.chatAttachmentPickerOpen===false){
+     replyPickerReturn.current=null;restoreChatMessageOriginal(event,origin.windowId);
+    }
+   }}
+   onImport={!hasReplyAttachmentPicker&&!fileAttachmentPicker&&draftKey&&can('attachments.pick')?()=>run('attachments.pick',{key:draftKey,epoch:draftEpoch}):undefined}
+   onToggle={draftKey&&can('attachments.toggle')?(hasReplyAttachmentPicker?
+    (replyAttachmentVisible&&replyAttachmentPicker.checking===false?toggleReplyAttachment:undefined):fileAttachmentPicker?toggleFocusedFileAttachment:(id,sha256)=>{
     if(reopenedAttachmentPicker&&!reopenedInventoryCurrent(reopenedAttachmentPicker))return;
     run('attachments.toggle',{id,sha256,key:draftKey,epoch:draftEpoch});
    }):undefined}/>

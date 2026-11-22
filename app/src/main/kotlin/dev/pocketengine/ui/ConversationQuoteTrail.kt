@@ -1,5 +1,6 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.features.assistant.OwnerDetachedHistoryPosition
 import dev.pocketengine.features.assistant.OwnerSourceReferences
 import org.json.JSONArray
 import org.json.JSONObject
@@ -51,6 +52,15 @@ internal class ConversationQuoteTrail private constructor(private val originals:
             input.selected.none { it.id == target && it.revision == revision && it.digest == source.digest && it.offset == offset && it.chars == chars }) return null
         return JSONObject().put("kind", "owner_native_original").put("generation", source.generation).put("conversationId", conversation)
             .put("recordId", target).put("recordVersion", revision).put("fingerprint", source.digest)
+    }
+
+    /** Existing native page metadata only. No raw locator or body is passed to Web. */
+    fun detachedPosition(conversation: String, message: String, revision: Long, offset: Int): OwnerDetachedHistoryPosition? {
+        val source = originals[message]?.takeIf { it.revision == revision } ?: return null
+        return runCatching {
+            OwnerDetachedHistoryPosition(conversation, source.generation, message, revision,
+                source.digest.removePrefix("sha256:"), offset, System.currentTimeMillis())
+        }.getOrNull()
     }
 
     fun ranges(messageId: String?): JSONArray? {

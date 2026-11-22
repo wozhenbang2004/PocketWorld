@@ -258,6 +258,8 @@ internal object PocketWebState {
             .put("error", page.error ?: JSONObject.NULL).put("notice", page.notice ?: JSONObject.NULL)
             .put("limited", page.limited).put("index", page.index).put("offset", page.offset).put("anchor", page.anchor)
             .put("originalReportMessageId",page.reportAnchor?.message ?: JSONObject.NULL)
+            .also { out -> if(page.detachedHistoryEpoch!=null)out.put("detachedHistory",true)
+                page.detachedHistoryResumeRevision?.let { out.put("detachedHistoryResumeRevision",it) } }
             .also { out -> page.searchAnchor?.let { search -> out.put("searchAnchor",JSONObject()
                 .put("requestId",search.request).put("messageId",search.message).put("revision",search.revision)) } }
             .also { result -> page.workRequestAnchor?.let { request ->

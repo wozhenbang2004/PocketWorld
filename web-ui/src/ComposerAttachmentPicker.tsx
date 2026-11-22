@@ -39,14 +39,14 @@ function fileUse(file: FileJson, model: FileJson): { reason?: string; hint?: str
 
 type Props = {
   open: boolean; inventory: unknown; selected: unknown; inputModel: unknown;
-  importing: boolean; onClose: () => void; onImport?: () => void;
+  importing: boolean; onClose: () => void; onCloseAutoFocus?: (event: Event) => void; onImport?: () => void;
   pagingDenied: boolean; onReviewPagingRule?: () => void; openingPagingRule?: boolean;
   onToggle?: (id: string, sha256: string, selected: boolean) => void;
   original?: {fileId:string;sha256:string;name:string;draftLabel:string};
 };
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
-export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onImport, onToggle, original }: Props) {
+export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onCloseAutoFocus, onImport, onToggle, original }: Props) {
   const catalog = fileObject(inventory), focused = !!original;
   const [query, setQuery] = useState('');
   useEffect(() => { if (!open || focused) setQuery(''); }, [open, focused]);
@@ -68,7 +68,7 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
   return <Drawer.Root open={open} onOpenChange={next => { if (!next) onClose(); }} shouldScaleBackground={false}>
     <Drawer.Portal>
       <Drawer.Overlay className="pw-overlay"/>
-      <Drawer.Content className="pw-drawer pw-attachment-drawer" aria-describedby="pw-attachment-description">
+      <Drawer.Content className="pw-drawer pw-attachment-drawer" aria-describedby="pw-attachment-description" onCloseAutoFocus={onCloseAutoFocus}>
         <div className="pw-drawer-handle"/>
         <header className="pw-drawer-header">
           <div>

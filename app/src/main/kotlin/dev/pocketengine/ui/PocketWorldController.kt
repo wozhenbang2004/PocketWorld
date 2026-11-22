@@ -22,6 +22,7 @@ import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.assistant.OwnerComposerStore
+import dev.pocketengine.features.assistant.OwnerDetachedHistoryPosition
 import dev.pocketengine.store.CloudWorkspaceJobs
 import dev.pocketengine.store.TaskStore
 import java.util.concurrent.Executors
@@ -1460,11 +1461,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private fun scheduleComposerSave() { composerSaving=true;main.removeCallbacks(composerSave);main.postDelayed(composerSave,250) }
     fun persistOwnerComposer() { ownerComposer?.let { persistComposer(it) } }
-    private fun persistComposer(model: OwnerComposerState, completed: ((Throwable?) -> Unit)? = null) {
+    /** Piggyback only on the Activity's existing lifecycle flush, never on each reader position. */
+    internal fun persistOwnerComposerAtReadingExit() {
+        ownerComposer?.let { model ->
+            val place=conversationReader?.let(::takeDetachedHistoryPosition)
+            persistComposer(model, detachedHistory=place)
+        }
+    }
+    private fun persistComposer(model: OwnerComposerState, detachedHistory: OwnerDetachedHistoryPosition? = null, completed: ((Throwable?) -> Unit)? = null) {
         main.removeCallbacks(composerSave)
         val version = model.revision()
         composerSaving = true
-        ownerComposerStore.save(model).whenComplete { _, error -> main.post {
+        ownerComposerStore.save(model,detachedHistory).whenComplete { _, error -> main.post {
             if (closed) return@post
             if (error == null && ownerComposer === model && model.revision() == version) composerSaving = false
             if (error != null && completed == null) state = state.copy(error = "草稿仍在本页，尚未保存；没有自动发送：" + composerFailure(error))
@@ -1786,7 +1794,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         catch(error:Exception){state=state.copy(error=message(error))}
     }
     fun setChatSendMode(mode:String,key:String,viewEpoch:Int) { if(composerDraft?.key==key&&chatViewEpoch==viewEpoch&&mode in setOf("queue","steer")) editComposerSelection(mode,state.selectedChatAttachments) }
-    fun openChatAttachmentPicker(): String? {
+    fun openChatAttachmentPicker(): String? = openChatAttachmentPicker(null)
+    internal fun openOriginalReplyAttachmentPicker(closeOriginal: () -> Boolean): String? = openChatAttachmentPicker(closeOriginal)
+    private fun openChatAttachmentPicker(closeOriginal: (() -> Boolean)?): String? {
         val draft=composerDraft ?: run{state=state.copy(error="请等待原私聊草稿读取完成");return null}
         if(!refreshCurrentConversationTurn())return null
         val model=try {
@@ -1796,6 +1806,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(draft.conversationId)
                 else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(draft.key))
         } catch(error:Exception) { state=state.copy(error=message(error));return null }
+        // The exact original reader remains mounted on failure or stale draft. Only a
+        // fully admitted same-source transition may open the single-row picker.
+        if(closeOriginal!=null&&!closeOriginal())return null
         attachmentComposerKey=draft.key;attachmentComposerEpoch=chatViewEpoch
         // Only a known saved prohibition for the next ordinary draft, never a verdict
         // about an active run's captured permissions or a grant to read this document.
@@ -1806,7 +1819,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }.getOrNull() else null
         state=state.copy(chatAttachmentPickerOpen=true,chatAttachmentModel=model)
-        return feature("attachments","list").also { attachmentPickerListRequest=it }
+        return (if(closeOriginal==null)feature("attachments","list") else UUID.randomUUID().toString())
+            .also { attachmentPickerListRequest=it }
+    }
+    internal fun verifyOriginalReplyAttachment(target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,
+        current:()->Boolean,done:(JSONObject?,String?)->Unit){
+        val control=dev.pocketengine.core.RunControl()
+        val unavailable="原答复文档或草稿已变化，未选择其他附件"
+        control.setAuthorityCheck { check(current()){unavailable} }
+        try{io.execute{
+            val row=runCatching { app.attachmentOutcomes.originalReplyAttachmentRow(target,control) }.getOrNull()
+            main.post { if(!closed) { if(row!=null&&current())done(row,null) else done(null,unavailable) } }
+        }}catch(_:java.util.concurrent.RejectedExecutionException){done(null,unavailable)}
     }
     private fun attachmentPagingDraftCurrent() =
         webPrivateOwnerVisible() && !hasChannelPhoneOrigin && !state.chatBusy && !state.chatSubmitting && state.chatActiveTurn == null &&
@@ -3585,6 +3609,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         private set
     @Volatile private var conversationReadSequence=0L
     private var openingOwnerWorkRequest: dev.pocketengine.core.RunControl? = null
+    private var openingDetachedHistory: dev.pocketengine.core.RunControl? = null
     internal val conversationReaderRevision get() = conversationReadSequence
     // The one-row request view is not a regular conversation reader authority.
     // Only the existing exact-window close action can consume that reader handle.
@@ -3718,12 +3743,56 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
-    fun openConversationReader(id:String) {
+    internal fun resumeDetachedHistory(conversation:String,epoch:Int,shown:()->Boolean,bodyCurrent:()->Boolean,
+                                       done:(JSONObject?,String?)->Unit) {
+        val place=ownerComposerStore.detachedHistoryPosition(conversation)?:error("没有已确认的原阅读位置，可以浏览最新记录")
+        val atRequest=conversationReadSequence
+        val source=conversationSourceRevision
+        val deadline=android.os.SystemClock.elapsedRealtime()+10_000
+        val control=dev.pocketengine.core.RunControl()
+        fun current()=shown()&&bodyCurrent()&&conversationReader==null&&conversationReadSequence==atRequest&&
+            conversationSourceRevision==source&&ownerComposerStore.detachedHistoryPosition(conversation)==place&&
+            android.os.SystemClock.elapsedRealtime()<deadline
+        check(openingDetachedHistory==null&&current()) { "请在当前原私聊浏览上次位置" }
+        openingDetachedHistory=control
+        try { io.execute {
+            val result=runCatching {
+                val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule
+                    ?: error("私人历史宿主尚未准备")
+                assistant.readOriginalDetachedHistory(conversation,place,control,Runnable {
+                    check(bodyCurrent()&&conversationReadSequence==atRequest&&place.fresh(System.currentTimeMillis())&&
+                        android.os.SystemClock.elapsedRealtime()<deadline) { "原私聊窗口已变化" }
+                })
+            }
+            main.post {
+                val same=openingDetachedHistory===control
+                if(same)openingDetachedHistory=null
+                val changed="原阅读位置已变化或不可核对；没有打开其他消息。可浏览最新记录。"
+                if(!same||!current()){done(null,changed);return@post}
+                result.fold({native->
+                    runCatching {
+                        val page=ConversationReadPage(Math.addExact(atRequest,1L),conversation,native.optString("title"),null,
+                            anchor=place.messageId(),offset=place.offsetPx(),detachedHistoryEpoch=epoch,
+                            detachedHistoryResumeRevision=place.recordVersion()).accept(native,false)
+                        require(page.initialized&&!page.limited&&page.messages.singleOrNull { it.id==place.messageId() }
+                            ?.sourceRevision==place.recordVersion()) { changed }
+                        conversationReadSequence=page.window
+                        conversationReader=page
+                        JSONObject().put("window",page.window).put("conversationId",conversation).put("resumed",true)
+                    }.fold({done(it,null)},{done(null,changed)})
+                },{done(null,changed)})
+            }
+        } } catch(failure:java.util.concurrent.RejectedExecutionException) {
+            if(openingDetachedHistory===control)openingDetachedHistory=null
+            done(null,"原阅读窗口已关闭，可重新打开最新记录")
+        }
+    }
+    fun openConversationReader(id:String,detachedEpoch:Int?=null) {
         if(id.isBlank()||id.length>240||!privateWorkspaceView())return
         // Reading the active conversation is independent of its live composer anchor.
         // Closing this overlay must not move the underlying chat or its draft.
         val saved=if(id==state.conversationId)null else runCatching{ownerComposer?.readingConversation(id)}.getOrNull()
-        conversationReader=ConversationReadPage(++conversationReadSequence,id,state.conversations.find{it.id==id}?.title.orEmpty(),saved?.key,index=saved?.scrollIndex?:0,offset=saved?.scrollOffset?:0,anchor=saved?.anchorMessage.orEmpty(),notice=if(saved==null)"本次阅读位置只在当前窗口保留；没有覆盖其他草稿。" else null)
+        conversationReader=ConversationReadPage(++conversationReadSequence,id,state.conversations.find{it.id==id}?.title.orEmpty(),saved?.key,index=saved?.scrollIndex?:0,offset=saved?.scrollOffset?:0,anchor=saved?.anchorMessage.orEmpty(),notice=if(saved==null&&detachedEpoch==null)"本次阅读位置只在当前窗口保留；没有覆盖其他草稿。" else null,detachedHistoryEpoch=detachedEpoch)
         persistOwnerComposer();readConversationWindow(false)
     }
     private fun readConversationWindow(older:Boolean) {
@@ -3758,12 +3827,56 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
-    fun refreshConversationReader(){if(conversationReader?.loading!=true)readConversationWindow(false)}
+    fun refreshConversationReader() {
+        val page=conversationReader?:return
+        if(page.loading)return
+        if(page.detachedHistoryResumeRevision!=null)conversationReader=page.copy(detachedHistoryResumeRevision=null)
+        readConversationWindow(false)
+    }
     fun loadEarlierConversationReader(){if(conversationReader?.loading!=true)readConversationWindow(true)}
     fun saveConversationReading(window:Long,index:Int,offset:Int) {
         val page=conversationReader?:return;if(page.window!=window||!canReadConversationWindow(page)||!page.initialized)return
-        val anchor=page.messages.getOrNull(index)?.id.orEmpty();conversationReader=page.copy(index=index,offset=offset,anchor=anchor)
+        val row=page.messages.getOrNull(index);val anchor=row?.id.orEmpty()
+        conversationReader=page.copy(index=index,offset=offset,anchor=anchor,
+            detachedHistoryResumeRevision=page.detachedHistoryResumeRevision?.takeIf { anchor==page.anchor&&row?.sourceRevision==it })
         if(page.readingKey!=null)runCatching{ownerComposer?.reading(page.readingKey,index,offset,anchor,page.messages.lastOrNull()?.id.orEmpty(),false);persistOwnerComposer()}
+    }
+    internal fun savedDetachedHistory(conversation:String):Boolean =
+        ownerComposer != null && ownerComposerStore.detachedHistoryPosition(conversation) != null
+
+    private fun ordinaryDetachedHistoryPage(page:ConversationReadPage):Boolean =
+        page.detachedHistoryEpoch==chatViewEpoch&&page.conversation==state.conversationId&&
+        composerDraft?.key=="conversation:${page.conversation}"&&composerDraft?.conversationId==page.conversation&&
+        page.reportAnchor==null&&page.workRequestAnchor==null&&page.searchAnchor==null&&page.readingKey==null&&
+        state.filePath==null&&webTaskViewId==null&&queuedInputsPage==null&&!state.chatAttachmentPickerOpen&&
+        !attachmentOutcomes.state.open&&!hasChannelPhoneOrigin&&privateWorkspaceView()&&
+        conversationReader?.window==page.window
+
+    internal fun rememberDetachedHistoryPosition(window:Long,index:Int,offset:Int,message:String,revision:Long):Boolean {
+        val page=conversationReader?:return false
+        if(page.window!=window||!ordinaryDetachedHistoryPage(page)||!page.initialized||page.loading||page.error!=null||page.limited||
+            offset !in 0..OwnerDetachedHistoryPosition.MAX_OFFSET)return false
+        val row=page.messages.getOrNull(index)?:return false
+        if(row.id!=message||row.sourceRevision!=revision||page.messages.count { it.id==message }!=1)return false
+        val place=page.quoteTrail.detachedPosition(page.conversation,message,revision,offset)?:return false
+        conversationReader=page.copy(detachedHistoryPosition=place)
+        return true
+    }
+
+    private fun takeDetachedHistoryPosition(page:ConversationReadPage):OwnerDetachedHistoryPosition? {
+        if(!ordinaryDetachedHistoryPage(page))return null
+        val place=page.detachedHistoryPosition?:return null
+        conversationReader=page.copy(detachedHistoryPosition=null)
+        return place
+    }
+
+    /** Close immediately; a no-input checkpoint can expose resume only after the existing writer confirms it. */
+    internal fun closeOrdinaryDetachedHistory(page:ConversationReadPage,changed:()->Unit) {
+        val place=takeDetachedHistoryPosition(page)
+        val model=ownerComposer
+        closeConversationReader()
+        if(place==null||model==null)return
+        ownerComposerStore.checkpointDetachedHistory(model,place).whenComplete { _,_ -> main.post { if(!closed)changed() } }
     }
     fun closeConversationReader(){conversationReader=null;++conversationReadSequence}
     fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||state.chatSubmitting)return;closeConversationReader();if(page.conversation!=state.conversationId)openConversation(page.conversation)}
