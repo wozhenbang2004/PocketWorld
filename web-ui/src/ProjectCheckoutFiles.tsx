@@ -2,7 +2,7 @@ import type { HostEditorFile } from './ProjectHostFileComparison';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
-import { IconSearch } from './icons';
+import { IconFolder, IconSearch } from './icons';
 import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectCheckoutTextSearch';
 import {ProjectCheckoutPathSearch} from './ProjectCheckoutPathSearch';
 import {checkoutDirectoryPage,ProjectCheckoutDirectory,type DirectoryFile,type DirectorySelection} from './ProjectCheckoutDirectory';
@@ -20,6 +20,7 @@ type EditorPosition = { start: number; end: number; scrollTop: number; scrollLef
 type SavedMarkdownFile = { fileHandle: string; path: string; sha256: string; content: string };
 type MarkdownVisit = Omit<SavedMarkdownFile,'content'> & { caret: EditorPosition; drawerScroll: number };
 type FileFind = { fileHandle: string; query: string; result?: { text: string; at: number; line: number; wrapped: boolean } };
+type FolderEditor = { fileHandle: string; resumable: boolean };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
 export type CheckoutSavedPosition = { projectId: string; checkoutId: string; path: string; savedHash: string; caret?: EditorPosition };
 export type CheckoutBuildEditorResume = Omit<CheckoutSavedPosition,'caret'> & { sourceDigest: string };
@@ -86,7 +87,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
   const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'directory'|'path'|'text'|'git'>('path');
-  const [directory,setDirectory]=useState<DirectorySelection|null>(null), directoryAnchor=useRef<HTMLDivElement>(null);
+  const [directory,setDirectory]=useState<DirectorySelection|null>(null);
+  const [folderEditor,setFolderEditor]=useState<FolderEditor|null>(null), folderEditorNow=useRef<FolderEditor|null>(null);
+  const folderHeading=useRef<HTMLHeadingElement>(null);
+  const holdFolderEditor=(position:FolderEditor|null)=>{folderEditorNow.current=position;setFolderEditor(position);};
   const [gitView,setGitView]=useState<CheckoutGitView|null>(null);
   const [savedEdit,setSavedEdit]=useState<SavedEdit|null>(null), [listingStale,setListingStale]=useState(false);
   const [searchVersion,setSearchVersion]=useState(0);
@@ -189,7 +193,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (body) for (const key of ['saveStatus', 'message', 'saveError', 'importStatus', 'importReceipt', 'importMessage', 'importError', 'projectListRefreshMessage','pythonReadRevision']) if (!(key in value)) delete next[key];
     if (!('sourceHit' in value)) delete next.sourceHit;
     if (!('formalFile' in value)) delete next.formalFile;
-    if (currentFile.current?.fileHandle!==value.fileHandle) setFileFind(null);
+    if (currentFile.current?.fileHandle!==value.fileHandle) {
+      setFileFind(null);
+      if(folderEditorNow.current)holdFolderEditor(null);
+    }
     currentFile.current = next; setFile(next);
     if (body && typeof value.text === 'string') {
       const retained = interfaceDrafts.get(keyFor(value.path));
@@ -205,11 +212,21 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
     if (entered.current || edits.current || document.hidden) return;
+    const heldEditor=['read','readFound','readTextHit'].includes(action)?folderEditorNow.current:null;
     const sequence = generation.current, token = {}; entered.current = token; setBusy(true); setError('');
     try {
       const value = await latest.current.run(command + action, { viewHandle, ...(action === 'open' || action === 'openSource' || action === 'openHostChange' ? { checkoutId } : { filesHandle: handle.current }), ...args });
       if (live(sequence) && entered.current === token) { accept?.(value); return value; }
-    } catch (failure) { if (live(sequence)) setError(failureText(failure)); }
+    } catch (failure) {
+      if(live(sequence)){
+        // The native file read can replace its single open editor before Web
+        // receives (and validates) the reply. Only a definite no-send keeps A.
+        const notSent=failure instanceof Error&&'code' in failure&&failure.code==='not_sent';
+        if(!notSent&&heldEditor?.resumable&&folderEditorNow.current===heldEditor&&entered.current===token)
+          holdFolderEditor({...heldEditor,resumable:false});
+        setError(failureText(failure));
+      }
+    }
     finally { if (entered.current === token) { entered.current = null; if (alive.current) setBusy(false); } }
   };
   const readDirectoryPage = (value: Data, path: string) => value.readOnly===true&&value.directoryPage?
@@ -369,7 +386,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const edit = (value: string) => {
     const original = currentFile.current;
-    if (!original || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || document.hidden) return;
+    if (!original || folderEditorNow.current || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || document.hidden) return;
     const key = keyFor(original.path);
     if (value.length > 262144 || new TextEncoder().encode(value).length > 262144) { setError('编辑上限为 256 KiB，已有文字保留。'); return; }
     if (!interfaceDrafts.has(key) && interfaceDrafts.size >= 32) { setError('有 32 份界面文字尚未确认缓存，请先处理已有草稿。'); return; }
@@ -471,7 +488,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       if (!next) latest.current.onClose();
       return;
     }
-    const area = fromSavedFile ? editorContainer.current?.querySelector('textarea') : null;
+    const area = fromSavedFile && folderEditorNow.current?.resumable!==false ? editorContainer.current?.querySelector('textarea') : null;
     const caret = area?.value===textareaText(recentSave.after) ? {
       start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop, scrollLeft: area.scrollLeft,
     } : undefined;
@@ -497,11 +514,49 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .catch(failure => { if (live(sequence)) setError(failureText(failure)); })
       .finally(() => { if (entered.current === token) { entered.current = null; if (alive.current) { setBusy(false); setCheckingSavedSource(false); } } });
   };
+  const browsingFolder=!!folderEditor && folderEditor.fileHandle===file?.fileHandle;
+  const activeFilePath=browsingFolder&&folderEditor?.resumable===false ? undefined : file?.path;
+  // A folder return belongs only to the ordinary editor and its actual selected
+  // directory. Leave uncertain/conflicting or unretained edits in the old flow.
+  const editorDirectory=!sourceMember&&!hostFile&&finder==='directory'&&directory&&file&&
+    typeof file.path==='string'&&file.path.slice(0,Math.max(0,file.path.lastIndexOf('/')))===directory.path&&
+    listing?.readOnly===true&&listing.projectId===projectId&&listing.checkoutId===checkoutId&&listing.filesHandle===handle.current&&
+    file.projectId===projectId&&file.checkoutId===checkoutId&&file.filesHandle===handle.current&&file.latest?.deleted===false&&
+    file.conflict===false&&file.saveUnknown===false&&orphan===null&&!blockedEdit.current&&!file.draftError&&
+    (file.dirty===false||file.dirty===true&&file.draftDurable===true)?directory:null;
+  const browseFromEditor = () => {
+    const sequence=generation.current;
+    if (!editorDirectory||!file||folderEditorNow.current||localFind||choice||activeMarkdown.current||
+        activeAdoption.current||pythonReviewNow.current||!live(sequence)||entered.current||edits.current||
+        currentFile.current!==file||currentText.current!==file.text||interfaceDrafts.has(keyFor(file.path))) return false;
+    holdFolderEditor({fileHandle:file.fileHandle,resumable:true});setTreeOpen(true);
+    // A verified Save retires the previous native directory generation. This
+    // explicit return uses the same existing refresh, never reuses those hits.
+    if(!editorDirectory.page)void readList();
+    return true;
+  };
+  const resumeFolderEditor = () => {
+    const sequence=generation.current, selected=folderEditorNow.current;
+    if(!selected?.resumable||!live(sequence)||entered.current||edits.current||currentFile.current?.fileHandle!==selected.fileHandle)return;
+    holdFolderEditor(null);setTreeOpen(false);
+    requestAnimationFrame(()=>{
+      if(live(sequence)&&!folderEditorNow.current&&currentFile.current?.fileHandle===selected.fileHandle){
+        editorHeading.current?.scrollIntoView({block:'nearest'});
+        editorHeading.current?.focus({preventScroll:true});
+      }
+    });
+  };
+  useLayoutEffect(() => {
+    if(browsingFolder&&live(generation.current)){
+      folderHeading.current?.scrollIntoView({block:'start'});
+      folderHeading.current?.focus({preventScroll:true});
+    }
+  },[browsingFolder]);
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
     if (activeMarkdown.current) closeMarkdown();
     else if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
-    else close();
+    else if(!browseFromEditor())close();
   };
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
@@ -519,12 +574,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
-    if (markdownVisit || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
+    if (browsingFolder || markdownVisit || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
     const timer = window.setTimeout(() => {
-      if (!activeMarkdown.current) void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false));
+      if (!folderEditorNow.current&&!activeMarkdown.current) void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false));
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [file, busy, editing, orphan, adoption, markdownVisit]);
+  }, [file, busy, editing, orphan, adoption, markdownVisit, browsingFolder]);
   useEffect(() => {
     setAdoptionExpired(false); if (!adoption) return; adoptionHeading.current?.focus();
     const remaining = Number(adoption.expiresAt) - Date.now();
@@ -536,6 +591,11 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (!submitted) return;
     if(createEmpty&&(!canCreateEmpty||submitted!==file||currentText.current!==''||
       !editorInput.current?.isConnected||editorInput.current.value!==''))return;
+    // Once the original Save is requested its native directory can retire even
+    // if the response is lost. Do not show an old page on the editor return.
+    if(!sourceMember&&!hostFile&&finder==='directory'&&directory?.page&&
+      !entered.current&&!edits.current&&live(generation.current))
+      setDirectory(previous=>previous===directory?{path:directory.path,page:null}:previous);
     void invoke('save', {fileHandle:submitted.fileHandle,revision:submitted.revision,editSequence:submitted.editSequence,
       ...(createEmpty?{createEmpty:true}:{})},value=>{
       if (value.fileHandle!==submitted.fileHandle || value.path!==submitted.path) throw new Error('不属于这次保存的文件回执，草稿仍保留。');
@@ -590,7 +650,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     </Button></div>;
   };
   return <SettingsDialog isOpen title={readingMarkdown ? 'Markdown 预览' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
-    onClose={() => activeMarkdown.current ? closeMarkdown() : close()} closeLabel={readingMarkdown?'返回编辑':backLabel}>
+    onClose={() => {if(activeMarkdown.current)closeMarkdown();else if(!browseFromEditor())close();}}
+    closeLabel={readingMarkdown?'返回编辑':editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
     {readingMarkdown && <section className="pw-checkout-files">
       <header><h3 ref={markdownHeading} tabIndex={-1} dir="auto">{readingMarkdown.path}</h3>
         <small>已核对保存版本 · <code>{readingMarkdown.sha256.slice(0,8)}</code> · 不加载图片，不打开链接</small></header>
@@ -608,8 +669,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         <Button variant="secondary" disabled={locked} onClick={()=>void readFile(resume.path,{position:resume})}>重新核对原保存版本</Button>
         <Button variant="ghost" disabled={locked} onClick={()=>void readFile(resume.path,{currentOnly:true})}>读取这一路径的当前内容</Button>
       </div>}
+      {browsingFolder&&<div className="pw-form-actions"><h3 ref={folderHeading} tabIndex={-1}>选择要编辑的文件</h3>
+        {folderEditor?.resumable ? <Button variant="ghost" disabled={locked} onClick={resumeFolderEditor}>继续编辑 <bdi>{file?.path.split('/').at(-1)}</bdi></Button> :
+          <p role="status">未核对刚才打开的文件。请从同一副本重新选择。</p>}
+      </div>}
       {sourceMember || hostFile ? !file && <div><p dir="auto">{(sourceMember || hostFile)!.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile((sourceMember || hostFile)!.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={listingStale?'完整清单待重新核对':`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
-        {recentSave && <div className="pw-checkout-file-list" aria-label="最近一次已核对的保存">
+        {recentSave && (!browsingFolder||recentSave.path!==file?.path) && <div className="pw-checkout-file-list" aria-label="最近一次已核对的保存">
           <Button variant="secondary" disabled={locked} onClick={()=>void readFile(recentSave.path,{saved:recentSave})}>
             <span dir="auto">{recentSave.path}</span><small>最近保存 · {recentSave.savedHash.slice(0,8)}</small>
           </Button>
@@ -630,8 +695,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           .filter(v=>v==='directory'&&directory||v==='path'||v==='text'&&canFindText||v==='git'&&listing.gitAvailable===true).map(v=><Button key={v}
           size="small" variant={finder===v?'secondary':'ghost'} aria-pressed={finder===v} disabled={locked} onClick={()=>{if(v!==finder){setFinding(false);setFinder(v)}}}>
           {v==='directory'?'目录':v==='path'?'文件名':v==='text'?'代码文字':'Git 变更'}</Button>)}</div>}
-        {finder==='directory'&&directory&&<div ref={directoryAnchor}><ProjectCheckoutDirectory selection={directory} busy={locked}
-          activePath={file?.path} visit={(path,start)=>void visitDirectory(path,start)} refresh={()=>void readList()}
+        {finder==='directory'&&directory&&<div><ProjectCheckoutDirectory selection={directory} busy={locked}
+          activePath={activeFilePath} visit={(path,start)=>void visitDirectory(path,start)} refresh={()=>void readList()}
           open={hit=>void openDirectoryFile(hit)} /></div>}
         {finder==='git'&&listing.gitAvailable===true&&<ProjectCheckoutGitChanges value={gitView} busy={locked}
           inspect={request=>void invoke('list',{gitRead:request},v=>setGitView(checkoutGitView(v,projectId,checkoutId,handle.current)))}
@@ -648,14 +713,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke} open={(searchHandle,hit)=>void openMatchedFile(searchHandle,hit)}/>}
         {finder!=='git'&&finder!=='directory'&&!finding&&<>        <div className="pw-form-actions"><Button variant="ghost" disabled={locked} onClick={() => void readList()}>重新读取文件列表</Button></div>
         {listingStale ? <p className="pw-field-hint" role="status">旧列表不再显示，可重读完整清单。{recentSave && ' 也可直接核对上方已保存的文件。'}</p> : <>
-        <div className="pw-checkout-file-list">{rows(listing.files).filter(row=>row!==priorSaveRow).map(row => <Button key={row.path} aria-current={file?.path === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
+        <div className="pw-checkout-file-list">{rows(listing.files).filter(row=>row!==priorSaveRow).map(row => <Button key={row.path} aria-current={activeFilePath === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
         {!rows(listing.files).length && <p>副本中还没有文件。可以在下方填写相对路径创建，或返回目标让 AI 开始。</p>}
         {listing.nextPath && <Button variant="secondary" disabled={locked} onClick={() => void readList(true)}>读取下一页文件</Button>}</>}</>}
         {finder!=='git'&&<><TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />
         <Button variant="secondary" disabled={locked || !newPath.trim()} onClick={() => void readFile(newPath.trim())}>打开或准备新文件草稿</Button></>}
       </AccordionItem></Accordion>}
-      {file && <section ref={editorContainer} className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {editState}</small>
+      {file && <div hidden={browsingFolder}><section ref={editorContainer} className="pw-checkout-editor"><header><h3 ref={editorHeading} tabIndex={-1}>{file.path}</h3><small>{file.baseHash === 'absent' ? '文件尚未存在' : '来自此副本的实际文件'} · {editState}</small>
         {reopenedVersion && <p className="pw-field-hint">已从同一副本重读保存版本 <code>{reopenedVersion.savedHash.slice(0,10)}</code>。{(file.dirty||orphan!==null)&&'编辑框仍保留未保存文字，不套用原光标位置。'}</p>}
+        {editorDirectory&&!localFind&&!choice&&!adoption&&!pythonRunReview&&<Button variant="ghost" size="small" leadingIcon={IconFolder} disabled={locked}
+          onClick={browseFromEditor}>返回所选目录</Button>}
       </header>
         {sourceMember && !reviewed ? <div>
           <p role="status">{file.latest.expectedHash === sourceMember.fileSha256 ? '刚读取的副本与任务当时保存的内容一致。' : '副本在交付后已改变。编辑的是当前副本，不会用旧包覆盖它。'}
@@ -717,9 +784,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' : '已保存，回到项目工作区'}
-          </Button>{finder==='directory'&&directory&&!treeOpen&&<Button variant="ghost" disabled={locked} onClick={()=>{
-            setTreeOpen(true);requestAnimationFrame(()=>directoryAnchor.current?.scrollIntoView({block:'start'}));
-          }}>返回所选目录</Button>}</> : !canReviewPython&&!pythonRunReview&&
+          </Button></> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
         </div>}
@@ -755,7 +820,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         {file.draftError && <p role="alert">{file.draftError}</p>}
         {(file.draftError || blockedEdit.current) && <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => { if (blockedEdit.current) edit(currentText.current); else void invoke('cache', { fileHandle: file.fileHandle, retry: true }, value => apply(value, false)); }}>重试保留草稿</Button></div>}
         </>}
-      </section>}
+      </section></div>}
     </>}
     <Button variant="secondary" disabled={busy || editing} onClick={() => close()}>{adoption || choice ? '返回文件' : backLabel}</Button>
   </div></div></SettingsDialog>;

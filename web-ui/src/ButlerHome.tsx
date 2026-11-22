@@ -41,6 +41,7 @@ export type ButlerHomeProps = {
   onOpen: (task: ButlerHomeTask, nativeAlreadyOpen?: boolean, report?:VerifiedHomeReport, stillOriginal?:()=>boolean, returnWorkFocus?:()=>boolean) => void;
   canReadReports?:boolean;
   onAllWork: (filter?: WorkCollectionFilter) => void;
+  onOpenSchedule?: (trigger: HTMLButtonElement) => void;
   onScrollTop?: (top: number) => void;
   initialScrollTop?: number;
 };
@@ -88,7 +89,7 @@ function partialFailureReport(task: ButlerHomeTask, view = workCollectionPresent
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onImportProject, stagingLocal=false, modelSetup, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -165,7 +166,9 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const visible=[...shownDecisions,...shownRunning,...shownResults,...shownChecking,...shownEnded];
   const revision = JSON.stringify([ready, canOpen, canReadReports, phoneAttention.map(item=>item.key), visible.map(({ task, status, detail, report }) => [task.id, status, detail, report?.reportMessageId])]);
   useCollectionMotion(workRoot, 'butler:owner:private', revision, { active: ready, layout: false, enter:!retained||restoredWork.current===retained });
-  const empty = ready && !work.length && !hasPreparations && !hasPhone && !moreWork && !homeNotice;
+  const hasWorkOverview = work.length > 0 || hasPhone || moreWork || !!homeNotice;
+  const scheduleEntry = ready ? onOpenSchedule : undefined;
+  const empty = ready && !hasWorkOverview && !hasPreparations;
 
   useLayoutEffect(() => {
     if (!ready || restored.current || !scroller.current) return;
@@ -322,10 +325,14 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
           {composer}
         </section>
         {!workFirst&&nextSteps}
-        {(!ready || work.length > 0 || hasPhone || moreWork || homeNotice) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
+        {(!ready || hasWorkOverview || scheduleEntry) && <section ref={workRoot} className="pw-butler-work" aria-labelledby={workHeading} aria-busy={!ready}
           onFocusCapture={event => { const node = event.target as HTMLElement, id = node.closest<HTMLElement>('[data-task-id]')?.dataset.taskId; focused.current = id ? { node, id } : null; }}
           onBlurCapture={event => { const node = event.target as HTMLElement; if (event.relatedTarget instanceof Node ? !event.currentTarget.contains(event.relatedTarget) : node.isConnected && !node.closest('[inert],[hidden]') && !node.matches(':disabled')) focused.current = null; }}>
-          <header className="pw-butler-work-heading"><h2 id={workHeading}>我的工作</h2>{ready && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('all')}>全部工作</Button>}</header>
+          <header className="pw-butler-work-heading"><h2 id={workHeading}>我的工作</h2>
+            {scheduleEntry && <Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight}
+              data-workspace-entry="home-schedule" disabled={!active} onClick={event=>scheduleEntry(event.currentTarget)}>提醒与目标</Button>}
+            {ready && hasWorkOverview && <Button ref={allWorkButton} variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('all')}>全部工作</Button>}
+          </header>
           {!ready ? <p className="pw-butler-reading" role="status"><ProgressCircle isIndeterminate size="sm" aria-label="正在恢复工作记录" /><span>正在恢复工作记录…</span></p> : <>
             {homeNotice&&<p className="pw-butler-work-note" role="status">{homeNotice}</p>}
             {decisionCount>0&&<section className="pw-butler-work-group pw-butler-work-inbox" aria-label="等你处理">
@@ -345,7 +352,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
               <ol id={returnedList} className="pw-butler-work-list">{shownResults.map(renderTask)}</ol>
               {results.length>2&&<Button variant="ghost" className="pw-butler-all-work" aria-expanded={resultsExpanded} aria-controls={returnedList} onClick={()=>{setWorkReturn(null);setAllResults(!resultsExpanded)}}>{resultsExpanded?'收起成果':`再看 ${results.length-shownResults.length} 项成果`}</Button>}
             </section>}
-            {(checking.length>0||shownEnded.length>0||moreWork)&&<div className="pw-butler-work-group pw-butler-work-secondary">
+            {(checking.length>0||shownEnded.length>0)&&<div className="pw-butler-work-group pw-butler-work-secondary">
               {checking.length>0&&<>
                 <Button variant="ghost" className="pw-butler-all-work pw-butler-check-toggle" aria-expanded={showChecking} aria-controls={checkingList} trailingIcon={IconChevronDown} onClick={()=>{setWorkReturn(null);setCheckingExpanded(!showChecking)}}>暂停或待核对 · {checking.length}</Button>
                 <div id={checkingList} hidden={!showChecking}>
@@ -354,7 +361,6 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
                 </div>
               </>}
               {shownEnded.length>0&&<ol className="pw-butler-work-list" aria-label="最近结束的其他工作">{shownEnded.map(renderTask)}</ol>}
-              {moreWork&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight} onClick={()=>onAllWork('all')}>到目录查找更早的工作</Button>}
             </div>}
             {!!work.length && !canOpen && <p className="pw-butler-work-note" role="status">当前暂时无法打开原任务记录。</p>}
           </>}

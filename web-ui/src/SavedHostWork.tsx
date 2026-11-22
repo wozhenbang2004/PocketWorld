@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {Button,SettingsDialog} from './forms-library';
 import {bridge} from './bridge';
-import {hostWorkspaceAnchor} from './CloudWorkspaceChoice';
+import {cloudChoice,hostWorkspaceAnchor,type SavedCloudWorkspace} from './CloudWorkspaceChoice';
 import {IconChevronRight,IconFolder,IconHistory,IconServer} from './icons';
 import {usePocketSnapshot} from './usePocketSnapshot';
 import {originalSeenHostEnd} from './original-seen-host-end';
@@ -11,7 +11,7 @@ import './connection-workspace.css';
 type Data=Record<string,any>;
 type Profile={id:string;name?:string;bindingHash:string;serviceBase:string;hasToken:true};
 type Target=NonNullable<CloudGoal['savedTarget']>;
-type Workspace={id:string;label:string;bindingHash:string};
+type Workspace={id:string;label:string;bindingHash:string;workspaceAnchor:string};
 type Review={workspace:Workspace;operationId:string;reviewHandle:string;prompt:string};
 type Submission={operationId:string;waiting:boolean};
 type OriginalWork={id:string;label:string;detail:string;unfinished:boolean;updatedAt:number};
@@ -34,6 +34,12 @@ const unambiguousHosts=(profiles:Profile[])=>{
 };
 export const currentSavedHostProfile=(value:unknown,target:Pick<Target,'profileId'|'profileBinding'>)=>unambiguousHosts(savedHostProfiles(value))
   .find(p=>p.id===target.profileId&&p.bindingHash===target.profileBinding);
+function nativeWorkspaceChoice(current=bridge.getState()){
+  const value=current.state.features?.remote?.cloudWorkspace;
+  return value?.choiceUnreadable===true?null:cloudChoice(value);
+}
+// The guided first task may fill an untouched local slot, never replace or restore an old choice.
+const unusedWorkspaceChoice=(value:ReturnType<typeof cloudChoice>)=>value?.revision===0&&!value.target;
 
 function HostRow({title,detail,icon:Icon,onOpen,disabled}:{
   title:string;detail:string;icon:typeof IconServer;onOpen:()=>void;disabled?:boolean;
@@ -104,9 +110,15 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
   const choice={profileId:target.profileId,bindingHash:target.profileBinding};
   const [catalog,setCatalog]=useState<Workspace[]|null>(null),[review,setReview]=useState<Review|null>(null);
   const [submission,setSubmission]=useState<Submission|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const [remembered,setRemembered]=useState<{operationId:string;saved:boolean}|null>(null);
   const gate=useRef(0),live=useRef(true),pending=useRef(false),selectedProfile=useRef(profile);
+  const reviewOperation=useRef<string|null>(null),rememberAttempt=useRef<string|null>(null);
   const retired=useRef(false),[windowRetired,setWindowRetired]=useState(false);
   selectedProfile.current=profile;
+  const showReview=(next:Review|null)=>{reviewOperation.current=next?.operationId??null;setReview(next);};
+  const sameBookmark=(saved:SavedCloudWorkspace|undefined,workspace:Workspace)=>saved?.profileId===choice.profileId&&
+    saved.profileBinding===choice.bindingHash&&saved.environmentId===workspace.id&&saved.workspaceAnchor===workspace.workspaceAnchor&&saved.worker===worker;
+  const hasBookmarkRoute=supported('remote.rememberWorkspace')&&supported('remote.workspaceJobs')&&supported('remote.openWorkspaceJob');
   const nativeHost=(current=bridge.getState())=>currentSavedHostProfile(current.state.features?.remote?.profiles,target);
   const sourceCurrent=(current=bridge.getState())=>bridge.getDocumentEpoch()===target.source.document&&
     Number((current.view as Data|undefined)?.resumeRevision||0)===target.resumeRevision&&current.state.conversationId===target.source.conversation&&
@@ -124,7 +136,7 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
     live.current=true;
     let scope=stateKey();
     const invalidate=()=>{
-      gate.current++;pending.current=false;setBusy(false);setReview(null);setCatalog(null);
+      gate.current++;pending.current=false;setBusy(false);showReview(null);setCatalog(null);
       setSubmission(old=>old?.waiting?{...old,waiting:false}:old);
     };
     // The native host retires this saved origin when Android backgrounds it.
@@ -142,7 +154,7 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
   },[]);
   const dismiss=()=>{
     const checked=review;
-    setReview(null);
+    showReview(null);
     if(checked&&nativeWindow()&&supported('remote.dismissSavedHostReview'))
       void run('remote.dismissSavedHostReview',{reviewHandle:checked.reviewHandle}).catch(()=>{});
   };
@@ -167,8 +179,9 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
     const workspaces:Workspace[]=[];
     for(const e of uniqueRows(actual.environments)){
       const workers=rows(e.workers).filter(w=>w.id===worker);
-      if(id(e.id)&&sha(e.bindingHash)&&hostWorkspaceAnchor(e)&&workers.length===1&&workers[0].available!==false)
-        workspaces.push({id:e.id,bindingHash:e.bindingHash,label:label(e.workspace,e.id)});
+      const workspaceAnchor=hostWorkspaceAnchor(e);
+      if(id(e.id)&&sha(e.bindingHash)&&workspaceAnchor&&workers.length===1&&workers[0].available!==false)
+        workspaces.push({id:e.id,bindingHash:e.bindingHash,workspaceAnchor,label:label(e.workspace,e.id)});
     }
     setCatalog(workspaces);
   });
@@ -185,11 +198,27 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
       captured.environmentId!==exact.id||captured.environmentBinding!==exact.bindingHash||captured.readOnly!==true||
       captured.worker!==worker||typeof captured.prompt!=='string'||typeof captured.reviewHandle!=='string'||!operation(captured.operationId))
       throw new Error('未取得原话与所选目录的同一次审阅，不发送。');
-    setReview({workspace:exact,prompt:captured.prompt,reviewHandle:captured.reviewHandle,operationId:captured.operationId});
+    showReview({workspace:exact,prompt:captured.prompt,reviewHandle:captured.reviewHandle,operationId:captured.operationId});
+  });
+  const remember=()=>perform(async current=>{
+    const checked=review;
+    if(!checked||submission||reviewOperation.current!==checked.operationId||rememberAttempt.current===checked.operationId||
+       !catalog?.includes(checked.workspace)||!hasBookmarkRoute||!unusedWorkspaceChoice(nativeWorkspaceChoice()))return;
+    rememberAttempt.current=checked.operationId;
+    const place=checked.workspace;
+    let saved=false;
+    try{
+      // Already observed by the same native catalog. The local compare-and-set does not contact the host or confirm the task.
+      const actual=await run('remote.rememberWorkspace',{profileId:choice.profileId,_profileBinding:choice.bindingHash,expectedRevision:0,
+        environmentId:place.id,environmentBinding:place.bindingHash,workspaceAnchor:place.workspaceAnchor,worker});
+      const next=cloudChoice(actual);
+      saved=next?.revision===1&&next.ownerDeclaredByos===false&&sameBookmark(next.target,place);
+    }catch{/* An unknown reply never confirms the bookmark or triggers a retry. */}
+    if(current()&&reviewOperation.current===checked.operationId)setRemembered({operationId:checked.operationId,saved});
   });
   const confirm=()=>perform(async current=>{
     if(!review||submission)return;
-    const checked=review;setReview(null);setSubmission({operationId:checked.operationId,waiting:true});
+    const checked=review;showReview(null);setSubmission({operationId:checked.operationId,waiting:true});
     try{await run('remote.confirmTask',{reviewHandle:checked.reviewHandle});}
     catch{/* Missing acknowledgement does not mean it is safe to send again. */}
     finally{if(current())setSubmission({operationId:checked.operationId,waiting:false});}
@@ -199,6 +228,10 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
   const held=windowRetired||!sourceCurrent(snapshot)||!profile;
   const canPrepare=nativeWindow();
   const canReview=supported('remote.probeWorker')&&supported('remote.reviewTask')&&supported('remote.confirmTask');
+  const savedChoice=nativeWorkspaceChoice(snapshot),firstChoice=unusedWorkspaceChoice(savedChoice);
+  const rememberReply=review&&remembered?.operationId===review.operationId?remembered:null;
+  const showBookmark=hasBookmarkRoute&&!!review&&(sameBookmark(savedChoice?.target,review.workspace)||firstChoice&&rememberReply?.saved===true);
+  const showRemember=hasBookmarkRoute&&!!review&&firstChoice&&!rememberReply&&!showBookmark;
   return <section className="pw-connection-workspace" aria-label="所选主机的原话交办">
     <header className="pw-connection-detail-heading"><div><h2>{label(profile?.name,'原选择的主机')}</h2>{profile&&<p className="pw-connection-address"><bdi>{profile.serviceBase}</bdi></p>}</div></header>
     {submission?<p role="status">{submission.waiting?'正在核对这次交办的回执。':shown?'这次交办已在手机登记。可返回原话打开原工作。':'暂未核对到这次交办的确切记录。回原话查看，不要重复提交。'}</p>:
@@ -225,7 +258,13 @@ export function SavedHostWork({origin,target,profiles,run,supported,registerTran
         工作区：<bdi>{review?.workspace.label}</bdi>{review&&review.workspace.label!==review.workspace.id&&<>（<bdi>{review.workspace.id}</bdi>）</>}</p>
       <pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{review?.prompt}</pre>
       <p>使用主机已有的 Codex 只读执行器（5 分钟）。不附其他对话、当前草稿或附件。</p>
-      <Button disabled={busy||!supported('remote.confirmTask')} onClick={confirm}>确认只发这一次</Button>
+      <div className="pw-form-actions">
+        <Button disabled={busy||!supported('remote.confirmTask')} onClick={confirm}>确认只发这一次</Button>
+        {showRemember&&<Button variant="secondary" disabled={busy||rememberAttempt.current===review?.operationId} onClick={remember}>记住这个主机工作区</Button>}
+      </div>
+      {showRemember&&<p className="pw-field-hint">只记在手机，方便下次从这台主机查看本机保存的原任务。不联系主机，也不发送原话。</p>}
+      {showBookmark?<p role="status" className="pw-field-hint">手机已记住这个工作区，可从这台主机查看本机保存的原任务。不代表主机在线。</p>:
+        rememberReply?.saved===false?<p role="status" className="pw-field-hint">手机尚未核实是否记住工作区。这一步没有发送原话。</p>:null}
     </SettingsDialog>
   </section>;
 }
