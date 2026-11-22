@@ -9,7 +9,9 @@ import './work-search.css';
 
 export type WorkSearchKind = 'all' | 'conversation' | 'work' | 'artifact' | 'project';
 export type WorkSearchItem = { kind: Exclude<WorkSearchKind, 'all'>; id: string; title: string; excerpt?: string; updatedAt?: number; status?: string; conversationId?: string; projectId?: string; taskId?: string; artifactId?: string; sha256?: string; recordId?: string; ownerLocator?: Record<string, unknown>; readRange?: { offset?: number; chars?: number } };
-export type WorkSearchMemory = { query?: string; kind?: WorkSearchKind; selectedId?: string; scrollTop?: number; pages?: number };
+export type WorkSearchConversation = { conversationId: string; composerEpoch: number };
+export type WorkSearchMemory = { query?: string; kind?: WorkSearchKind; selectedId?: string; scrollTop?: number; pages?: number;
+  conversationPage?: { query: string; from: string; reply: SearchReply } };
 type SearchReply = { items: WorkSearchItem[]; nextCursor?: string; notices: string[] };
 const kinds = { conversation: '对话', work: '工作', artifact: '成果', project: '项目' };
 const scopeHints = { all: '查找保存的工作、对话内容、成果和项目', conversation: '查找对话标题与保存的原文', work: '查找工作目标与摘要', artifact: '查找文件名与文件信息', project: '查找已保存的项目名称' };
@@ -30,47 +32,68 @@ function passagePreview(excerpt: string, query: string) {
 }
 const hitDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-function readReply(value: unknown, kind: WorkSearchKind, query: string, cursor: string, prior: readonly string[]): SearchReply {
+function readReply(value: unknown, kind: WorkSearchKind, query: string, cursor: string, prior: readonly string[], conversation?: WorkSearchConversation): SearchReply {
   const data = record(value);
   if (data.kind !== kind || data.query !== query || data.executionAuthorized !== false || !Array.isArray(data.items) || data.items.length > 40 || data.items.some((item: any) =>
     !item || !Object.hasOwn(kinds, item.kind) || kind !== 'all' && item.kind !== kind || typeof item.id !== 'string' || !item.id || typeof item.title !== 'string'))
     throw new Error('搜索结果的范围已变化，请重新搜索。');
+  if (conversation && (data.coverage !== 'current_conversation_native_originals' || data.modelCalled !== false ||
+    !matchesWorkSearchConversation(data.conversationScope, conversation) ||
+    data.items.some((item: WorkSearchItem) => item.conversationId !== conversation.conversationId ||
+      !item.recordId || !item.ownerLocator || item.ownerLocator.kind !== 'owner_native_original' ||
+      item.ownerLocator.conversationId !== conversation.conversationId || item.ownerLocator.recordId !== item.recordId ||
+      !Number.isSafeInteger(item.ownerLocator.recordVersion) || Number(item.ownerLocator.recordVersion) < 1 ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(item.ownerLocator.fingerprint || '')))))
+    throw new Error('没有核对到此对话的本机原文，未显示其他记录。');
   if (typeof data.nextCursor !== 'string' || data.nextCursor.length > 16000 || data.nextCursor && (data.nextCursor === cursor || prior.includes(data.nextCursor)))
     throw new Error('搜索位置没有继续前进，请重新搜索。');
   return { items: data.items, nextCursor: data.nextCursor, notices: Array.isArray(data.notices) ? data.notices.filter((notice: unknown) => typeof notice === 'string') : [] };
 }
+export function matchesWorkSearchConversation(value: unknown, expected: WorkSearchConversation): boolean {
+  const scope = record(value);
+  return scope.conversationId === expected.conversationId && scope.composerEpoch === expected.composerEpoch;
+}
 
 /** The retained Affect/BeUI search surface reads only the selected native stores.
  * Query, category and return position are presentation memory, never authority. */
-export function WorkSearch({ supported, identity, memory, onOpen, onClose, labelStatus }: {
+export function WorkSearch({ supported, identity, memory, onOpen, onClose, labelStatus, conversation, onFindConversation, onFindAll }: {
   supported: boolean; identity: string; memory: WorkSearchMemory; onOpen: (item: WorkSearchItem, stillCurrent: () => boolean) => void | Promise<void>;
   onClose: () => void; labelStatus: (status: string) => string;
+  conversation?: WorkSearchConversation; onFindConversation?: () => void; onFindAll?: () => void;
 }) {
   const present = useIsPresent(), reduce = useReducedMotion();
-  const [query, setQuery] = useState(memory.query || ''), [kind, setKind] = useState<WorkSearchKind>(memory.kind || 'all');
+  const [query, setQuery] = useState(memory.query || ''), [kind, setKind] = useState<WorkSearchKind>(conversation ? 'conversation' : memory.kind || 'all');
   const [reply, setReply] = useState<SearchReply | null>(null), [replyScope, setReplyScope] = useState('');
   const [loading, setLoading] = useState(false), [opening, setOpening] = useState(false), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
   const [openFailure, setOpenFailure] = useState<{ scope: string; itemKey: string; message: string } | null>(null);
   const root = useRef<HTMLDivElement>(null), request = useRef(0), alive = useRef(false), restored = useRef(false), pending = useRef(false);
   const pages = useRef(0), cursors = useRef<string[]>([]), returnPosition = useRef(memory.scrollTop || 0);
+  const explicitlyTyped = useRef(false);
   const current = useRef({ query, kind, identity }); current.current = { query, kind, identity };
   const scope = JSON.stringify([query, kind, identity]);
   const openingRef = useRef(false), openingRequest = useRef(0);
   const active = useRef(present); active.current = present;
   const read = useCallback(async (cursor = '') => {
-    if (!active.current || !supported || pending.current) return;
+    if (!active.current || !supported || pending.current || conversation && !current.current.query.trim()) return;
     const owner = ++request.current, expected = { ...current.current }, epoch = bridge.getDocumentEpoch();
     const expectedScope = JSON.stringify([expected.query, expected.kind, expected.identity]);
     pending.current = true; setLoading(true); setError('');
     const accepts = () => active.current && alive.current && owner === request.current && expected.query === current.current.query &&
       expected.kind === current.current.kind && expected.identity === current.current.identity && epoch === bridge.getDocumentEpoch() && !document.hidden;
     try {
-      const count = cursor ? 1 : Math.max(1, memory.pages || 1);
+      const count = cursor || conversation ? 1 : Math.max(1, memory.pages || 1);
       let nextCursor = cursor;
       for (let page = 0; page < count; page++) {
-        const append = !!nextCursor;
-        const next = readReply(await bridge.command('work.search', { query: expected.query.trim(), kind: expected.kind, limit: 30, ...(nextCursor ? { cursor: nextCursor } : {}) }), expected.kind, expected.query.trim(), nextCursor, cursors.current);
+        const append = !!nextCursor && !conversation;
+        const next = readReply(await bridge.command('work.search', { query: expected.query.trim(), kind: expected.kind, limit: 30,
+          ...(nextCursor ? { cursor: nextCursor } : {}), ...(conversation ? { conversationScope: conversation } : {}) }),
+          expected.kind, expected.query.trim(), nextCursor, cursors.current, conversation);
         if (!accepts()) return;
+        if (conversation) {
+          // This visit keeps only the one displayed snippet page, never full originals or an unbounded history.
+          memory.conversationPage = { query: expected.query, from: nextCursor, reply: next };
+          if (nextCursor) { restored.current = false; returnPosition.current = 0; memory.scrollTop = 0; memory.selectedId = undefined; }
+        }
         pages.current = append ? pages.current + 1 : 1; memory.pages = pages.current;
         cursors.current = append ? [...cursors.current, nextCursor] : [nextCursor];
         setReply(previous => append && previous ? { ...next,
@@ -82,40 +105,48 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
       }
     } catch (failure) { if (accepts()) setError(failure instanceof Error ? failure.message : '搜索暂不可用，请重试。'); }
     finally { if (owner === request.current) { pending.current = false; if (alive.current) setLoading(false); } }
-  }, [supported, memory]);
+  }, [supported, memory, conversation]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; request.current++; openingRequest.current++; pending.current = false; }; }, []);
   useEffect(() => {
     request.current++; pending.current = false; pages.current = 0; cursors.current = []; restored.current = false;
     openingRequest.current++; openingRef.current = false; setOpening(false); setOpenFailure(null);
-    returnPosition.current = memory.scrollTop || 0; setReply(null); setError(''); setLoading(supported);
+    returnPosition.current = memory.scrollTop || 0; setReply(null); setError('');
+    if (conversation) {
+      const retained = memory.conversationPage;
+      if (supported && attempt === 0 && !explicitlyTyped.current && retained?.query === query) {
+        cursors.current = [retained.from]; setReply(retained.reply); setReplyScope(scope); setLoading(false); return;
+      }
+      if (!supported || !query.trim() || (!explicitlyTyped.current && attempt === 0)) { setLoading(false); return; }
+    }
+    setLoading(supported);
     const timer = window.setTimeout(() => { void read(); }, query.trim() ? 220 : 0);
     return () => window.clearTimeout(timer);
-  }, [query, kind, identity, attempt, supported, read]);
+  }, [query, kind, identity, attempt, supported, read, conversation, memory, scope]);
   useEffect(() => {
     const visibility = () => {
       if (document.hidden) { request.current++; openingRequest.current++; openingRef.current = false; pending.current = false; setOpening(false); setOpenFailure(null); setLoading(false); setReply(null); }
-      else setAttempt(value => value + 1);
+      else if (!conversation) setAttempt(value => value + 1);
     };
     document.addEventListener('visibilitychange', visibility);
     return () => document.removeEventListener('visibilitychange', visibility);
-  }, []);
+  }, [conversation]);
   const wasExiting = useRef(false);
   useEffect(() => {
     if (present) {
-      if (wasExiting.current) { wasExiting.current = false; setAttempt(value => value + 1); }
+      if (wasExiting.current) { wasExiting.current = false; if (!conversation) setAttempt(value => value + 1); }
       return;
     }
     wasExiting.current = true;
     request.current++; openingRequest.current++; pending.current = false; openingRef.current = false;
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && root.current?.contains(focused)) focused.blur();
-  }, [present]);
+  }, [present, conversation]);
   const focusSearch = () => {
     if (!active.current || document.hidden) return;
     // The panel has reached its readable width before the IME takes space.
     root.current?.querySelector<HTMLInputElement>('input[role="combobox"]')?.focus({ preventScroll: true });
   };
-  const visibleReply = replyScope === scope ? reply : null;
+  const visibleReply = replyScope === scope && (!conversation || supported) ? reply : null;
   useEffect(() => {
     if (!visibleReply || loading || restored.current) return;
     const frame = requestAnimationFrame(() => { const scroller = root.current?.querySelector('.afa-commandlist'); if (scroller) scroller.scrollTop = returnPosition.current; restored.current = true; });
@@ -128,7 +159,11 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     return () => { remember(); scroller?.removeEventListener('scroll', remember); };
   }, [memory]);
   const resetPosition = () => { request.current++; pending.current = false; memory.selectedId = undefined; memory.scrollTop = 0; memory.pages = 1; restored.current = false; };
-  const changeQuery = (value: string) => { if (openingRef.current) return; resetPosition(); memory.query = value; setQuery(value); };
+  const changeQuery = (value: string) => {
+    if (openingRef.current) return;
+    if (conversation) { explicitlyTyped.current = true; memory.conversationPage = undefined; }
+    resetPosition(); memory.query = value; setQuery(value);
+  };
   const changeKind = (value: WorkSearchKind) => { if (value === kind || openingRef.current) return; resetPosition(); memory.kind = value; setKind(value); };
   const openItem = useCallback((item: WorkSearchItem) => {
     if (openingRef.current) return;
@@ -157,7 +192,7 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   const failedSelection = openFailure?.scope === scope ? openFailure : null;
   const retryItem = failedSelection && visibleReply?.items.find(item => itemKey(item) === failedSelection.itemKey);
   const shown = visibleReply?.items.length || 0;
-  const footerSummary = shown
+  const footerSummary = conversation ? '仅查找此对话里已保存的本机消息。' : shown
     ? `已显示 ${shown} 条${query.trim() ? '匹配结果' : '记录'}`
     : scopeHints[kind];
   return <motion.div className="pw-work-search" ref={root} inert={!present} aria-hidden={!present || undefined}
@@ -167,13 +202,17 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     transition={reduce ? motionTransition.instant : present ? motionTransition.enter : motionTransition.exit}
     onAnimationComplete={() => { if (present) focusSearch(); }}>
 
-    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} commands={commands} query={query} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
+    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} commands={commands} query={query} queryLabel={conversation ? '查找此对话的本机原文' : undefined} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
       closeOnSelect={false} onClose={() => { openingRequest.current++; openingRef.current = false; onClose(); }} selectedId={memory.selectedId}
-      controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{filters.map(option => <Button key={option.id} variant="ghost" aria-pressed={kind === option.id} disabled={opening} onClick={() => changeKind(option.id)}>{option.label}</Button>)}</div>}
-      emptyMessage={visibleReply?.nextCursor ? '当前已读取范围内没有命中，可以继续查找更早的记录。' : visibleReply?.notices.length ? '已读取范围内没有命中；还有部分记录尚未读全，请查看下方说明。' : query.trim() ? `没有找到匹配的${scopeLabel(kind)}。试试目标中的关键词或文件名。` : `还没有可显示的${scopeLabel(kind)}记录。`}
-      status={!supported ? <p className="pw-search-status" role="status">当前版本尚未提供工作搜索。</p> : opening ? <p className="pw-search-status" role="status">正在打开原记录…</p> : failedSelection ? <div className="pw-search-status" role="alert"><p>{failedSelection.message}</p>{retryItem && <Button variant="secondary" disabled={loading} onClick={() => openItem(retryItem)}>重试打开原记录</Button>}</div> : error ? <div className="pw-search-status" role="alert"><p>{error}</p><Button variant="secondary" onClick={() => { if (visibleReply?.nextCursor) void read(visibleReply.nextCursor); else setAttempt(value => value + 1); }}>重新读取</Button></div> : loading ? <p className="pw-search-status" role="status">{visibleReply ? '正在读取更多结果…' : `正在搜索${scopeLabel(kind)}…`}</p> : undefined}
+      controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{conversation ?
+        <Button variant="ghost" disabled={opening} onClick={onFindAll}>返回全部记录搜索</Button> : <>
+        {onFindConversation && <Button variant="ghost" disabled={opening} onClick={onFindConversation}>查找此对话</Button>}
+        {filters.map(option => <Button key={option.id} variant="ghost" aria-pressed={kind === option.id} disabled={opening} onClick={() => changeKind(option.id)}>{option.label}</Button>)}
+      </>}</div>}
+      emptyMessage={visibleReply?.nextCursor ? '当前已读取范围内没有命中，可以继续查找更早的记录。' : visibleReply?.notices.length ? '已读取范围内没有命中；还有部分记录尚未读全，请查看下方说明。' : conversation ? query.trim() ? '此对话已读取的本机消息没有匹配。' : '输入要在此对话里找的文字。' : query.trim() ? `没有找到匹配的${scopeLabel(kind)}。试试目标中的关键词或文件名。` : `还没有可显示的${scopeLabel(kind)}记录。`}
+      status={!supported ? <p className="pw-search-status" role="status">{conversation ? '原对话已变化，未查找其他记录。' : '当前版本尚未提供工作搜索。'}</p> : opening ? <p className="pw-search-status" role="status">正在打开原记录…</p> : failedSelection ? <div className="pw-search-status" role="alert"><p>{failedSelection.message}</p>{retryItem && <Button variant="secondary" disabled={loading} onClick={() => openItem(retryItem)}>重试打开原记录</Button>}</div> : error ? <div className="pw-search-status" role="alert"><p>{error}</p><Button variant="secondary" onClick={() => { if (visibleReply?.nextCursor) void read(visibleReply.nextCursor); else setAttempt(value => value + 1); }}>重新读取</Button></div> : loading ? <p className="pw-search-status" role="status">{visibleReply ? '正在读取更多结果…' : conversation ? '正在查找此对话…' : `正在搜索${scopeLabel(kind)}…`}</p> : undefined}
       footer={<><p>{footerSummary}</p>
-        {visibleReply?.nextCursor && <Button variant="ghost" disabled={loading || opening} onClick={() => void read(visibleReply.nextCursor)}>{visibleReply.items.length ? '查看更多结果' : '继续查找'}</Button>}
+        {visibleReply?.nextCursor && <Button variant="ghost" disabled={loading || opening} onClick={() => void read(visibleReply.nextCursor)}>{conversation ? '查找更早的消息' : visibleReply.items.length ? '查看更多结果' : '继续查找'}</Button>}
         {visibleReply?.notices.map((notice, index) => <p className="pw-search-notice" key={index}>{notice}</p>)}</>} />
   </motion.div>;
 }

@@ -900,6 +900,11 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
     { title: '返回原目标', done: false, detail: display.taskOwned === true ? '有任务持有后台资源，查看可核对的原工作' : connection.taskOwned ? '此页未核实后台资源属于哪项工作' : '完成设置后返回，由你确认是否开始原目标' },
   ];
   const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
+  const firstWirelessAbout = state.backgroundSetupOpen === true && state.webWorkspaceTaskOpen !== true &&
+    state.phoneSubmitting !== true && connection.backend === 'wireless_adb' && connection.canPair &&
+    display.taskOwned === false && display.configured === false && display.helperConnected === false &&
+    adb.phase === 'idle' && adb.identityPresent === false && adb.helperAuthenticated === false &&
+    pairing.active === false && autoCapture.active === false && !requiresCheck && supported('settings.openSystem');
   const returnToDraft = connection.helperConnected && !requiresCheck && !locked ? onReturnConnectedPhoneDraft : undefined;
   const canUseExistingShizuku = !locked && !connection.displayBarrier && !connection.recoveryRequired && !requiresCheck;
   const reconnectSaved = async () => {
@@ -959,6 +964,14 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
        />}
        {!wirelessSaved && !shizukuAuthorized && <section className="pw-background-auto-pairing">
          <p className="pw-field-hint">首次独立屏授权：先允许系统界面读取，再打开无线调试的「使用配对码配对设备」。可以自动识别当前窗口，不需要抄写验证码。</p>
+         {firstWirelessAbout && <Accordion>
+           <AccordionItem id="first-wireless-developer-options" title="找不到开发者选项？">
+             <p>在系统「关于本机」找到「版本号」（也可能在「版本」或「软件信息」中），连续点七次，按系统提示手动启用开发者选项。返回这里后，再打开无线调试设置。</p>
+             <p>如果系统或管理员不允许，请保持未连接。这里只打开系统页面，不会启用开发者选项或配对。</p>
+             <CapabilityAction action="settings.openSystem" args={{ section: 'wirelessAboutDevice' }} supported={supported} run={run}
+               disabled={locked}>打开「关于本机」</CapabilityAction>
+           </AccordionItem>
+         </Accordion>}
          <div className="pw-form-actions">
            {autoCapture.active === true
              ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run}>停止识别</CapabilityAction>

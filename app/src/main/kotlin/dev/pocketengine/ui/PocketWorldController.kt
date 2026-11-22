@@ -126,6 +126,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal fun showTaskNoticeWarning(message: String) { state = state.copy(notice = message) }
     fun dismissOriginalTaskNotice() { originalTaskNotice = null }
+    private var originalReportNotice by mutableStateOf<JSONObject?>(null)
+    internal fun showAssistantTaskNotice(receipt: JSONObject) {
+        val original = receipt.optJSONObject("originalWorkReport")?.takeIf {
+            privateWorkspaceView() && receipt.opt("expired") == false && receipt.opt("anchor") == "result"
+        }
+        focusTask(original?.getString("taskId") ?: receipt.getString("taskId"), requestNavigation = true, reportNotice = original)
+    }
+    internal fun requestedOriginalReportNotice(): JSONObject? {
+        val current = originalReportNotice?.takeIf { it.optInt("requestRevision") == state.requestedTaskRevision && it.opt("taskId") == state.requestedTaskId }
+            ?: return null
+        // The marker still reserves this exact request if the private page was
+        // retired. It must not fall through to an unpinned generic Work open.
+        return if (privateWorkspaceView()) current else JSONObject().put("requestRevision", state.requestedTaskRevision)
+    }
     private val io = Executors.newSingleThreadExecutor()
     internal val projectWorkbench: ProjectWorkbenchSession by lazy {
         androidx.lifecycle.ViewModelProvider(activity, object : androidx.lifecycle.ViewModelProvider.Factory {
@@ -483,8 +497,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         private set
     private var voiceComposerKey: String? = null
     private val composerSave = Runnable { persistOwnerComposer() }
-    private var chatViewEpoch by mutableStateOf(0)
+    private var chatViewEpochState by mutableStateOf(0)
+    @Volatile private var chatSearchEpoch = 0
+    private var chatViewEpoch: Int
+        get() = chatViewEpochState
+        set(value) {
+            // This epoch changes on the main thread. Retire scoped reads before
+            // publishing the same existing Compose epoch, without its observer.
+            chatSearchEpoch = value
+            chatViewEpochState = value
+        }
     val composerViewEpoch: Int get() = chatViewEpoch
+    internal val composerViewEpochForScopedRead: Int get() = chatSearchEpoch
     internal fun webWindowTicket(): Pair<Triple<Long, Int, Long>, Long> {
         // Snapshot immutable identity even if a JSONObject was mutated in place.
         syncPhoneWindowIdentity(state)
@@ -4862,13 +4886,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun getTask(id: String) { native("getTask", JSONObject().put("taskId", id)) }
     fun focusTask(id: String) { focusTask(id, requestNavigation = true) }
 
-    internal fun focusTask(id: String, requestNavigation: Boolean) {
+    internal fun focusTask(id: String, requestNavigation: Boolean, reportNotice: JSONObject? = null) {
         closeConversationReader()
         getTask(id)
         // Web-owned routes load the task without emitting another external navigation request.
         if (requestNavigation) {
             ++phoneNoticeRead;originalPhoneNotification=null
-            state = state.copy(requestedTaskId = id, requestedTaskRevision = state.requestedTaskRevision + 1)
+            val revision = state.requestedTaskRevision + 1
+            originalReportNotice = reportNotice?.let { JSONObject(it.toString()).put("requestRevision", revision) }
+            state = state.copy(requestedTaskId = id, requestedTaskRevision = revision)
         }
     }
     internal fun prepareConnectionEntry() {

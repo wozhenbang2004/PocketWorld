@@ -373,7 +373,7 @@ class ComposeActivity : ComponentActivity() {
         }
         if (dev.pocketengine.features.assistant.notifications.ImmediateTaskNotifications.openRequestedTask(intent,
                 app.tasks::openOriginalTaskNotice, controller::showOriginalTaskNotice, controller::showTaskNoticeWarning)) return
-        if (dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications.openRequestedTask(app.tasks, intent, { current -> controller.focusTask(current.getString("taskId")) }, app::error)) return
+        if (dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications.openRequestedTask(app.tasks, intent, controller::showAssistantTaskNotice, app::error)) return
         if (dev.pocketengine.phone.PhoneNotificationControls.takeOriginalOpen(intent, { controller.readPhoneNotification(it) }, controller::showTaskNoticeWarning)) return
         intent?.getStringExtra("quickPanelTaskId")?.takeIf { it.isNotBlank() }?.let {
             intent.removeExtra("quickPanelTaskId"); controller.focusTask(it)

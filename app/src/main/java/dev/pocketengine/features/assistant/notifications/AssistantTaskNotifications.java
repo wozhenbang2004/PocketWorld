@@ -55,7 +55,7 @@ public final class AssistantTaskNotifications {
         try{
             String task=intent.getStringExtra("taskId"),run=intent.getStringExtra("noticeRun"),token=intent.getStringExtra("noticeToken");int epoch=intent.getIntExtra("noticeEpoch",-1);Uri uri=intent.getData();
             JSONObject identity=new JSONObject().put("taskId",task).put("runId",run).put("epoch",epoch).put("token",token);
-            if(uri==null||!uri.equals(openUri(identity)))throw new SecurityException("通知定位已变化");JSONObject current=tasks.openOwnerTaskNotice(task,run,epoch,token);focus.accept(current);if(current.getBoolean("expired"))notice.accept("这条通知的状态已变化，已打开当前任务记录；没有重跑或重复审批。");
+            if(uri==null||!uri.equals(openUri(identity)))throw new SecurityException("通知定位已变化");JSONObject current=tasks.openOwnerTaskNoticeFromTap(task,run,epoch,token);focus.accept(current);if(current.getBoolean("expired"))notice.accept("这条通知的状态已变化，已打开当前任务记录；没有重跑或重复审批。");
         }catch(Exception unavailable){notice.accept("这条通知的记录暂不可核对，请在任务列表查看已有结果。");}
         finally{intent.setAction(null);for(String key:new String[]{"taskId","noticeRun","noticeEpoch","noticeToken"})intent.removeExtra(key);}
         return true;

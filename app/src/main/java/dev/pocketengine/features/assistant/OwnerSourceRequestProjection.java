@@ -5,6 +5,7 @@ import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.memory.SourceRef;
 import dev.pocketengine.features.memory.TaskMemoryHistory;
 import dev.pocketengine.runtime.AgentRunner;
+import dev.pocketengine.store.TaskStore;
 import java.util.ArrayList;
 import java.util.List;
 import org.json.JSONArray;
@@ -56,6 +57,9 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
         current(original,pause);return refs;
     }
     @Override public JSONArray project(JSONArray supplied,ModelConfig config,RunControl control)throws Exception {
+        return project(supplied,config,control,null);
+    }
+    public JSONArray project(JSONArray supplied,ModelConfig config,RunControl control,TaskStore.OwnerSelectedTeamSource selectedTeam)throws Exception {
         if(control!=original||!control.hasHostRun())throw new SecurityException("原文引用只能进入原私人任务控制器");control.check();long pause=control.pauseRevision();
         JSONArray request=new JSONArray(supplied.toString());List<JSONObject> provided=new ArrayList<>();java.util.Map<String,JSONObject> carriers=new java.util.LinkedHashMap<>();java.util.Map<Integer,JSONArray> additions=new java.util.HashMap<>();java.util.Map<Integer,JSONObject> userParts=new java.util.HashMap<>();JSONArray assistantSources=new JSONArray();int chars=0;boolean hasRefs=false,hasNativeUsers=false;
         nativePreviews=null;java.util.Map<Integer,JSONObject> previewCarriers=new java.util.LinkedHashMap<>();java.util.Map<String,JSONObject> nativeInputCarriers=new java.util.LinkedHashMap<>();int previewChars=0,previewCount=0;java.util.Map<String,JSONObject> objectCarriers=new java.util.LinkedHashMap<>();
@@ -107,6 +111,8 @@ public final class OwnerSourceRequestProjection implements AgentRunner.RequestPr
                         objectCarriers.put(row.getString("ownerMessageId"),new JSONObject().put("role","user").put("ownerMessageId",row.getString("ownerMessageId")).put("ownerMessageRevision",row.get("ownerMessageRevision")).put("ownerObjectRefs",refs));
                         extra.put(text("主人明确关联的对象定位，仅用于理解本条输入所指的工作。它不是对象正文、当前状态证明、执行目标或审批。work的id、runId、epoch分别传入owner_work_get的taskId、runId、epoch；先核对同轮合同、实际纳入的主人输入及同轮冻结成果。若原工作已换轮或本轮没有交付，不用别轮成果或摘要顶替，再向主人说明；先读取原对象及后续变化，再按主人真实要求处理。不得把导航或关联视为启动、继续、修改或发布授权。"));
                         extra.put(text(OwnerObjectReferences.locations(refs).toString()));
+                        if(selectedTeam!=null&&selectedTeam.matches(control,inputConversation,row,refs))
+                            extra.put(text("这条原请求明确选了上面唯一的已保存编组。只有任务确实需要协作且本轮允许使用 teams_start，才用该 team 定位的 id 作为 teamId 提出协作；不要改用其他编组、临时分工或计划启动。若文字另指编组、无法核对是不是同一组或意图冲突，先问主人，不要猜。选择编组不是批准，不代表已经派发或取得成果。"));
                     }
                 }
                 additions.put(i,extra);

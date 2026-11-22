@@ -1,7 +1,9 @@
 package dev.pocketengine.ui.web
 
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -27,6 +29,7 @@ import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PhoneCapabilityState
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.accountConnectionsFailure
+import dev.pocketengine.ui.backgroundConnectionState
 import dev.pocketengine.ui.UiChatAttachment
 import dev.pocketengine.ui.UiTask
 import dev.pocketengine.ui.UiTaskResult
@@ -802,6 +805,32 @@ internal class PocketWebBridge(
                 fun ownsSavedBuildShelf()=section==null&&taskViewId==null&&controller.webPrivateOwnerVisible()&&
                     controller.state.projectId==args.opt("projectId")&&controller.state.filePath==null
                 if(action==PocketWebWorkSearch.SAVED_BUILD_WEB)require(ownsSavedBuildShelf()){ "请从该私人项目工作台查看已保存网页" }
+                val chatSearch = if (action in setOf("work.search", "work.search.read") && args.has("conversationScope")) {
+                    val scope = args.getJSONObject("conversationScope")
+                    require(scope.keys().asSequence().toSet() == setOf("conversationId", "composerEpoch"))
+                    val conversation = requiredString(scope, "conversationId")
+                    val epoch = requiredInt(scope, "composerEpoch")
+                    require(conversation.length <= 240 && epoch >= 0)
+                    val ownerDocument = requireNotNull(documentId)
+                    val ownerWindow = captureWindow()
+                    // The scan may wait on the original DB monitor. Recheck plain
+                    // presentation/navigation epochs there, without synchronizing the display.
+                    val foreground = controller.displayedPhoneWindowVersion()
+                    val reader = controller.conversationReaderRevision
+                    fun scanCurrent() = !closed && documentId == ownerDocument && commandFence.accepts(ownerWindow.bridge) &&
+                        taskViewId == null && controller.displayedPhoneWindowAlive(foreground) &&
+                        controller.composerViewEpochForScopedRead == epoch && controller.conversationReaderRevision == reader
+                    fun current() = scanCurrent() && acceptsWindow(ownerWindow) && section == null &&
+                        controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+                        !controller.hasChannelPhoneOrigin && !phoneComposer.intent && controller.state.filePath == null &&
+                        !controller.state.chatAttachmentPickerOpen && controller.queuedInputsPage == null &&
+                        !controller.attachmentOutcomes.state.open && controller.state.conversationId == conversation &&
+                        controller.composerViewEpoch == epoch && controller.composerDraft?.let {
+                            it.key == "conversation:$conversation" && it.conversationId == conversation
+                        } == true
+                    check(current()) { "请回到当前原私聊查找本机原文" }
+                    PocketWebWorkSearch.CurrentConversation(conversation, epoch, ::current, ::scanCurrent)
+                } else null
                 val conversationResult = if (action == "tasks.resultFiles") visibleChatTaskResult(args) else null
                 if (action in setOf("ownerWork.report.read", "tasks.projectPackages", TaskProjectPackageFiles.COMMAND, "tasks.resultFiles") && conversationResult == null) require(section == null && taskViewId == requiredString(args, "taskId") && controller.webPrivateOwnerVisible()) { "请在原工作详情中读取这份成果" }
                 val offerTask=if(action=="ownerWork.report.read"&&args.opt("independentFollowUp")==true) taskViewId else null
@@ -815,7 +844,7 @@ internal class PocketWebBridge(
                     if(offerTask!=null&&offerDocument!=null) { proof ->
                         if(canPresentOffer())offer=ReportDraftOffer(UUID.randomUUID().toString(),offerTask,offerDocument,offerWindow,proof)
                     } else null
-                workSearch.dispatch(action, args, conversationResult, receiveProof) { result, error ->
+                workSearch.dispatch(action, args, conversationResult, receiveProof, chatSearch) { result, error ->
                     if(offerTask!=null) {
                         if(!canPresentOffer())complete(id,null,"原汇报窗口已变化",retainValue=false)
                         else {
@@ -824,7 +853,12 @@ internal class PocketWebBridge(
                         }
                         return@dispatch
                     }
-                    if (conversationResult != null && runCatching { visibleChatTaskResult(args) }.getOrNull() != conversationResult)
+                    if (chatSearch != null) {
+                        val current = chatSearch.current()
+                        complete(id, if (current) result else null, if (current) error else "原私聊已变化，未返回查询内容",
+                            retainValue = false, replayHint = "请从当前原私聊重新查找")
+                    }
+                    else if (conversationResult != null && runCatching { visibleChatTaskResult(args) }.getOrNull() != conversationResult)
                         complete(id, null, "原对话消息已变化，请重新打开成果")
                     else if(action==PocketWebWorkSearch.SAVED_BUILD_WEB&&!ownsSavedBuildShelf())
                         complete(id,null,"原项目窗口已变化，没有返回旧清单",retainValue=false)
@@ -3044,6 +3078,39 @@ internal class PocketWebBridge(
             "settings.openSystem" -> when (requiredString(args, "section")) {
                 "accessibility" -> controller.openAccessibility(); "notifications" -> controller.openNotifications()
                 "wireless" -> controller.openWirelessSettings(); "background" -> controller.openBackgroundSetup()
+                "wirelessAboutDevice" -> {
+                    checkedPayload(args, setOf("section"))
+                    val shown = controller.state
+                    val display = shown.feature("display")
+                    val adb = display.optJSONObject("adb")
+                    val pairing = shown.feature("phone_setup").optJSONObject("pairing")
+                    val connection = backgroundConnectionState(display, shown.activeTaskId, shown.moduleBusy)
+                    val activity = controller.webPresentationActivity()
+                    check(!closed && documentId != null && section == null && taskViewId == null &&
+                        controller.webPrivateOwnerVisible() && !controller.hasChannelPhoneOrigin &&
+                        controller.conversationReader == null && !controller.attachmentOutcomes.state.open &&
+                        shown.filePath == null && shown.backgroundSetupOpen && !shown.phoneSubmitting &&
+                        Build.VERSION.SDK_INT >= 34 && activity.hasWindowFocus() &&
+                        connection.backend == "wireless_adb" && connection.canPair &&
+                        display.opt("supportedAndroid") == true && display.opt("taskOwned") == false &&
+                        display.opt("configured") == false && display.opt("helperConnected") == false &&
+                        adb?.let { it.opt("phase") == "idle" && it.opt("identityPresent") == false &&
+                            it.opt("helperAuthenticated") == false } == true &&
+                        pairing?.let { it.opt("active") == false && it.optJSONObject("autoCapture")?.opt("active") == false } == true) {
+                        "请返回尚未配对的本机无线准备页。"
+                    }
+                    // Open only Android's system handler. No setting read/write, wireless
+                    // setup flag, discovery, or task is started by an About Device visit.
+                    val about = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
+                    val unavailable = "系统未提供可打开的「关于本机」入口。可以从系统设置查找；若系统或管理员不允许，请保持未连接。"
+                    try {
+                        val target = activity.packageManager.resolveActivity(about,
+                            PackageManager.MATCH_DEFAULT_ONLY or PackageManager.MATCH_SYSTEM_ONLY)?.activityInfo ?: error(unavailable)
+                        activity.startActivity(about.setComponent(ComponentName(target.packageName, target.name)))
+                    } catch (_: ActivityNotFoundException) { error(unavailable) }
+                    catch (_: SecurityException) { error(unavailable) }
+                    return JSONObject().put("status", "settings_opened")
+                }
                 "accessibilityAppInfo" -> {
                     checkedPayload(args, setOf("section"))
                     val shown = controller.state

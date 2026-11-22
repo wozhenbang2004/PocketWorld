@@ -213,6 +213,7 @@ internal object PocketWebState {
             .put("moduleBusy", JSONArray(state.moduleBusy.toList())).put("moduleErrors", JSONObject(state.moduleErrors))
             .put("taskActionErrors", JSONObject(state.taskActionErrors)).put("backgroundSetupOpen", state.backgroundSetupOpen)
             .put("requestedTaskId", state.requestedTaskId ?: JSONObject.NULL).put("requestedTaskRevision", state.requestedTaskRevision)
+            .put("requestedOriginalReportNotice", publicValue(controller.requestedOriginalReportNotice()))
             .put("requestedConnectionSection", state.requestedConnectionSection ?: JSONObject.NULL)
             .put("requestedConnectionRevision", state.requestedConnectionRevision)
             .put("requestedCommitmentId", state.requestedCommitmentId ?: JSONObject.NULL)

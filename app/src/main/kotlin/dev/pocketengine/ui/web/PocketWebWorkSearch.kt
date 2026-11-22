@@ -32,21 +32,30 @@ internal class PocketWebWorkSearch(
     private val host get() = controller.nativeButlerHost()
     private val pending = mutableSetOf<RunControl>()
 
+    data class CurrentConversation(val id: String, val epoch: Int, val current: () -> Boolean, val scanCurrent: () -> Boolean) {
+        fun view() = JSONObject().put("conversationId", id).put("composerEpoch", epoch)
+    }
+
     fun clear() { pending.toList().forEach { it.cancel() }; pending.clear() }
 
     fun dispatch(action: String, args: JSONObject, conversationResult: UiTaskResult? = null,
-                 reportQuote: ((TaskStore.OwnerWorkReportQuote) -> Unit)? = null, done: (JSONObject?, String?) -> Unit) {
+                 reportQuote: ((TaskStore.OwnerWorkReportQuote) -> Unit)? = null,
+                 currentConversation: CurrentConversation? = null, done: (JSONObject?, String?) -> Unit) {
         try {
-            check(controller.webPrivateOwnerVisible()) { "请回到私人工作区查找自己的记录" }
+            check(controller.webPrivateOwnerVisible() && currentConversation?.current?.invoke() != false) { "请回到私人工作区查找自己的记录" }
             val window = captureWindow()
             val control = RunControl()
+            if (currentConversation != null) control.setAuthorityCheck {
+                check(currentConversation.scanCurrent()) { "原查找窗口已关闭" }
+            }
             pending.add(control)
             var proof: TaskStore.OwnerWorkReportQuote? = null
             try {
                 controller.runPluginCatalogWork(Runnable {
                     val result = runCatching {
                         control.check()
-                        check(acceptsWindow(window) && controller.webPrivateOwnerVisible()) { "原查找窗口已关闭" }
+                        check(acceptsWindow(window) && controller.webPrivateOwnerVisible() &&
+                            currentConversation?.current?.invoke() != false) { "原查找窗口已关闭" }
                         when (action) {
                             "composer.object.add" -> {
                                 fields(args,setOf("key","epoch","revision","reference"))
@@ -80,7 +89,7 @@ internal class PocketWebWorkSearch(
                             }
                             TaskProjectPackageFiles.COMMAND -> TaskProjectPackageFiles.read(host, args, control)
                             "tasks.resultFiles" -> resultFiles(args, conversationResult, control)
-                            "work.search" -> search(args, control)
+                            "work.search" -> search(args, control, currentConversation)
                             "work.tasks.list" -> {
                                 fields(args, setOf("query", "filter", "projectId", "cursor", "limit"))
                                 val query = args.opt("query") as? String ?: error("请输入工作查找范围")
@@ -119,13 +128,19 @@ internal class PocketWebWorkSearch(
                                     .put("taskPage", JSONObject().put("auditBodyIncluded", false).put("tasks", JSONArray().put(JSONObject().put("id", id))))
                             }
                             "work.search.read" -> {
-                                fields(args, setOf("ownerLocator", "offset", "maxChars"))
+                                fields(args, setOf("ownerLocator", "offset", "maxChars") +
+                                    (if (currentConversation != null) setOf("conversationScope") else emptySet()))
                                 val assistant = host.features.module("assistant") as? AssistantModule ?: error("私人原文尚未准备")
                                 val offset = integer(args, "offset", 0, 0, Int.MAX_VALUE)
                                 val maximum = integer(args, "maxChars", 6000, 64, 12000)
                                 require(offset >= 0 && maximum in 64..12000) { "原文读取范围无效" }
-                                assistant.readOwnerSearchHit(JSONObject().put("ownerLocator", args.getJSONObject("ownerLocator"))
-                                    .put("offset", offset).put("maxChars", maximum), control)
+                                val locator = args.getJSONObject("ownerLocator")
+                                if (currentConversation != null) require(locator.opt("kind") == "owner_native_original" &&
+                                    locator.opt("conversationId") == currentConversation.id) { "所选原文不属于此对话" }
+                                val scope = currentConversation?.view()
+                                val read = JSONObject().put("ownerLocator", locator).put("offset", offset).put("maxChars", maximum)
+                                    .putOpt("conversationScope", scope)
+                                assistant.readOwnerSearchHit(read, control).putOpt("conversationScope", scope)
                             }
                             "work.capabilities" -> {
                                 fields(args, setOf("purpose"))
@@ -141,7 +156,8 @@ internal class PocketWebWorkSearch(
                     }
                     main.post {
                         pending.remove(control)
-                        if (control.isCancelled || !acceptsWindow(window) || !controller.webPrivateOwnerVisible())
+                        if (control.isCancelled || !acceptsWindow(window) || !controller.webPrivateOwnerVisible() ||
+                            currentConversation?.current?.invoke() == false)
                             done(null, "原查找窗口已变化，请重新读取")
                         else result.fold({ value ->
                             try {
@@ -257,8 +273,9 @@ internal class PocketWebWorkSearch(
         return page
     }
 
-    private fun search(args: JSONObject, control: RunControl): JSONObject {
-        fields(args, setOf("query", "cursor", "limit", "kind"))
+    private fun search(args: JSONObject, control: RunControl, currentConversation: CurrentConversation?): JSONObject {
+        fields(args, setOf("query", "cursor", "limit", "kind") +
+            (if (currentConversation != null) setOf("conversationScope") else emptySet()))
         val query = args.opt("query") as? String ?: error("请输入查找文字")
         require(query.length <= 500 && '\u0000' !in query) { "查找文字请控制在 500 字以内" }
         val kind = if (args.has("kind")) args.opt("kind") as? String ?: error("查找对象无效") else "all"
@@ -266,6 +283,27 @@ internal class PocketWebWorkSearch(
         val normalized = normalize(query)
         val limit = integer(args, "limit", 24, 8, 40)
         require(limit in 8..40) { "查找每页数量无效" }
+        if (currentConversation != null) {
+            require(kind == "conversation" && normalized.isNotEmpty()) { "请输入要在此对话里找的文字" }
+            val cursor = if (args.has("cursor")) args.opt("cursor") as? String ?: error("查找位置无效") else ""
+            require(cursor.length <= 4000) { "此对话的查找位置已失效，请重新查找" }
+            val assistant = host.features.module("assistant") as? AssistantModule ?: error("私人原文尚未准备")
+            val options = JSONObject().put("query", query).put("cursor", cursor).put("limit", limit / 2).put("maxChars", 6000)
+                .put("conversationScope", currentConversation.view())
+            val page = assistant.searchOwnerOriginals(options, control)
+            val items = JSONArray()
+            page.getJSONArray("entries").objects().forEach { row ->
+                val locator = row.getJSONObject("ownerLocator")
+                check(row.opt("conversationId") == currentConversation.id && locator.opt("kind") == "owner_native_original" &&
+                    locator.opt("conversationId") == currentConversation.id) { "原文范围已变化" }
+                items.put(originalSearchItem(row))
+            }
+            val notices = JSONArray()
+            if (page.getJSONArray("gaps").length() > 0) notices.put("此对话的部分本机原文无法核对，未用其他内容代替。")
+            return JSONObject().put("items", items).put("nextCursor", page.getString("nextCursor")).put("notices", notices)
+                .put("kind", "conversation").put("query", query).put("conversationScope", currentConversation.view())
+                .put("executionAuthorized", false).put("modelCalled", false).put("coverage", "current_conversation_native_originals")
+        }
         val count = if (kind == "all") limit / 4 else limit
         val signature = digest(normalized + "\n" + kind)
         val cursor = args.optString("cursor")
@@ -326,13 +364,7 @@ internal class PocketWebWorkSearch(
             check(assistant != null) { "私人原文尚未准备" }
             val page = assistant.searchOwnerOriginals(JSONObject().put("query", query).put("cursor", position.optString("originals"))
                 .put("limit", count / 2).put("maxChars", 6000), control)
-            page.optJSONArray("entries").objects().forEach { row ->
-                val conversation = row.getString("conversationId")
-                items.put(JSONObject().put("kind", "conversation").put("id", conversation + ":" + row.getString("recordId"))
-                    .put("conversationId", conversation).put("title", "对话中的原文").put("excerpt", clip(row.optString("body"), 300))
-                    .put("updatedAt", row.optLong("at")).put("recordId", row.getString("recordId"))
-                    .put("ownerLocator", row.getJSONObject("ownerLocator")).put("readRange", row.getJSONObject("readRange")))
-            }
+            page.optJSONArray("entries").objects().forEach { row -> items.put(originalSearchItem(row)) }
             next("originals", page.optString("nextCursor"))
             if ((page.optJSONArray("gaps")?.length() ?: 0) > 0) notices.put("部分旧原文已删除或无法核对；没有用缓存内容代替。")
         }
@@ -357,6 +389,14 @@ internal class PocketWebWorkSearch(
             .put("kind", kind).put("query", query)
             .put("taskPage", taskPage).put("executionAuthorized", false).put("modelCalled", false)
             .put("coverage", "private_conversation_originals_task_summaries_file_metadata_and_project_names")
+    }
+
+    private fun originalSearchItem(row: JSONObject): JSONObject {
+        val conversation = row.getString("conversationId")
+        return JSONObject().put("kind", "conversation").put("id", conversation + ":" + row.getString("recordId"))
+            .put("conversationId", conversation).put("title", "对话中的原文").put("excerpt", clip(row.optString("body"), 300))
+            .put("updatedAt", row.optLong("at")).put("recordId", row.getString("recordId"))
+            .put("ownerLocator", row.getJSONObject("ownerLocator")).put("readRange", row.getJSONObject("readRange"))
     }
 
     private fun catalog(rows: List<JSONObject>, cursor: JSONObject?, query: String, limit: Int, title: String): Pair<List<JSONObject>, JSONObject?> {

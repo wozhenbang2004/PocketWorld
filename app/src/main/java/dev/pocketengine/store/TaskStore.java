@@ -5837,12 +5837,75 @@ public final class TaskStore {
     }
     /** Native Activity navigation only. Old notices cannot clear a replacement notice or grant continuation. */
     public synchronized JSONObject openOwnerTaskNotice(String id,String run,int epoch,String token)throws Exception{
+        return openOwnerTaskNotice(id,run,epoch,token,false);
+    }
+    public synchronized JSONObject openOwnerTaskNoticeFromTap(String id,String run,int epoch,String token)throws Exception{
+        return openOwnerTaskNotice(id,run,epoch,token,true);
+    }
+    private JSONObject openOwnerTaskNotice(String id,String run,int epoch,String token,boolean phoneTap)throws Exception{
         if(id==null||run==null||token==null||!id.matches("[a-fA-F0-9-]{36}")||!run.matches("[a-fA-F0-9-]{36}")||epoch<1||!token.matches("[a-f0-9]{64}"))throw new IllegalArgumentException("通知身份无效");
         JSONObject task=required(id);requirePrivateOwner(task);if(!"assistant".equals(task.optString("kind")))throw new SecurityException("通知不是原私人助手结果");
         JSONObject prior=task.optJSONObject("ownerNotification"),current=settledOwnerNotice(task);boolean exact=prior!=null&&token.equals(prior.optString("token"))&&run.equals(prior.optString("runId"))&&epoch==prior.optInt("epoch");
         boolean expired=!exact||current==null||!token.equals(current.getString("token"));
         if(exact){prior.put("phase","opened").put("openedAt",System.currentTimeMillis());task.put("ownerNotification",prior);write(task);}
-        return new JSONObject().put("taskId",id).put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch")).put("anchor",expired?"current":prior.optString("anchor")).put("expired",expired).put("executionAuthorized",false);
+        JSONObject opened=new JSONObject().put("taskId",id).put("runId",task.optString("runId")).put("epoch",task.optInt("coordinatorEpoch")).put("anchor",expired?"current":prior.optString("anchor")).put("expired",expired).put("executionAuthorized",false);
+        if(phoneTap&&!expired&&"completed".equals(current.opt("status"))&&"result".equals(current.opt("anchor"))&&task.has("ownerWorkTakeover")){
+            try {JSONObject original=originalReportForCompletedNotice(task);if(original!=null)opened.put("originalWorkReport",original);}
+            catch(Exception unavailable){if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();}
+        }
+        return opened;
+    }
+    /** Navigation from a real report-writer notification, not a new report read.
+     * The native header records the current round's consumed delivery and report
+     * in the same write as its authoritative Work. Never load either body's bytes. */
+    private JSONObject originalReportForCompletedNotice(JSONObject writer)throws Exception{
+        JSONObject link=writer.optJSONObject("ownerWorkTakeover");
+        if(!OwnerWorkTask.isButlerSource(writer)||link==null||!OwnerWorkTask.TAKEOVER_FORMAT.equals(link.opt("format"))||
+                !Boolean.FALSE.equals(writer.opt("cancelRequested"))||link.has("readOnlyTeamReportProof"))return null;
+        String producer=writer.getString("id"),producerRun=writer.getString("runId"),conversation=writer.getString("conversationId");
+        int producerEpoch=writer.getInt("coordinatorEpoch");
+        String target=link.getString("workTaskId"),delivery=link.getString("deliveryId"),generation=link.getString("generation");
+        if(!producer.equals(link.opt("taskId"))||!conversation.equals(link.opt("conversationId"))||target.equals(producer)||
+                !target.matches("[a-f0-9-]{36}")||delivery.isBlank()||delivery.length()>120||!link.getString("resultDigest").matches("[a-f0-9]{64}"))return null;
+        boolean owns=!db.inTransaction();if(owns)db.beginTransactionNonExclusive();
+        try{
+            if(!ownerWorkGeneration().equals(generation))return null;
+            JSONObject work;
+            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(ui_header AS BLOB))<=32768 THEN ui_header END FROM tasks WHERE task_id=?",new String[]{target})){
+                if(!row.moveToFirst()||row.isNull(0))return null;work=new JSONObject(row.getString(0));
+            }
+            if(!target.equals(work.opt("id"))||!conversation.equals(work.opt("conversationId"))||
+                    !OwnerWorkTask.isOwnerWork(work)||!work.isNull("origin")||work.has("parentTaskId")||work.has("developmentContext")||
+                    work.has("teamAssignment")||!"completed".equals(work.opt("status"))||!Boolean.FALSE.equals(work.opt("cancelRequested"))||
+                    work.optBoolean("metadataLimited")||work.optBoolean("ownerWorkTeamsUnavailable")||
+                    work.optJSONArray("ownerWorkTeams")==null||work.getJSONArray("ownerWorkTeams").length()!=0)return null;
+            JSONObject owner=OwnerWorkTask.require(work),handling=owner.optJSONObject("handling");
+            if(!generation.equals(owner.opt("generation"))||!"ended".equals(owner.opt("phase"))||owner.optInt("relatedTaskCount",0)!=0||
+                    handling==null||!"reported".equals(handling.opt("state"))||!delivery.equals(handling.opt("deliveryId")))return null;
+            String run=work.getString("runId"),message=handling.getString("reportMessageId");int epoch=work.getInt("coordinatorEpoch");
+            if(!run.matches("[a-f0-9-]{36}")||epoch<1||!message.matches("[a-f0-9-]{36}")||hasUnresolvedOperations(target,null)||hasUnresolvedOperations(producer,null))return null;
+            try(Cursor rows=db.rawQuery("SELECT count(*) FROM runs WHERE status='completed' AND ((task_id=? AND run_id=? AND epoch=?) OR (task_id=? AND run_id=? AND epoch=?))",
+                    new String[]{target,run,Integer.toString(epoch),producer,producerRun,Integer.toString(producerEpoch)})){
+                if(!rows.moveToFirst()||rows.getInt(0)!=2)return null;
+            }
+            JSONObject result;
+            try(Cursor saved=db.rawQuery("SELECT CASE WHEN length(CAST(s.source_json AS BLOB))<=65536 THEN s.source_json END,s.revision,s.native_reply_id,m.body_sha FROM assistant_sources s JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id AND m.conversation_id=s.conversation_id WHERE s.generation=? AND s.conversation_id=? AND s.source_id=? AND s.role='assistant' AND s.deleted=0 AND s.context_retired=0 AND s.retired_through<s.revision AND c.deleted=0 AND m.revision=s.revision AND m.body IS NOT NULL AND m.body_bytes>0 AND s.native_reply_id IS NOT NULL LIMIT 1",
+                    new String[]{generation,conversation,message})){
+                if(!saved.moveToFirst()||saved.isNull(0))return null;
+                JSONObject source=new JSONObject(saved.getString(0)),context=source.optJSONObject("nativeContext");
+                long revision=saved.getLong(1);String reply=saved.getString(2),fingerprint=saved.getString(3);
+                if(context==null||context.length()!=7||context.optInt("format")!=1||source.optBoolean("nativeProvenanceImported")||revision<1||reply.isBlank()||
+                        !fingerprint.matches("sha256:[a-f0-9]{64}")||!message.equals(source.opt("sourceId"))||!conversation.equals(source.opt("conversationId"))||
+                        !"message".equals(source.opt("kind"))||!"assistant".equals(source.opt("role"))||!"owner".equals(source.opt("ownerId"))||!"private".equals(source.opt("spaceId"))||
+                        revision!=source.optLong("revision")||!reply.equals(source.opt("nativeReplyId"))||!producer.equals(source.opt("nativeTaskId"))||
+                        !producerRun.equals(source.opt("nativeRunId"))||producerEpoch!=source.optInt("nativeEpoch")||
+                        !generation.equals(context.opt("generation"))||!producer.equals(context.opt("taskId"))||!producerRun.equals(context.opt("runId"))||
+                        producerEpoch!=context.optInt("epoch")||revision!=context.optLong("sourceRevision")||!fingerprint.equals(context.opt("bodyFingerprint")))return null;
+                result=new JSONObject().put("taskId",target).put("runId",run).put("epoch",epoch).put("conversationId",conversation)
+                        .put("deliveryId",delivery).put("reportMessageId",message).put("reportRevision",revision).put("bodyFingerprint",fingerprint);
+            }
+            if(owns)db.setTransactionSuccessful();return result;
+        }finally{if(owns)db.endTransaction();}
     }
     /** Native reviewed-final admission only: persist a waiting task, never start a Run/model/tool. */
     public synchronized JSONObject createReviewedRealtimeTask(String commitId,String text,JSONObject source)throws Exception{
@@ -17225,36 +17288,56 @@ public final class TaskStore {
     }
     private OwnerSelectedTeamRefusal ownerSelectedTeamStartRefusal(JSONObject task,JSONObject args)throws Exception {
         if(!task.has(OWNER_SELECTED_TEAM_START))return null; // Old, none, or multiple selected Teams keep their original behavior.
+        OwnerSelectedTeamSource source=ownerSelectedTeamSource(task);
+        if(source==null)return SELECTED_TEAM_UNAVAILABLE;
+        try(var inspection=conversationRepository.inspectOwnerSources()){
+            if(!inspection.nativeOwnerInput(new JSONObject().put("role","user").put("ownerMessageId",source.message)
+                    .put("ownerMessageRevision",source.revision),source.conversation))return SELECTED_TEAM_UNAVAILABLE;
+        }
+        return args!=null&&source.team.equals(args.opt("teamId"))&&!args.has("members")&&!args.has("planRef")&&!args.has("planHash")
+                ?null:SELECTED_TEAM_MISMATCH;
+    }
+    /** Native-only metadata for one request. The request projection still verifies
+     * the actual original message and object reference before using this choice. */
+    public static final class OwnerSelectedTeamSource {
+        private final String task,run,conversation,message,team;
+        private final int epoch;
+        private final long revision;
+        private OwnerSelectedTeamSource(JSONObject task,String team,String message,long revision){
+            this.task=task.optString("id");run=task.optString("runId");epoch=task.optInt("coordinatorEpoch");
+            conversation=task.optString("conversationId");this.team=team;this.message=message;this.revision=revision;
+        }
+        public boolean matches(RunControl original,String conversation,JSONObject row,JSONArray refs)throws Exception {
+            return original.matchesHostRun(task,run,epoch)&&this.conversation.equals(conversation)&&"user".equals(row.opt("role"))
+                    &&message.equals(row.opt("ownerMessageId"))&&revision==OwnerInputQueue.integer(row.opt("ownerMessageRevision"))
+                    &&team.equals(soleOwnerSelectedTeam(refs));
+        }
+    }
+    private OwnerSelectedTeamSource ownerSelectedTeamSource(JSONObject task)throws Exception {
         JSONObject pin=task.optJSONObject(OWNER_SELECTED_TEAM_START);
         if(pin==null||!(pin.opt("teamId") instanceof String team)||team.isBlank()
                 ||!(pin.opt("messageId") instanceof String message)||message.isBlank()
                 ||!(pin.opt("generation") instanceof String generation)||generation.isBlank()
                 ||conversationRepository==null||!conversationRepository.active()
-                ||!ownerWorkGeneration().equals(generation))return SELECTED_TEAM_UNAVAILABLE;
+                ||!ownerWorkGeneration().equals(generation))return null;
         long revision=OwnerInputQueue.integer(pin.opt("revision"));
-        if(revision<1)return SELECTED_TEAM_UNAVAILABLE;
-        String conversation=task.optString("conversationId");
+        if(revision<1)return null;
         if(OwnerWorkTask.isButlerSource(task)){
             JSONArray inputs=task.optJSONArray("ownerInputs");
             JSONObject first=inputs==null?null:inputs.optJSONObject(0);
             if(first==null||!"task_goal".equals(first.opt("queueRole"))||!"materialized".equals(OwnerInputQueue.state(first))
                     ||!task.optString("id").equals(first.opt("acceptedTaskId"))||!message.equals(first.opt("messageId"))
                     ||revision!=first.optLong("ownerMessageRevision")||!team.equals(soleOwnerSelectedTeam(first.optJSONArray("ownerObjectRefs"))))
-                return SELECTED_TEAM_UNAVAILABLE;
+                return null;
         }else if(OwnerWorkTask.isOwnerWork(task)){
             JSONArray refs=OwnerWorkTask.require(task).getJSONArray("sourceMessageRefs");boolean included=false;
             for(int i=0;i<refs.length();i++){
                 JSONObject ref=refs.getJSONObject(i);
                 if(message.equals(ref.opt("sourceId"))&&revision==ref.optLong("revision")){included=true;break;}
             }
-            if(!included)return SELECTED_TEAM_UNAVAILABLE;
-        }else return SELECTED_TEAM_UNAVAILABLE;
-        try(var inspection=conversationRepository.inspectOwnerSources()){
-            if(!inspection.nativeOwnerInput(new JSONObject().put("role","user").put("ownerMessageId",message)
-                    .put("ownerMessageRevision",revision),conversation))return SELECTED_TEAM_UNAVAILABLE;
-        }
-        return args!=null&&team.equals(args.opt("teamId"))&&!args.has("members")&&!args.has("planRef")&&!args.has("planHash")
-                ?null:SELECTED_TEAM_MISMATCH;
+            if(!included)return null;
+        }else return null;
+        return new OwnerSelectedTeamSource(task,team,message,revision);
     }
 
     public synchronized JSONObject requireCapabilityApproval(String id,String runId,String tool,JSONObject args,JSONObject capability)throws Exception{
@@ -20677,7 +20760,19 @@ public final class TaskStore {
         }finally{db.endTransaction();}
     }
     public synchronized JSONArray projectOwnerSourceContext(String id,String run,int epoch,RunControl original,JSONArray messages)throws Exception{
-        fence(id,run,epoch,original,false);requireToolOutputSources(id,run,epoch,original);JSONObject task=required(id);requirePrivateOwner(task);return dev.pocketengine.features.memory.TaskStoreMemoryQuery.projectOwnerSourceContext(db,conversationRepository,id,run,task.optString("conversationId"),messages);
+        return projectOwnerSourceContext(id,run,epoch,original,messages,false).messages();
+    }
+    public record OwnerSourceContext(JSONArray messages,OwnerSelectedTeamSource selectedTeam){}
+    public synchronized OwnerSourceContext projectOwnerSourceContextWithTeam(String id,String run,int epoch,RunControl original,JSONArray messages)throws Exception{
+        return projectOwnerSourceContext(id,run,epoch,original,messages,true);
+    }
+    private OwnerSourceContext projectOwnerSourceContext(String id,String run,int epoch,RunControl original,JSONArray messages,boolean includeSelectedTeam)throws Exception{
+        fence(id,run,epoch,original,false);requireToolOutputSources(id,run,epoch,original);JSONObject task=required(id);requirePrivateOwner(task);
+        JSONArray projected=dev.pocketengine.features.memory.TaskStoreMemoryQuery.projectOwnerSourceContext(db,conversationRepository,id,run,task.optString("conversationId"),messages);
+        OwnerSelectedTeamSource selected=null;
+        if(includeSelectedTeam&&task.has(OWNER_SELECTED_TEAM_START))try{selected=ownerSelectedTeamSource(task);}
+        catch(org.json.JSONException|SecurityException unavailable){/* No optional guidance without the exact source; the native veto is unchanged. */}
+        return new OwnerSourceContext(projected,selected);
     }
     public synchronized JSONObject queryMemoryRaw(dev.pocketengine.features.memory.TaskStoreMemoryReader.RawBinding binding,JSONObject options)throws Exception{
         return dev.pocketengine.features.memory.TaskStoreMemoryQuery.queryRaw(db,binding,options,conversationRepository);

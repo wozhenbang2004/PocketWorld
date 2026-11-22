@@ -1204,11 +1204,15 @@ public final class ConversationRepository {
     }
     /** Minimal original model evidence; owner/UI metadata is not materialized on this path. */
     public JSONObject historyMessage(String conversation,String id,CancellationSignal signal)throws Exception{return historyMessage(conversation,id,signal,MAX_BYTES);}
-    JSONObject historyMessage(String conversation,String id,CancellationSignal signal,long maximumBytes)throws Exception{
+    JSONObject historyMessage(String conversation,String id,CancellationSignal signal,long maximumBytes)throws Exception{return historyMessage(conversation,id,signal,maximumBytes,null);}
+    /** Only scoped current-Chat search passes a lock-free presentation check. */
+    JSONObject historyMessage(String conversation,String id,CancellationSignal signal,long maximumBytes,RunControl currentChat)throws Exception{
+        if(currentChat!=null)currentChat.check();
         JSONObject state=metadata(id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId")))return null;
         try{requireDerivedMessageCurrent(id,state.getLong("revision"));}catch(SourceUnavailable unavailable){return null;}
-        try(Cursor size=db.rawQuery("SELECT length(CAST(body AS BLOB)) FROM assistant_messages WHERE generation=? AND conversation_id=? AND source_id=? AND body IS NOT NULL LIMIT 1",new String[]{activeGeneration(),conversation,id},signal)){if(!size.moveToFirst())return null;if(size.getLong(0)>Math.min(MAX_BYTES,maximumBytes))throw new ReadLimited("original_message_exceeds_inline_budget");}
+        try(Cursor size=db.rawQuery("SELECT length(CAST(body AS BLOB)) FROM assistant_messages WHERE generation=? AND conversation_id=? AND source_id=? AND body IS NOT NULL LIMIT 1",new String[]{activeGeneration(),conversation,id},signal)){if(currentChat!=null)currentChat.check();if(!size.moveToFirst())return null;if(size.getLong(0)>Math.min(MAX_BYTES,maximumBytes))throw new ReadLimited("original_message_exceeds_inline_budget");}
         try(Cursor row=db.rawQuery("SELECT body,revision,at_ms FROM assistant_messages WHERE generation=? AND conversation_id=? AND source_id=? AND body IS NOT NULL LIMIT 1",new String[]{activeGeneration(),conversation,id},signal)){
+            if(currentChat!=null)currentChat.check();
             if(!row.moveToFirst())return null;if(row.getLong(1)!=state.getLong("revision"))throw new SecurityException("原消息修订与native来源不一致");JSONObject value=new JSONObject().put("id",id).put("revision",row.getLong(1)).put("role",state.getString("role")).put("content",row.getString(0));if(!row.isNull(2))value.put("at",row.getLong(2));return value;
         }
     }

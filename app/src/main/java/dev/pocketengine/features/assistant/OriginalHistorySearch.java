@@ -53,6 +53,7 @@ final class OriginalHistorySearch {
     private static JSONObject decode(String value)throws Exception{if(value.isEmpty())return new JSONObject();if(value.length()>4000)throw new IllegalArgumentException("原文检索游标过长");return new JSONObject(new String(Base64.getUrlDecoder().decode(value),StandardCharsets.UTF_8));}
     private String upper(String table,String key,String gen,CancellationSignal signal){try(Cursor row=db.rawQuery("SELECT "+key+" FROM "+table+" WHERE generation=? ORDER BY "+key+" DESC LIMIT 1",new String[]{gen},signal)){return row.moveToFirst()?row.getString(0):"";}}
     JSONObject search(JSONObject options,RunControl original)throws Exception{
+        if(options.has("conversationScope"))return searchConversation(options,original);
         keys(options,Set.of("query","cursor","limit","maxChars"));String query=text(options,"query",500),cursor=text(options,"cursor",4000);if(Normalizer.normalize(query,Normalizer.Form.NFKC).trim().isEmpty())throw new IllegalArgumentException("请输入要在保留原文中找的文字");int limit=(int)integer(options,"limit",1,20),maxChars=(int)integer(options,"maxChars",64,16000);ownerControl(original);long pause=original.pauseRevision();JSONObject answer;
         synchronized(monitor){String gen=generation.call();long started=nanos.getAsLong(),bytes=0;int scanned=0,chars=0,phase=0;boolean more=false;String reason="",lastNative="",lastImported="",upperNative="",upperImported="";JSONArray entries=new JSONArray(),gaps=new JSONArray();CancellationSignal signal=new CancellationSignal();Runnable cancel=signal::cancel;original.onCancel(cancel);var deadline=ConversationRepository.DEADLINES.schedule(signal::cancel,500,TimeUnit.MILLISECONDS);
             try{
@@ -86,6 +87,102 @@ final class OriginalHistorySearch {
             }catch(OperationCanceledException stopped){control(original,pause);throw new IllegalStateException("本页原文读取达到截止；未交付的扫描位置没有推进，请保留原游标重试",stopped);}
             finally{deadline.cancel(false);original.removeCancelAction(cancel);}
         }original.check();control(original,pause);return answer;
+    }
+    /** Opt-in selected Chat scan. Seek the existing conversation/sequence index before any original body. */
+    private JSONObject searchConversation(JSONObject options,RunControl original)throws Exception{
+        keys(options,Set.of("query","cursor","limit","maxChars","conversationScope"));
+        JSONObject scope=options.getJSONObject("conversationScope");keys(scope,Set.of("conversationId","composerEpoch"));
+        String conversation=text(scope,"conversationId",240),query=text(options,"query",500),cursor=text(options,"cursor",4000);
+        long epoch=integer(scope,"composerEpoch",0,Integer.MAX_VALUE);
+        if(conversation.isBlank()||Normalizer.normalize(query,Normalizer.Form.NFKC).trim().isEmpty())
+            throw new IllegalArgumentException("请输入要在此对话里找的文字");
+        int limit=(int)integer(options,"limit",1,20),maxChars=(int)integer(options,"maxChars",64,16000);
+        ownerControl(original);long pause=original.pauseRevision();
+        synchronized(monitor){
+            original.check();control(original,pause);String gen=generation.call();
+            String signature=TaskMemoryTrace.rawFingerprint(new JSONObject().put("kind","owner_current_conversation_search")
+                    .put("generation",gen).put("conversationId",conversation).put("composerEpoch",epoch).put("query",query));
+            JSONObject position=decode(cursor);
+            long upper=0,before=0;
+            if(!cursor.isEmpty()){
+                keys(position,Set.of("signature","upper","before"));
+                if(!signature.equals(position.opt("signature")))throw new SecurityException("原文游标不属于当前对话和查找文字");
+                upper=integer(position,"upper",1,Long.MAX_VALUE);before=integer(position,"before",1,upper);
+            }
+            long started=nanos.getAsLong(),bytes=0,last=0;int scanned=0,chars=0;
+            String reason="";JSONArray entries=new JSONArray(),gaps=new JSONArray();
+            CancellationSignal signal=new CancellationSignal();Runnable cancel=signal::cancel;original.onCancel(cancel);
+            var deadline=ConversationRepository.DEADLINES.schedule(signal::cancel,500,TimeUnit.MILLISECONDS);
+            try{
+                try(Cursor held=db.rawQuery("SELECT 1 FROM assistant_conversations WHERE generation=? AND conversation_id=? AND deleted=0 LIMIT 1",
+                        new String[]{gen,conversation},signal)){
+                    if(!held.moveToFirst())throw new SecurityException("当前保存的本机对话已不可读取");
+                }
+                if(cursor.isEmpty())try(Cursor top=db.rawQuery("SELECT sequence FROM assistant_messages INDEXED BY assistant_messages_page "
+                        +"WHERE generation=? AND conversation_id=? ORDER BY sequence DESC LIMIT 1",new String[]{gen,conversation},signal)){
+                    if(top.moveToFirst())upper=top.getLong(0);
+                }
+                long through=before==0?upper:before-1;
+                if(through>0){
+                    String sql="SELECT m.sequence,m.source_id,m.revision,m.body_sha,m.body_bytes,s.revision,s.role,s.deleted,m.body IS NULL,"
+                            +"s.retired_through,s.context_retired FROM assistant_messages m INDEXED BY assistant_messages_page "
+                            +"LEFT JOIN assistant_sources s ON s.generation=m.generation AND s.conversation_id=m.conversation_id AND s.source_id=m.source_id "
+                            +"WHERE m.generation=? AND m.conversation_id=? AND m.sequence>0 AND m.sequence<=? ORDER BY m.sequence DESC LIMIT ?";
+                    try(Cursor rows=db.rawQuery(sql,new String[]{gen,conversation,Long.toString(through),Integer.toString(ConversationRepository.MAX_ROWS+1)},signal)){
+                        while(rows.moveToNext()){
+                            original.check();control(original,pause);
+                            if(scanned>=ConversationRepository.MAX_ROWS||entries.length()>=limit||chars>=maxChars){
+                                reason=scanned>=ConversationRepository.MAX_ROWS?"source_row_budget":entries.length()>=limit?"result_limit":"character_limit";break;
+                            }
+                            if(nanos.getAsLong()-started>500_000_000L){reason="read_deadline";break;}
+                            long sequence=rows.getLong(0),revision=rows.getLong(2),size=rows.getLong(4);
+                            String id=rows.getString(1),fingerprint=rows.getString(3),role=rows.getString(6);
+                            scanned++;
+                            if(rows.isNull(5)||revision<1||revision!=rows.getLong(5)||rows.getInt(7)!=0||rows.getInt(8)!=0||
+                                    !("user".equals(role)||"assistant".equals(role))||size<0||!fingerprint.matches("sha256:[0-9a-f]{64}")){
+                                last=sequence;gaps.put(new JSONObject().put("recordId",id).put("status","original_unavailable"));continue;
+                            }
+                            if(size>ConversationRepository.MAX_BYTES){
+                                last=sequence;gaps.put(new JSONObject().put("recordId",id).put("status","read_limited"));continue;
+                            }
+                            if(size>ConversationRepository.MAX_BYTES-bytes){reason="source_byte_budget";break;}
+                            JSONObject message;
+                            try{message=originals.historyMessage(conversation,id,signal,ConversationRepository.MAX_BYTES-bytes,original);}
+                            catch(ConversationRepository.ReadLimited inconsistent){
+                                // The canonical size was already within budget; never guess or load this row.
+                                last=sequence;gaps.put(new JSONObject().put("recordId",id).put("status","original_integrity_unavailable"));continue;
+                            }
+                            bytes+=size;
+                            if(message==null||!role.equals(message.opt("role"))||revision!=message.optLong("revision")){
+                                last=sequence;gaps.put(new JSONObject().put("recordId",id).put("status","original_unavailable"));continue;
+                            }
+                            String body=message.getString("content");byte[] materialized=body.getBytes(StandardCharsets.UTF_8);
+                            if(materialized.length!=size||!fingerprint.equals("sha256:"+ConversationRepository.shaBytes(materialized))){
+                                // Actual bytes were preflight bounded, but do not continue with an untrusted counter.
+                                throw new IllegalStateException("原对话文字大小或指纹已变化，未返回搜索结果");
+                            }
+                            int offset=excerptOffset(body,query,original,pause);
+                            if(offset>=0){
+                                JSONObject locator=new JSONObject().put("kind","owner_native_original").put("generation",gen)
+                                        .put("conversationId",conversation).put("recordId",id).put("recordVersion",revision).put("fingerprint",fingerprint);
+                                JSONObject hit=page(locator,message,offset,Math.min(1000,maxChars-chars),rows.getLong(9)>=revision||rows.getInt(10)!=0);
+                                if(hit.getString("body").isEmpty()&&!body.isEmpty()){reason="character_limit";break;}
+                                remember(locator,body,original,pause);entries.put(hit);chars+=hit.getString("body").length();
+                            }
+                            last=sequence;
+                        }
+                    }
+                }
+                original.check();control(original,pause);
+                if(!gen.equals(generation.call())||!reason.isEmpty()&&last==0)
+                    throw new IllegalStateException("原对话搜索位置未能核对，请重试本页");
+                String next=reason.isEmpty()?"":encode(new JSONObject().put("signature",signature).put("upper",upper).put("before",last));
+                return proof(new JSONObject().put("status",reason.isEmpty()?"current":"partial").put("reason",reason)
+                        .put("entries",entries).put("gaps",gaps).put("nextCursor",next));
+            }catch(OperationCanceledException stopped){
+                control(original,pause);throw new IllegalStateException("本页原文读取达到截止；请保留原查找位置重试",stopped);
+            }finally{deadline.cancel(false);original.removeCancelAction(cancel);}
+        }
     }
     private static int excerptOffset(String body,String query,RunControl original,long pause)throws Exception{
         String normalized=Normalizer.normalize(body,Normalizer.Form.NFKC),text=normalized.toLowerCase(Locale.ROOT);
@@ -138,15 +235,15 @@ final class OriginalHistorySearch {
         boolean imported="owner_imported_original".equals(locator.getString("kind"));JSONObject result=proof(new JSONObject().put("ownerLocator",new JSONObject(locator.toString())).put("conversationId",locator.getString("conversationId")).put("recordId",locator.getString("recordId")).put("recordVersion",locator.getLong("recordVersion")).put("role",message.optString("role")).put("body",body).put("readRange",new JSONObject().put("offset",offset).put("chars",body.length()).put("totalChars",total).put("unit","UTF-16")).put("nextOffset",offset+body.length()<total?offset+body.length():-1).put("status","current").put("derivedUseStatus",imported?"provenance_unavailable":retired?"retired_for_derived_context":"not_authorized_by_this_owner_read").put("importAssignedIdentity",imported).put("historicalRevision",imported?message.opt("historicalRevision"):locator.getLong("recordVersion")).put("historicalRevisionKnown",!imported||message.optBoolean("historicalRevisionKnown")).put("at",message.has("at")?message.get("at"):JSONObject.NULL).put("timeKnown",message.opt("at") instanceof Number));
         if(imported)result.put("originalByteReference",message.getJSONObject("originalByteReference"));return result;
     }
-    private JSONObject nativeRange(JSONObject locator,JSONObject state,RangeHint hint,int offset,int maxChars,CancellationSignal signal,RunControl original,long pause,long maximumBytes)throws Exception{
+    private JSONObject nativeRange(JSONObject locator,JSONObject state,RangeHint hint,int offset,int maxChars,CancellationSignal signal,RunControl original,long pause,long maximumBytes,boolean scoped)throws Exception{
         if(offset>hint.total)throw new IllegalArgumentException("原文UTF-16范围无效");String gen=locator.getString("generation"),conversation=locator.getString("conversationId"),id=locator.getString("recordId"),version=Long.toString(locator.getLong("recordVersion")),fingerprint=locator.getString("fingerprint");JSONObject metadata=new JSONObject().put("role",state.getString("role"));
         // The immutable source version/hash predicate is rechecked on each exact SQL slice.
         String where=" FROM assistant_messages WHERE generation=? AND conversation_id=? AND source_id=? AND revision=? AND body_sha=? AND body IS NOT NULL LIMIT 1";
-        try(Cursor row=db.rawQuery("SELECT at_ms"+where,new String[]{gen,conversation,id,version,fingerprint},signal)){if(!row.moveToFirst())return unavailable("source_changed","原文修订/指纹改变，未展示新正文");if(!row.isNull(0))metadata.put("at",row.getLong(0));}
+        try(Cursor row=db.rawQuery("SELECT at_ms"+where,new String[]{gen,conversation,id,version,fingerprint},signal)){if(scoped)original.check();if(!row.moveToFirst())return unavailable("source_changed","原文修订/指纹改变，未展示新正文");if(!row.isNull(0))metadata.put("at",row.getLong(0));}
         StringBuilder result=new StringBuilder();long bytes=0;int loadedChars=0;int wanted=(int)Math.min((long)hint.total,(long)offset+maxChars);
         for(Block block:hint.blocks){if(block.offset+block.chars<=offset||block.offset>=wanted)continue;control(original,pause);String[] args={Integer.toString(block.scalarOffset+1),Integer.toString(block.scalars),gen,conversation,id,version,fingerprint};long size;
-            try(Cursor preflight=db.rawQuery("SELECT length(CAST(substr(body,?,?) AS BLOB))"+where,args,signal)){if(!preflight.moveToFirst()||preflight.isNull(0))return unavailable("source_changed","原范围已不可用");size=preflight.getLong(0);if(size>maximumBytes-bytes)return unavailable("read_limited","原范围超过本页实际字节预算");}
-            String chunk;try(Cursor row=db.rawQuery("SELECT substr(body,?,?)"+where,args,signal)){if(!row.moveToFirst())return unavailable("source_changed","原范围已变化");chunk=row.getString(0);}bytes+=size;loadedChars+=chunk.length();
+            try(Cursor preflight=db.rawQuery("SELECT length(CAST(substr(body,?,?) AS BLOB))"+where,args,signal)){if(scoped)original.check();if(!preflight.moveToFirst()||preflight.isNull(0))return unavailable("source_changed","原范围已不可用");size=preflight.getLong(0);if(size>maximumBytes-bytes)return unavailable("read_limited","原范围超过本页实际字节预算");}
+            String chunk;try(Cursor row=db.rawQuery("SELECT substr(body,?,?)"+where,args,signal)){if(scoped)original.check();if(!row.moveToFirst())return unavailable("source_changed","原范围已变化");chunk=row.getString(0);}bytes+=size;loadedChars+=chunk.length();
             if(chunk.length()!=block.chars||!digest(chunk).equals(block.sha))return unavailable("source_changed","原件范围指纹不符，未展示替代正文；请重新搜索");
             int from=Math.max(0,offset-block.offset),to=Math.min(block.chars,wanted-block.offset);if(from>0&&from<chunk.length()&&Character.isLowSurrogate(chunk.charAt(from))&&Character.isHighSurrogate(chunk.charAt(from-1)))throw new IllegalArgumentException("原文范围不能从代理对中间开始");if(to>from&&to<chunk.length()&&Character.isHighSurrogate(chunk.charAt(to-1))&&Character.isLowSurrogate(chunk.charAt(to)))to--;result.append(chunk,from,to);if(to<Math.min(block.chars,wanted-block.offset))break;
         }
@@ -165,15 +262,24 @@ final class OriginalHistorySearch {
         return page.put("body",body.substring(0,chars)).put("readRange",new JSONObject().put("offset",ref.getInt("offset")).put("chars",chars).put("unit","UTF-16"));
     }
     private JSONObject read(JSONObject request,RunControl original,boolean derived,long maximumBytes,long deadlineNanos)throws Exception{
-        keys(request,Set.of("ownerLocator","offset","maxChars"));JSONObject locator=request.getJSONObject("ownerLocator");keys(locator,Set.of("kind","generation","conversationId","recordId","recordVersion","fingerprint"));String kind=text(locator,"kind",40),gen=text(locator,"generation",80),conversation=text(locator,"conversationId",2048),id=text(locator,"recordId",512),fingerprint=text(locator,"fingerprint",80);long version=integer(locator,"recordVersion",1,Long.MAX_VALUE);int offset=(int)integer(request,"offset",0,Integer.MAX_VALUE),maxChars=(int)integer(request,"maxChars",64,16000);if(!Set.of("owner_native_original","owner_imported_original").contains(kind)||!(kind.equals("owner_native_original")?fingerprint.matches("sha256:[0-9a-f]{64}"):fingerprint.matches("[0-9a-f]{64}")))throw new SecurityException("不是当前native主人原件引用");if(derived){if(original==null||maximumBytes<1||maximumBytes>ConversationRepository.MAX_BYTES)throw new SecurityException("原文派生投影缺少当前原生任务/字节预算");original.check();}else ownerControl(original);long pause=original.pauseRevision();JSONObject result=null;
-        synchronized(monitor){control(original,pause);if(!gen.equals(generation.call()))return unavailable("source_changed","原文权威已改变，请重新搜索");CancellationSignal signal=new CancellationSignal();Runnable cancel=signal::cancel;long remaining=derived?Math.min(500_000_000L,deadlineNanos-System.nanoTime()):500_000_000L;if(remaining<=0)throw new IllegalStateException("原文引用批次读取已到截止");original.onCancel(cancel);var deadline=ConversationRepository.DEADLINES.schedule(signal::cancel,remaining,TimeUnit.NANOSECONDS);long started=nanos.getAsLong();try{
+        boolean scoped=!derived&&request.has("conversationScope");
+        keys(request,scoped?Set.of("ownerLocator","offset","maxChars","conversationScope"):Set.of("ownerLocator","offset","maxChars"));JSONObject locator=request.getJSONObject("ownerLocator");keys(locator,Set.of("kind","generation","conversationId","recordId","recordVersion","fingerprint"));String kind=text(locator,"kind",40),gen=text(locator,"generation",80),conversation=text(locator,"conversationId",2048),id=text(locator,"recordId",512),fingerprint=text(locator,"fingerprint",80);long version=integer(locator,"recordVersion",1,Long.MAX_VALUE);int offset=(int)integer(request,"offset",0,Integer.MAX_VALUE),maxChars=(int)integer(request,"maxChars",64,16000);if(!Set.of("owner_native_original","owner_imported_original").contains(kind)||!(kind.equals("owner_native_original")?fingerprint.matches("sha256:[0-9a-f]{64}"):fingerprint.matches("[0-9a-f]{64}")))throw new SecurityException("不是当前native主人原件引用");
+        if(scoped){
+            JSONObject scope=request.getJSONObject("conversationScope");keys(scope,Set.of("conversationId","composerEpoch"));
+            integer(scope,"composerEpoch",0,Integer.MAX_VALUE);
+            if(!"owner_native_original".equals(kind)||!conversation.equals(text(scope,"conversationId",240)))
+                throw new SecurityException("所选原文不属于此对话");
+        }
+        if(derived){if(original==null||maximumBytes<1||maximumBytes>ConversationRepository.MAX_BYTES)throw new SecurityException("原文派生投影缺少当前原生任务/字节预算");original.check();}else ownerControl(original);long pause=original.pauseRevision();JSONObject result=null;
+        synchronized(monitor){if(scoped)original.check();control(original,pause);if(!gen.equals(generation.call()))return unavailable("source_changed","原文权威已改变，请重新搜索");CancellationSignal signal=new CancellationSignal();Runnable cancel=signal::cancel;long remaining=derived?Math.min(500_000_000L,deadlineNanos-System.nanoTime()):500_000_000L;if(remaining<=0)throw new IllegalStateException("原文引用批次读取已到截止");original.onCancel(cancel);var deadline=ConversationRepository.DEADLINES.schedule(signal::cancel,remaining,TimeUnit.NANOSECONDS);long started=nanos.getAsLong();try{
             JSONObject message=null;boolean retired=false,originalReadCompleted=false;if(kind.equals("owner_native_original")){
+                if(scoped)original.check();
                 JSONObject state=originals.metadata(id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId")))return unavailable("deleted_or_unavailable","原消息或原会话已删除/不可见");if(version!=state.getLong("revision"))return unavailable("source_changed","原修订已改变，请重新搜索，未展示新正文");if(derived&&(state.optLong("memorySourceRetiredThrough")>=version||state.optBoolean("memoryContextRetired")))return unavailable("retired","这份原文仍可由主人查看，但已停止用于模型派生上下文");
                 RangeHint found=hint(locator);if(found==null||!found.scalarSafe){
                     // A derived hint is never authority: a miss may rebuild from the same
                     // current original under the unchanged 1MiB/500ms full-read bound.
-                    message=originals.historyMessage(conversation,id,signal,maximumBytes);if(message==null)return unavailable("unavailable","此版本原文缺失");String body=message.getString("content");if(!fingerprint.equals("sha256:"+digest(body)))return unavailable("source_changed","原文指纹不符，未展示替代正文");remember(locator,body,original,pause);retired=state.optLong("memorySourceRetiredThrough")>=version||state.optBoolean("memoryContextRetired");result=page(locator,message,offset,maxChars,retired).put("rangeHintsRebuilt",true).put("applicationMaterializedOriginalUtf8Bytes",body.getBytes(StandardCharsets.UTF_8).length).put("fullOriginalMaterializedInApp",true).put("readMode",found!=null&&!found.scalarSafe?"bounded_native_full_original_embedded_nul":"bounded_native_full_original_hint_rebuild").put("sqlInternalWorkMeasured",false).put("physicalIoMeasured",false);
-                }else result=nativeRange(locator,state,found,offset,maxChars,signal,original,pause,maximumBytes);control(original,pause);if(nanos.getAsLong()-started>500_000_000L)throw new IllegalStateException("原件范围读取超过本页截止，未返回迟到正文");
+                    message=originals.historyMessage(conversation,id,signal,maximumBytes,scoped?original:null);if(message==null)return unavailable("unavailable","此版本原文缺失");String body=message.getString("content");if(!fingerprint.equals("sha256:"+digest(body)))return unavailable("source_changed","原文指纹不符，未展示替代正文");remember(locator,body,original,pause);retired=state.optLong("memorySourceRetiredThrough")>=version||state.optBoolean("memoryContextRetired");result=page(locator,message,offset,maxChars,retired).put("rangeHintsRebuilt",true).put("applicationMaterializedOriginalUtf8Bytes",body.getBytes(StandardCharsets.UTF_8).length).put("fullOriginalMaterializedInApp",true).put("readMode",found!=null&&!found.scalarSafe?"bounded_native_full_original_embedded_nul":"bounded_native_full_original_hint_rebuild").put("sqlInternalWorkMeasured",false).put("physicalIoMeasured",false);
+                }else result=nativeRange(locator,state,found,offset,maxChars,signal,original,pause,maximumBytes,scoped);if(scoped)original.check();control(original,pause);if(nanos.getAsLong()-started>500_000_000L)throw new IllegalStateException("原件范围读取超过本页截止，未返回迟到正文");
                 // A hit reads verified SQL blocks only. A miss above is the bounded
                 // original-DB rebuild, never a cached body or replacement source.
                 originalReadCompleted=true;

@@ -4109,12 +4109,12 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 EngineModule originalAssistant=features.module("assistant");if(!(originalAssistant instanceof dev.pocketengine.features.assistant.AssistantModule))throw new IllegalStateException("原生对话来源投影暂不可用");
                 JSONArray currentHistory=((dev.pocketengine.features.assistant.AssistantModule)originalAssistant).projectMemoryHistory(history,delegated,originalTask.getString("conversationId"),null,(row,current)->tasks.ownerWorkRoutedInputConversation(id,sourceRun,sourceEpoch,current,row),live);
                 currentHistory=tasks.projectConversationHistoryReferences(currentHistory,originalTask.getString("conversationId"));
-                currentHistory=tasks.projectOwnerSourceContext(id,admittedRun,admittedEpoch,live,currentHistory);
-                currentHistory=withOwnerWorkPreparationContract(id,live,currentHistory);
+                var originalContext=tasks.projectOwnerSourceContextWithTeam(id,admittedRun,admittedEpoch,live,currentHistory);
+                currentHistory=withOwnerWorkPreparationContract(id,live,originalContext.messages());
                 // Keep original-source retirement checks above. Only this admitted task's inputs
                 // may now re-materialize selected message ranges; prior conversation prose stays history.
                 dev.pocketengine.features.assistant.OwnerSourceReferences.restrictToTaskInputs(currentHistory,id,inputs);
-                if(hasTaskAttachments(originalTask))attachmentRoutePins.require(id,selected,false);return sourceProjection.project(currentHistory,selected,live);
+                if(hasTaskAttachments(originalTask))attachmentRoutePins.require(id,selected,false);return sourceProjection.project(currentHistory,selected,live,originalContext.selectedTeam());
                 }
                 @Override public void prepared(JSONArray nativeProvenance,JSONArray actualMessages,ModelConfig selected,RunControl live)throws Exception{sourceProjection.prepared(nativeProvenance,actualMessages,selected,live);}
                 @Override public void derivedPrepared(JSONArray nativeProvenance,RunControl live)throws Exception{sourceProjection.derivedPrepared(nativeProvenance,live);}

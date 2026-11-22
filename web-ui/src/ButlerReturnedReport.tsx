@@ -7,7 +7,7 @@ import {ownerWorkPresentation} from './owner-work-presentation';
 import type {ButlerHomeTask} from './ButlerHome';
 import {workCollectionPresentation} from './work-collection';
 
-export type VerifiedHomeReport={target:ReportTarget;pin:ReportPin;documentEpoch:number;resume:number};
+export type VerifiedHomeReport={target:ReportTarget;pin:ReportPin;documentEpoch:number;resume:number;deliveryId?:string};
 const resume=()=>Number((bridge.getState().view as {resumeRevision?:number}|undefined)?.resumeRevision||0);
 
 /** A native saved handoff, not inferred from completion, a summary or a filename. */
@@ -53,7 +53,8 @@ export async function verifyHomeReport(target:ReportTarget,expected?:ReportPin):
 export function currentHomeReport(report:VerifiedHomeReport){
   const rows=bridge.getState().state.ownerWork;
   return !document.hidden&&bridge.getDocumentEpoch()===report.documentEpoch&&resume()===report.resume&&Array.isArray(rows)&&
-    rows.some((row:ButlerHomeTask)=>row?.id===report.target.taskId&&sameHomeReport(reportedHomeWork(row),report.target));
+    rows.some((row:ButlerHomeTask)=>row?.id===report.target.taskId&&sameHomeReport(reportedHomeWork(row),report.target)&&
+      (report.deliveryId===undefined||ownerWorkPresentation(row)?.deliveryId===report.deliveryId));
 }
 type ReturnedReportProps={
   report:VerifiedHomeReport|null; task:ButlerHomeTask; active:boolean;

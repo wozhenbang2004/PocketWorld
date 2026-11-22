@@ -4,14 +4,14 @@ import {Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
 import {MessageActions} from './library';
 import {IconArrowLeft} from './icons';
-import type {WorkSearchItem} from './WorkSearch';
+import {matchesWorkSearchConversation,type WorkSearchConversation,type WorkSearchItem} from './WorkSearch';
 
 type Json=Record<string,any>;
 const locatorFields=['kind','generation','conversationId','recordId','recordVersion','fingerprint'];
 /** The existing source-reader and history-window layout reads the exact owner
  * locator. Viewing a search hit never changes the active composer or its scope. */
-export function WorkSearchOriginalReader({target,identity,covered=false,onClose,onConversation,onContext,onCopy}:{
- target:WorkSearchItem;identity:string;covered?:boolean;onClose:()=>void;onConversation:()=>void;
+export function WorkSearchOriginalReader({target,identity,covered=false,conversation,onClose,onConversation,onContext,onCopy}:{
+ target:WorkSearchItem;identity:string;covered?:boolean;conversation?:WorkSearchConversation;onClose:()=>void;onConversation?:()=>void;
  onContext?:(locator:Record<string,unknown>)=>Promise<void>;onCopy:(text:string)=>Promise<unknown>;
 }){
  const initialOffset=Number.isSafeInteger(target.readRange?.offset)&&Number(target.readRange?.offset)>=0?Number(target.readRange?.offset):0;
@@ -24,8 +24,11 @@ export function WorkSearchOriginalReader({target,identity,covered=false,onClose,
   const request=++generation.current,epoch=bridge.getDocumentEpoch();requestedOffset.current=offset;setBusy(true);setError('');
   const accepts=()=>alive.current&&request===generation.current&&epoch===bridge.getDocumentEpoch()&&!document.hidden;
   try{
-   const result=await bridge.command('work.search.read',{ownerLocator:target.ownerLocator,offset,maxChars:6000});
+   const result=await bridge.command('work.search.read',{ownerLocator:target.ownerLocator,offset,maxChars:6000,
+    ...(conversation?{conversationScope:conversation}:{})});
    if(!accepts())return;
+   if(conversation&&!matchesWorkSearchConversation(result?.conversationScope,conversation))
+    throw new Error('原对话已变化，没有打开其他记录。');
    if(typeof result?.status!=='string')throw new Error('原文读取结果暂不可核对，请重新搜索。');
    if(result.status==='current'){
     const range=result.readRange;
@@ -35,13 +38,13 @@ export function WorkSearchOriginalReader({target,identity,covered=false,onClose,
    if(scroller.current)scroller.current.scrollTop=0;
   }catch(failure){if(accepts()){setPage(null);setError(failure instanceof Error?failure.message:'原文暂不可读取，请重试。')}}
   finally{if(request===generation.current){pending.current=false;if(alive.current)setBusy(false)}}
- },[target]);
+ },[target,conversation]);
  useEffect(()=>{
   alive.current=true;pending.current=false;setPage(null);void read(requestedOffset.current);
-  const resume=()=>{generation.current++;pending.current=false;if(document.hidden)setBusy(false);else{setPage(null);void read(requestedOffset.current)}};
+  const resume=()=>{generation.current++;pending.current=false;if(document.hidden)setBusy(false);else if(!conversation){setPage(null);void read(requestedOffset.current)}};
   document.addEventListener('visibilitychange',resume);
   return()=>{alive.current=false;generation.current++;pending.current=false;document.removeEventListener('visibilitychange',resume)};
- },[read,identity]);
+ },[read,identity,conversation]);
  const copy=async(text:string)=>{try{await onCopy(text)}catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'复制未完成，请选中文字后复制。');throw failure}};
  const current=page?.status==='current',range=page?.readRange;
  const original=page?.ownerLocator;
@@ -75,6 +78,6 @@ export function WorkSearchOriginalReader({target,identity,covered=false,onClose,
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" onClick={onClose}>返回搜索结果</Button>
    {onContext&&contextReady?<Button ref={contextButton} variant="secondary" disabled={busy||locating} onClick={()=>void locate()}>在原对话中定位</Button>:
-    !onContext&&<Button variant="secondary" disabled={busy||locating} onClick={onConversation}>打开所属对话</Button>}</footer>
+    !onContext&&onConversation&&<Button variant="secondary" disabled={busy||locating} onClick={onConversation}>打开所属对话</Button>}</footer>
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }
