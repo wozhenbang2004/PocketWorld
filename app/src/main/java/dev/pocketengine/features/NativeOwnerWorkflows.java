@@ -132,6 +132,9 @@ public final class NativeOwnerWorkflows {
     public JSONObject shortenPersonalNoteForOwner(String id,long revision,long until)throws Exception {
         JSONObject scope=ownerScope();host.synchronizeMemory(scope);return sources.shortenManualNoteReviewed(scope,id,revision,until);
     }
+    public JSONObject exactActivePersonalMemory(String id,long revision,java.util.function.BooleanSupplier current)throws Exception{
+        return new JSONObject().put("record",memory().exactActivePersonalForOwner(id,revision,current));
+    }
     public JSONObject memory(String command,JSONObject payload)throws Exception{
         dev.pocketengine.features.memory.ProjectMemoryNamespaces.rejectNamespaceArguments(payload);
         MemoryModule module=memory();JSONObject scope=ownerScope();host.synchronizeMemory(scope);

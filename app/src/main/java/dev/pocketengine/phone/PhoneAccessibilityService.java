@@ -85,13 +85,14 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     };
     private final Set<Object> captureHides = new HashSet<>();
     private LinearLayout controls;
+    private volatile View attachedOwnerControls;
     private TextView status;
     private PhoneOwnerControls.ViewState ownerStatusView;
     private Button pause;
     private android.widget.FrameLayout ownerActionSlot;
     private record RenderedOwnerAction(PhoneOwnerControls owner,PhoneOwnerControls.ViewState state,OwnerReturnButton hand){}
     private volatile RenderedOwnerAction renderedOwnerAction;
-    private RenderedOwnerAction submittingOwnerAction;
+    private volatile RenderedOwnerAction submittingOwnerAction;
     private volatile long ownerVisibilityVersion;
     private record FirstMainControl(RunControl control,java.util.function.BooleanSupplier current,
                                     java.util.function.Predicate<FirstMainScreenWindow> confirm){}
@@ -504,6 +505,10 @@ public final class PhoneAccessibilityService extends AccessibilityService {
             details.addView(watch);
             panel.addView(details);
             controls = panel;
+            panel.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(View view) { if(controls==view)attachedOwnerControls=view; }
+                @Override public void onViewDetachedFromWindow(View view) { if(attachedOwnerControls==view)attachedOwnerControls=null; }
+            });
             WindowManager.LayoutParams layout = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -689,6 +694,14 @@ public final class PhoneAccessibilityService extends AccessibilityService {
                 inAppStopOwner!=null&&SystemClock.uptimeMillis()<inAppStopUntil;
         return mountedForReturn&&original.ownerPausedAt(revision)?shown.state().displayHandle():null;
     }
+    /** Capture the actual installed action on main; the store fence uses only its volatile identity. */
+    public java.util.function.BooleanSupplier retainedMainPauseMount(RunControl original,long revision,long scope,String handle) {
+        if(handle==null||!handle.equals(mountedMainPauseHandle(original,revision,scope)))return null;
+        RenderedOwnerAction shown=renderedOwnerAction;View panel=controls;long version=ownerVisibilityVersion;
+        if(panel==null||attachedOwnerControls!=panel||shown==null)return null;
+        return ()->instance==this&&attachedOwnerControls==panel&&renderedOwnerAction==shown&&
+                ownerVisibilityVersion==version&&submittingOwnerAction==null;
+    }
     /** The Web host may replace the overlay only after observing an actionable
      * stop button for this exact run. This identity grants no control authority. */
     public RunControl.HostRunIdentity ownerStopSurfaceIdentity() {
@@ -776,7 +789,7 @@ public final class PhoneAccessibilityService extends AccessibilityService {
     private void removeControls(){clearOpeningControls();removeInstalledControls();}
     private void removeInstalledControls() {
         shownControlRead.clear();
-        ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;firstMainControl=null;ownerVisibilityVersion++;
+        attachedOwnerControls=null;ownerReturnButton=null;renderedOwnerAction=null;submittingOwnerAction=null;firstMainControl=null;ownerVisibilityVersion++;
         resultWatchOffer=null;submittingResultWatch=null;allowedResultWatch=null;resultWatchButton=null;
         ownerActionSlot=null;
         clearInAppStopSurface();

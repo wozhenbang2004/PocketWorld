@@ -1499,6 +1499,19 @@ public final class MemoryBook {
         JSONObject row=require(Scope.from(scope),id); // Reject out-of-scope IDs before any eligibility lookup.
         return inspectedRecord(row,activeInspection(System.currentTimeMillis()));
     }
+    /** Native Profile opt-in; reject a replacement revision before projecting any record body. */
+    synchronized JSONObject exactActivePersonalForOwner(String id,long revision,java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean())throw new SecurityException("原私人对话或草稿已变化");
+        Scope scope=Scope.from(ownerScopeValue());
+        JSONObject row=reviewedRecord(scope,id,revision);
+        if(!ownerPersonalRecord(scope,row))throw new SecurityException("不是当前本人的私人记忆");
+        ActiveInspection inspection=activeInspection(System.currentTimeMillis());
+        if(!inspection.active.contains(id)||!retrievalSourcesLive(row,new LinkedHashMap<>())||
+                recordExpiry(row,new HashSet<>())<=System.currentTimeMillis()||records.get(id)!=row||
+                row.getLong("revision")!=revision||!current.getAsBoolean())
+            throw new SecurityException("这条原版本暂不可读取，没有打开其他版本");
+        return inspectedRecord(row,inspection);
+    }
     /** Exact saved owner receipt only. Null proves retirement; other missing/unreadable records still fail. */
     synchronized JSONObject originalSavedPersonalRecord(String id,long savedRevision)throws Exception{
         if(!id.matches("[a-f0-9-]{36}")||savedRevision<1)throw new IllegalArgumentException("原个人记忆版本无效");

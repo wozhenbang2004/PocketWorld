@@ -264,6 +264,21 @@ public final class RunControl {
         java.util.Objects.requireNonNull(window);
         resumeWitnessedPause(revision,()->window.getAsBoolean()&&matchesDisplayedPause(handle,revision),policy);
     }
+    /** A local store commit on the shown owner pause. Never clear pause or signal the worker. */
+    public void recordAtDisplayedPause(long revision,String handle,java.util.function.BooleanSupplier window,NotifiedPausePolicy policy)throws Exception{
+        java.util.Objects.requireNonNull(window);java.util.Objects.requireNonNull(policy);check();
+        Thread caller=Thread.currentThread();AtomicBoolean available=new AtomicBoolean(true);boolean[] recorded={false};
+        try{policy.withOriginalScope((expiresAt,record)->{
+            if(Thread.currentThread()!=caller||!available.compareAndSet(true,false))throw new SecurityException("原暂停保存已失效");
+            synchronized(monitor){
+                if(expiresAt<=System.currentTimeMillis()||caller.isInterrupted()||!window.getAsBoolean()||!matchesDisplayedPause(handle,revision))
+                    throw new SecurityException("原主人暂停或窗口已变化，未保存补充");
+                AuthorityCheck admitted=executionAdmission;if(admitted!=null)admitted.check();
+                java.util.Objects.requireNonNull(record).enter();
+                recorded[0]=true;
+            }
+        });if(!recorded[0])throw new SecurityException("未收到原暂停的保存回执");}finally{available.set(false);}
+    }
     private void resumeWitnessedPause(long revision,java.util.function.BooleanSupplier current,NotifiedPausePolicy policy)throws Exception{
         java.util.Objects.requireNonNull(policy);check();Thread caller=Thread.currentThread();
         AtomicBoolean available=new AtomicBoolean(true);boolean[] resumed={false};

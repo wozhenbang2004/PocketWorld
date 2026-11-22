@@ -7,8 +7,9 @@ import { phoneRunIdentity } from './phone-start';
 type Row = Record<string, any>;
 type Original = { taskId: string; runId: string; epoch: number };
 type Pause = Original & { pauseRevision: number; scopeRevision: number };
-type Review = Pause & { reviewHandle: string; noteRecorded: boolean };
-type Draft = { target: Original; pause?: Pause; text: string };
+type Review = Pause & { reviewHandle: string; noteRecorded: boolean; stagedMain?: true; stagedEpoch?: number };
+type StagedPage = Pause & { key: string };
+type Draft = { target: Original; pause?: Pause; text: string; pageReturn?: StagedPage; savedReview?: string };
 export type MainPauseResume = {key:string;current:()=>boolean;submit:(trigger:HTMLButtonElement)=>Promise<unknown>|undefined;
   leavePage?:(trigger:HTMLButtonElement)=>Promise<unknown>|undefined};
 type ResumeFeedback = {current:()=>boolean;phase:'pending'|'accepted'|'unknown'};
@@ -48,6 +49,7 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, p
   const id=phoneRunIdentity(task), [draft,setDraft]=useState<Draft|null>(null), [review,setReview]=useState<Review|null>(null);
   const [busy,setBusy]=useState(false), [error,setError]=useState(''), [notice,setNotice]=useState(''), [expanded,setExpanded]=useState(false);
   const [resumeFeedback,setResumeFeedback]=useState<ResumeFeedback>();
+  const [stagedNote,setStagedNote]=useState<StagedPage>();
   const attemptedPlainPause=useRef('');
   const paused=task.status==='paused'&&livePause&&!interrupted;
   const life=useRef(true), flight=useRef(false), ticket=useRef(0), info=useRef({id,visible,paused,interrupted}); info.current={id,visible,paused,interrupted};
@@ -64,38 +66,79 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, p
   },[visible]);
   const origin=(target:Original)=>life.current && info.current.visible && !info.current.interrupted && !document.hidden && same(info.current.id,target);
   const draftElsewhere=!!draft && !same(draft.target,id);
-  const ready=!!review && !!draft && !!draft.pause && samePause(review,draft.pause) && !review.noteRecorded && same(review,id) && paused;
+  const phoneLink=task.raw?.conversationPhoneLink;
+  const liveStage=():StagedPage|undefined=>{
+    if(!id||!plainMainResume?.leavePage||phoneLink?.taskId!==task.id||typeof phoneLink?.conversationId!=='string'||!phoneLink.conversationId||
+       attemptedPlainPause.current===plainMainResume.key||!plainMainResume.current())return;
+    const native=bridge.getState(), page=(native.view as Row|undefined)?.mainPausePageReturn;
+    if(!native.capabilities.commands.includes('phone.pauseNote.save')||page?.taskId!==id.taskId||page.runId!==id.runId||page.epoch!==id.epoch||
+       !Number.isSafeInteger(page.pauseRevision)||page.pauseRevision<1||!Number.isSafeInteger(page.scopeRevision)||page.scopeRevision<1||
+       typeof page.displayHandle!=='string'||plainMainResume.key!==JSON.stringify([id.taskId,id.runId,id.epoch,page.displayHandle]))return;
+    return {...id,key:plainMainResume.key,pauseRevision:page.pauseRevision,scopeRevision:page.scopeRevision};
+  };
+  const stage=liveStage();
+  // Android may renew the Work window while this panel stays mounted. The old command closure
+  // is not retained. Only a fresh stage with the same native key and pause/scope can recheck.
+  const samePageReturn=(page:StagedPage)=>{
+    const now=liveStage();return !!now&&now.key===page.key&&samePause(now,page);
+  };
+  const ready=!!review && !!draft && !!draft.pause && samePause(review,draft.pause) && !review.noteRecorded && same(review,id) && paused &&
+    (!draft.pageReturn || !draft.savedReview && review.stagedMain===true && review.stagedEpoch===bridge.getDocumentEpoch() && samePageReturn(draft.pageReturn));
+  const noteSaved=(page:StagedPage)=>{
+    input.current=null;setDraft(null);setReview(null);setExpanded(false);setStagedNote(page);setNotice('');
+  };
   const read=async()=>{
     if(!id || flight.current || !origin(id) || !paused || draftElsewhere)return;
+    const old=input.current;
+    const next:Draft=old??{target:id,text:'',pageReturn:liveStage()};
+    const page=next.pageReturn, spent=next.savedReview;
+    if(page&&!samePageReturn(page)){setError('原主屏暂停或控制条暂不能核对。补充仍在这里，没有继续。');return}
     const original=id, serial=++ticket.current, epoch=bridge.getDocumentEpoch();
     flight.current=true;setBusy(true);setExpanded(true);setReview(null);setError('');setNotice('');
-    if(!input.current){const next={target:original,text:''};input.current=next;setDraft(next)}
+    if(!old){input.current=next;setDraft(next)}
     const accepts=()=>serial===ticket.current && origin(original) && info.current.paused && bridge.getDocumentEpoch()===epoch;
     try {
-      const r=await run('phone.pauseNote.read',original);
+      const r=await run('phone.pauseNote.read',page?{...original,stagedMain:true,...(spent?{savedReview:spent}:{})}:original);
       if(!accepts())return;
       if(!same(r,original)||!r.reviewHandle||!Number.isSafeInteger(r.pauseRevision)||r.pauseRevision<1||!Number.isSafeInteger(r.scopeRevision)||r.scopeRevision<1||typeof r.noteRecorded!=='boolean')throw Error('未取得这次暂停和原授权范围的完整记录。');
       const old=input.current;
       if(!old||!same(old.target,original))return;
       if(old.pause&&!samePause(old.pause,r)&&old.text.trim())throw Error('暂停或授权范围已变化。原稿还在这里，没有转交给下一次执行。');
-      const next={...old,pause:{...original,pauseRevision:r.pauseRevision,scopeRevision:r.scopeRevision}};
-      input.current=next;setDraft(next);setReview(r);
-      if(r.noteRecorded)setNotice('这次暂停已记录过补充，不会再次添加。可在原任务核对状态，或使用普通继续。');
+      if(page&&(!samePageReturn(page)||!samePause(page,r)||r.stagedMain!==true))throw Error('原主屏暂停和控制条暂不能核对。补充仍在这里，没有继续。');
+      if(page&&spent){
+        if(old.savedReview!==spent||!old.pause||!samePause(old.pause,r)||typeof r.saveRecorded!=='boolean')
+          throw Error('没有核对到原保存。补充仍在，请勿重复提交。');
+        if(r.saveRecorded===true&&r.noteRecorded){noteSaved(page);return}
+        if(r.saveRecorded!==false||r.noteRecorded)
+          throw Error('没有核对到这份补充的原保存。这次暂停已有记录，本页文字仍保留。');
+      }
+      const next={...old,savedReview:undefined,pause:{...original,pauseRevision:r.pauseRevision,scopeRevision:r.scopeRevision}};
+      input.current=next;setDraft(next);setReview(page?{...r,stagedEpoch:epoch}:r);
+      if(r.noteRecorded)setNotice(page?'这次暂停已有补充，不会覆盖或再次添加。':'这次暂停已记录过补充，不会再次添加。可在原任务核对状态，或使用普通继续。');
     }catch(failure){if(accepts())setError(failure instanceof Error?failure.message:'未取得原暂停，草稿仍在。')}
     finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
   };
   const send=async()=>{
     const original=review, pending=input.current, note=pending?.text.trim()||'';
     if(!original||!pending||!pending.pause||!samePause(original,pending.pause)||!origin(original)||!info.current.paused||!ready||flight.current||!note||note.length>8000)return;
+    const page=pending.pageReturn;
+    if(page&&(!samePageReturn(page)||pending.savedReview||original.stagedMain!==true||original.stagedEpoch!==bridge.getDocumentEpoch()))return;
     const serial=++ticket.current, epoch=bridge.getDocumentEpoch();flight.current=true;setBusy(true);setReview(null);setError('');setNotice('');
+    if(page){const next={...pending,savedReview:original.reviewHandle};input.current=next;setDraft(next)}
     const accepts=()=>serial===ticket.current && origin(original) && bridge.getDocumentEpoch()===epoch;
     try {
-      const r=await run('phone.pauseNote.continue',{...pending.target,reviewHandle:original.reviewHandle,confirmed:true,note});
+      const r=await run(page?'phone.pauseNote.save':'phone.pauseNote.continue',{...pending.target,reviewHandle:original.reviewHandle,confirmed:true,note});
       if(!accepts())return;
+      if(page){
+        if(!samePageReturn(page)||!samePause(original,r)||r.stagedMain!==true||r.noteRecorded!==true||r.saveRecorded!==true||r.resumeRequested!==false)
+          throw Error('未核对到本次保存回执；请重新核对这次暂停。');
+        noteSaved(page);return;
+      }
       if(!samePause(original,r)||r.noteRecorded!==true||r.continuedOriginalRun!==true||r.budgetIncreased!==false||r.modelConsumptionConfirmed!==false)throw Error('没有取得这次补充和原执行的完整回执。');
       input.current=null;setDraft(null);setExpanded(false);
       setNotice('补充已记入，原执行已恢复。模型是否已读到，要等下一轮；这不是任务完成回执。');
-    }catch(failure){if(accepts())setError((failure instanceof Error?failure.message:'补充或恢复结果待核对')+'。原稿保留；请先核对这次暂停，不要重复提交。')}
+    }catch(failure){if(accepts())setError(page?'本次保存尚未核实。原稿保留；请核对这次暂停，不要重复保存。':
+      (failure instanceof Error?failure.message:'补充或恢复结果待核对')+'。原稿保留；请先核对这次暂停，不要重复提交。')}
     finally{if(life.current&&serial===ticket.current){flight.current=false;setBusy(false)}}
   };
   const continueWithoutNote=async(trigger:HTMLButtonElement)=>{
@@ -136,23 +179,29 @@ export function PhonePauseInstruction({ task, visible, livePause, interrupted, p
   const discard=()=>{if(busy)return;input.current=null;setDraft(null);setReview(null);setError('');setNotice('');setExpanded(false)};
   const plainFeedback=visible&&resumeFeedback?.current()?resumeFeedback.phase:undefined;
   const offerPlain=paused&&visible&&plainMainResume&&!draft?.text&&attemptedPlainPause.current!==plainMainResume.key;
+  const stagedInTask=paused&&visible&&!!stagedNote&&same(stagedNote,id)&&(!plainMainResume||stagedNote.key===plainMainResume.key);
+  const stagedHere=!!stagedNote&&stagedInTask&&samePageReturn(stagedNote);
   if(!id||!isPrivateLocalPhone(task)||(!paused&&!draft&&(!notice||interrupted)&&!plainFeedback))return null;
   return <section className="pw-work-supplement" aria-label={plainMainResume||plainFeedback?'本次手机任务的暂停操作':'本次本机任务补充'}>
     {!expanded?<>
-      {offerPlain&&<Button variant="primary" disabled={busy} aria-description="仍使用手机主屏，不会替你打开应用或另开一轮。" onClick={event=>void continueWithoutNote(event.currentTarget)}>继续这次暂停</Button>}
-      {offerPlain&&plainMainResume?.leavePage&&<>
-        <Button variant="secondary" disabled={busy} onClick={event=>void leaveBeforeContinuing(event.currentTarget)}>先切回手机页面</Button>
+      {offerPlain&&!stagedInTask&&<Button variant="primary" disabled={busy} aria-description="仍使用手机主屏，不会替你打开应用或另开一轮。" onClick={event=>void continueWithoutNote(event.currentTarget)}>继续这次暂停</Button>}
+      {stagedHere&&<p role="status">补充已保存到这次暂停，任务没有从这里继续。</p>}
+      {offerPlain&&(!stagedInTask||stagedHere)&&plainMainResume?.leavePage&&<>
+        <Button variant={stagedHere?'primary':'secondary'} disabled={busy} onClick={event=>void leaveBeforeContinuing(event.currentTarget)}>先切回手机页面</Button>
         <p className="pw-field-hint">先离开 PocketWorld，不继续执行。到你要用的页面后，再点任务控制条的「继续这次暂停」。</p>
       </>}
-      {paused&&<Button variant="secondary" leadingIcon={IconEdit} disabled={!visible||busy} onClick={()=>{setExpanded(true);if(!draftElsewhere)void read()}}>{draft?.text?'打开本次补充草稿':'补充后继续…'}</Button>}
+      {offerPlain&&stagedHere&&plainMainResume?.leavePage&&<Button variant="secondary" disabled={busy}
+        aria-description="可能立即重新观察当前主屏，不会先切回刚才的页面。" onClick={event=>void continueWithoutNote(event.currentTarget)}>普通继续（当前主屏）</Button>}
+      {stagedInTask&&!stagedHere&&<p className="pw-field-hint">原主屏暂停或控制条暂不能核对，没有切换或继续。</p>}
+      {paused&&!stagedInTask&&<Button variant="secondary" leadingIcon={IconEdit} disabled={!visible||busy} onClick={()=>{setExpanded(true);if(!draftElsewhere)void read()}}>{draft?.text?'打开本次补充草稿':stage?'补充这次任务…':'补充后继续…'}</Button>}
       {!paused&&draft&&<Button variant="ghost" onClick={()=>setExpanded(true)}>查看未确认的补充草稿</Button>}
     </>:<>
-      <h4>{paused?'补充后继续':'未确认的补充草稿'}</h4>
-      <p className="pw-field-hint">{paused?'只给这次已暂停的本机任务及其模型。本来的可用应用、权限、额度和截止时间不变。写字不会恢复任务。':'原稿仍在本页。没有可提交的原暂停，也没有将它带入其他轮次。'}</p>
-      <TextAreaField label="给本次执行补充什么？" value={draft?.text||''} onChange={value=>{const old=input.current;if(!old||busy)return;const next={...old,text:value};input.current=next;setDraft(next)}} maxLength={8000} rows={3} showCount isDisabled={busy||draftElsewhere||!paused||!draft?.pause}/>
+      <h4>{paused?draft?.pageReturn?'补充这次主屏任务':'补充后继续':'未确认的补充草稿'}</h4>
+      <p className="pw-field-hint">{paused?(draft?.pageReturn?'补充会保存在这次暂停，保存不会继续任务。切回你要用的页面后，再点任务控制条继续；原模型随后才可能读到补充。':'只给这次已暂停的本机任务及其模型。本来的可用应用、权限、额度和截止时间不变。写字不会恢复任务。'):'原稿仍在本页。没有可提交的原暂停，也没有将它带入其他轮次。'}</p>
+      <TextAreaField label="给本次执行补充什么？" value={draft?.text||''} onChange={value=>{const old=input.current;if(!old||busy||old.pageReturn&&(flight.current||old.savedReview))return;const next={...old,text:value};input.current=next;setDraft(next)}} maxLength={8000} rows={3} showCount isDisabled={busy||draftElsewhere||!paused||!draft?.pause||!!draft.savedReview}/>
       {draftElsewhere&&paused&&<p role="status">原执行已变化，草稿没有转交给新执行。</p>}
       <div className="pw-action-row">
-        {ready&&<Button variant="primary" disabled={busy||!visible||!draft?.text.trim()} onClick={()=>void send()}>提交补充并继续原执行</Button>}
+        {ready&&<Button key={draft?.pageReturn?'save-note':'continue-with-note'} variant="primary" disabled={busy||!visible||!draft?.text.trim()} onClick={()=>void send()}>{draft?.pageReturn?'保存补充':'提交补充并继续原执行'}</Button>}
         {!ready&&paused&&!draftElsewhere&&<Button variant="secondary" leadingIcon={IconRefresh} disabled={busy||!visible} onClick={()=>void read()}>核对这次暂停</Button>}
         <Button variant="ghost" disabled={busy} onClick={()=>setExpanded(false)}>收起</Button>
         {draft&&<Button variant="ghost" disabled={busy} onClick={discard}>舍弃本页草稿</Button>}

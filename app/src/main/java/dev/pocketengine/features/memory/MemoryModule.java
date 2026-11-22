@@ -133,6 +133,10 @@ public final class MemoryModule implements EngineModule {
     public JSONArray sourceRefsForSynchronization(JSONObject authenticatedScope)throws Exception {
         return book.sourceRefsForSynchronization(authenticatedScope);
     }
+    /** Native owner Profile only; not a module/model command. */
+    public JSONObject exactActivePersonalForOwner(String id,long revision,java.util.function.BooleanSupplier current)throws Exception{
+        return book.exactActivePersonalForOwner(id,revision,current);
+    }
     /** Host-only lookup for an already verified original saved personal receipt. */
     JSONObject originalSavedPersonalRecord(String id,long savedRevision)throws Exception {
         return book.originalSavedPersonalRecord(id,savedRevision);

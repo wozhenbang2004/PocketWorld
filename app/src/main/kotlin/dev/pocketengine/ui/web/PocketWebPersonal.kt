@@ -89,7 +89,9 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
         )
     }
 
-    fun dispatch(action: String, args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+    internal data class ExactMemoryRead(val revision: Long, val current: () -> Boolean, val beforeBody: () -> Boolean)
+
+    fun dispatch(action: String, args: JSONObject, exact: ExactMemoryRead? = null, done: (JSONObject?, String?) -> Unit) {
         check(if (action == "profile.identity") controller.webUiCanInteract() else controller.webPrivateOwnerVisible()) { "请在原本机窗口打开个人资料" }
         if (action.startsWith("profile.avatar.")) { avatar.dispatch(action, args, done); return }
         when (action) {
@@ -125,18 +127,32 @@ internal class PocketWebPersonal(private val controller: PocketWorldController) 
                 }
             }
             "profile.memory.get" -> {
-                fields(args, "id", "candidate")
+                if (exact == null) fields(args, "id", "candidate")
+                else fields(args, "id", "candidate", "expectedRevision", "originalConversation")
                 require(args.opt("candidate") is Boolean) { "请选择正式记忆或待确认内容" }
                 val candidate = args.getBoolean("candidate")
-                callMemory(if (candidate) "getCandidate" else "get", JSONObject().put("id", text(args, "id")), null, done) { result ->
+                val id = text(args, "id")
+                val project: (JSONObject) -> JSONObject = { result ->
                     val original = JSONObject().put("candidate", candidate)
                         .put(if (candidate) "candidateRecord" else "record", result.getJSONObject(if (candidate) "candidate" else "record"))
+                    if (exact != null) check(!candidate && exact.current() && row(original).let {
+                        it.opt("id") == id && it.optLong("revision", -1) == exact.revision && it.opt("active") == true
+                    }) { "原私人对话或记忆版本已变化，没有打开其他内容" }
                     result.optJSONArray("relatedRecords")?.let { original.put("relatedRecords", it) }
                     if (!candidate) {
                         val now = System.currentTimeMillis()
                         result.put("canReviewShorterTerm", canReviewShorterTerm(row(original), now - now % 60_000L + 60_000L, now))
                     }
                     result.put("readHandle", pin(reads, original)).put("candidateSelected", candidate)
+                }
+                if (exact == null) callMemory(if (candidate) "getCandidate" else "get", JSONObject().put("id", id), null, done, project)
+                else {
+                    check(!candidate && exact.current()) { "请回原私人对话核对这条记忆" }
+                    val request = generation
+                    controller.requestExactActivePersonalMemory(id, exact.revision, { request == generation && exact.current() },
+                        { request == generation && exact.beforeBody() }) { value, error ->
+                        complete(request, value, error, done, project)
+                    }
                 }
             }
             "profile.memory.createReview" -> {

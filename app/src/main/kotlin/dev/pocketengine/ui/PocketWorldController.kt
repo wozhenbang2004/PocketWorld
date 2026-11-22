@@ -674,6 +674,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(activity.moveTaskToBack(true)) { "PocketWorld 未切回。可用安卓最近任务手动切换；没有从这里继续。" }
         return expected.view().put("leftPocketWorld", true).put("resumeRequested", false)
     }
+    internal fun stagedMainPhonePauseNote(expected: MainPausePageReturn, review: String?, note: String?,
+                                         current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val id = expected.taskId; val run = expected.runId; val epoch = expected.epoch
+        check(current() && mainPausePageReturn(id) == expected) { "原主屏暂停和控制条已变化" }
+        val original = app.retainedMainPauseForPageReturn(id, run, epoch) ?: error("原主屏控制已失效")
+        val mount = dev.pocketengine.phone.PhoneAccessibilityService.get()
+            ?.retainedMainPauseMount(original, expected.pauseRevision, expected.scopeRevision, expected.displayHandle)
+            ?: error("原任务控制条暂不可核对")
+        val surface = original.surfaceRevision()
+        // Used under TaskStore: do not re-enter Compose, A11y views or the Engine monitor.
+        fun valid() = current() && mount.asBoolean && app.retainsShownPhoneControl(id, original) &&
+            original.phoneSurfaceActive() && original.surfaceRevision() == surface && !original.isCancelled()
+        check(valid()) { "原主屏暂停窗口已变化" }
+        try { controls.execute {
+            val result = runCatching { app.stagedMainPhonePauseNote(id, run, epoch, original, expected.pauseRevision,
+                expected.scopeRevision, expected.displayHandle, review, note, ::valid) }
+            main.post {
+                if (!current() || !webPrivateOwnerVisible()) done(null, "原窗口已变化，请回这次暂停核对保存记录；不要重复提交")
+                else result.fold({ done(it, null) }, { done(null, message(it)) })
+            }
+        } } catch (failure: Exception) { done(null, message(failure)) }
+    }
 
     /** The task journal is owner-private, not searchable through a selected project memory namespace. */
     internal fun webPrivateTaskJournalSelected() = webPrivateOwnerVisible() && ownerDomain == "memoryReview" && memoryReviewScope == MemoryReviewScope.Private
@@ -764,6 +786,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
                 else -> throw IllegalArgumentException("未知个人资料操作")
             }
+        }
+    }
+
+    internal fun requestExactActivePersonalMemory(id: String, revision: Long, current: () -> Boolean,
+                                                 beforeBody: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        requestPersonalOwner(current, done) {
+            app.nativeOwnerWorkflows.exactActivePersonalMemory(id, revision, java.util.function.BooleanSupplier { beforeBody() })
         }
     }
 

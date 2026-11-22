@@ -12,8 +12,14 @@ import {originalMemoryWindow} from './OriginalSavedMemory';
 type Data = Record<string, any>;
 type SourceCursor = { index: number; offset: number; previous: number[] };
 type RevisedVersion = { id: string; originalRevision: number; currentRevision: number };
-type CurrentRead = { status: 'read' | 'not_available'; text?: string; expires: number };
 type ReadingVisit = { presentation: string; evidence: string };
+type CurrentRead = { expires: number } & (
+  { status: 'read'; text: string; target: RevisedVersion; visit: ReadingVisit; ticket: number }
+  | { status: 'not_available' });
+export type CurrentProvidedMemoryTarget = RevisedVersion & {
+  expires: number;
+  taskId: string; runId: string; requestId: string; answerId: string; receiptId: string; coordinatorEpoch: number;
+};
 const rows = (value: any): Data[] => Array.isArray(value) ? value : [];
 const statusLabel = (status: string) => ({ current: '当前仍有效', record_changed: '这条记忆后来已修改', record_removed: '这条记忆已删除', source_forgotten: '原来源已遗忘', superseded: '已被新记忆替代', expired: '已到期', revoked: '原引用已撤回', run_changed: '原执行已变化' } as Record<string, string>)[status] || '原版本当前不可读';
 const selectionReason = (row: Data) => row.selectionReason==='task_query_match'?'当时与原问题相关':
@@ -28,9 +34,10 @@ const answerPresentation = () => {
 };
 
 /** Uses the original answer's native request receipt, with the existing bounded source reader. */
-export function ProvidedMemories({ messageId, revision, history, onClose, onCloseAutoFocus, onManage, registerBack }: {
+export function ProvidedMemories({ messageId, revision, history, onClose, onCloseAutoFocus, onManage, onManageCurrent, registerBack }: {
   messageId: string; revision: number; history?: HistoricalAnswerSource; onClose: () => void;
   onManage?: (original?: {id:string;revision:number}) => void; onCloseAutoFocus?: (event:Event) => void;
+  onManageCurrent?: (target:CurrentProvidedMemoryTarget) => boolean;
   registerBack: (handler: (() => boolean) | null) => void;
 }) {
   const [receipt, setReceipt] = useState<Data | null>(null), [selection, setSelected] = useState<Data | null>(null);
@@ -66,7 +73,7 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
   }, [clearReading]);
   const readCurrentVersion=useCallback(async (original:Data,row:Data,version:number)=>{
     const target=revised(row), visit=readWindow.current;
-    if(!target||!session.current||!sameWindow(visit)||original.answerReadExpiresAt<=Date.now()||!bridge.getState().capabilities.commands.includes('taskMemory.currentRevision'))return;
+    if(!target||!visit||!session.current||!sameWindow(visit)||original.answerReadExpiresAt<=Date.now()||!bridge.getState().capabilities.commands.includes('taskMemory.currentRevision'))return;
     reading.current=version;
     const current=()=>generation.current===version&&sameWindow(visit)&&original.answerReadExpiresAt>Date.now();
     setSelected(row); setCurrentRead(null); setBusy(true); setError('');
@@ -77,7 +84,9 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
         !proofKeys.every(key=>result.original?.[key]===original[key])||result.id!==target.id||result.originalRevision!==target.originalRevision||result.currentRevision!==target.currentRevision||
         !Number.isSafeInteger(result.readExpiresAt)||result.readExpiresAt<=Date.now()||result.readExpiresAt>original.answerReadExpiresAt||
         (result.status==='read'?typeof result.text!=='string'||!result.text.trim()||result.text.length>4000:result.status!=='not_available'||result.text!==undefined))throw new Error();
-      setCurrentRead({status:result.status,expires:result.readExpiresAt,text:result.text});
+      setCurrentRead(result.status==='read'
+        ? {status:'read',expires:result.readExpiresAt,text:result.text,target,visit,ticket:version}
+        : {status:'not_available',expires:result.readExpiresAt});
     }catch{if(current())setError('没能核对这条记忆的所选版本。请重新核对原回执；没有显示其他版本。');}
     finally{if(reading.current===version)reading.current=null;if(current())setBusy(false);}
   },[sameWindow]);
@@ -171,6 +180,16 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
   const personalCurrent=!history&&canCorrectProvided(receipt,selected);
   const canCorrect = personalCurrent && correctionSupported;
   const canManage = !!onManage && personalCurrent && commands.includes('profile.memory.get');
+  const currentManagementTarget=():CurrentProvidedMemoryTarget|undefined=>{
+    if(!onManageCurrent||history||!provided||receipt?.status!=='invalidated'||receipt.ownerId!=='owner'||receipt.spaceId!=='private'||
+      'memoryNamespace'in receipt||!selectedLater||currentRead?.status!=='read'||currentRead.expires<=Date.now()||
+      currentRead.ticket!==generation.current||!sameWindow(currentRead.visit)||!bridge.getState().capabilities.commands.includes('profile.memory.get'))return;
+    const {target,expires}=currentRead, {taskId,runId,requestId,answerId,receiptId,coordinatorEpoch}=receipt;
+    if(target.id!==selectedLater.id||target.originalRevision!==selectedLater.originalRevision||target.currentRevision!==selectedLater.currentRevision||
+      ![taskId,runId,requestId,answerId,receiptId].every(value=>typeof value==='string'&&!!value)||
+      !Number.isSafeInteger(coordinatorEpoch)||coordinatorEpoch<0)return;
+    return {...target,expires,taskId,runId,requestId,answerId,receiptId,coordinatorEpoch};
+  };
   const preferenceReason = selected && selected.layer==='preference' && personalCurrent ? selectionReason(selected) : undefined;
   const attended=attention.current;
   const finishCorrection=(result:AnswerMemoryCorrectionOutcome)=>{
@@ -212,7 +231,11 @@ export function ProvidedMemories({ messageId, revision, history, onClose, onClos
         </>}
         {selectedLater&&currentRead?.status==='read'&&currentRead.expires>Date.now()&&<section className="pw-source-record"><h3>目前保存 · 第 {selectedLater.currentRevision} 版</h3>
           <p className="pw-source-copy" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{currentRead.text}</p>
-          <p className="pw-muted">这不是原回答收到的内容。后来哪一轮实际收到哪一版，要看那条回答自己的「本次记忆」。</p></section>}
+          <p className="pw-muted">这不是原回答收到的内容。后来哪一轮实际收到哪一版，要看那条回答自己的「本次记忆」。</p>
+          {currentManagementTarget()&&<div className="pw-action-row"><Button variant="ghost" size="small" disabled={busy} onClick={()=>{
+            const target=currentManagementTarget();if(!busy&&target&&!onManageCurrent?.(target))
+              setError('原回答或草稿尚未核对，未打开其他记忆。请回原回复后再试。');
+          }}>管理这条记忆</Button></div>}</section>}
         {selectedLater&&currentRead?.status==='not_available'&&<p className="pw-muted" role="status">第 {selectedLater.currentRevision} 版目前不在可用范围，未显示旧版或新版正文。</p>}
         {selected && !selectedLater && <>
           <p className="pw-source-copy" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{selected.text}</p>

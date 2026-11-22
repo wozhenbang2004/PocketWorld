@@ -2490,6 +2490,19 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!original.phoneSurfaceActive())throw new SecurityException("请先回原任务交还手机执行");
         return tasks.reviewOrSavePrivatePhonePauseNote(id,run,epoch,original,original.pauseRevision(),-1,null);
     }
+    /** Same live original, and a local write or bodyless check only; no launch, wake or read of a phone. */
+    public JSONObject stagedMainPhonePauseNote(String id,String run,int epoch,RunControl original,long pause,long scope,String shown,
+            String review,String note,java.util.function.BooleanSupplier current)throws Exception {
+        if(original==null||!current.getAsBoolean()||retainedMainPauseForPageReturn(id,run,epoch)!=original)
+            throw new SecurityException("原主屏暂停和控制条已变化");
+        if(note==null){
+            original.check();return tasks.reviewStagedMainPauseNote(id,run,epoch,original,pause,scope,review,current);
+        }
+        original.recordAtDisplayedPause(pause,shown,current,commit->
+                tasks.saveStagedMainPauseNote(id,run,epoch,original,pause,scope,review,note,current,commit));
+        return json("taskId",id,"runId",run,"epoch",epoch,"pauseRevision",pause,"scopeRevision",scope,
+                "noteRecorded",true,"stagedMain",true,"saveRecorded",true,"resumeRequested",false);
+    }
     /** Never enter continuePhoneTask's cold-start/new-attempt branch. The note is NOT an authority grant. */
     public JSONObject continuePrivatePhonePauseWithNote(String id,String run,int epoch,long pause,long scope,String note,java.util.function.BooleanSupplier ownerWindow)throws Exception {
         if(pause<1||scope<1||note==null||note.trim().isEmpty()||ownerWindow==null)throw new IllegalArgumentException("请先核对这次暂停和补充");

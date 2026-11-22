@@ -15009,6 +15009,68 @@ public final class TaskStore {
                     .put("scopeRevision",scopeRevision).put("noteRecorded",recorded||saving);
         }finally{if(saving)db.endTransaction();}
     }
+    /** Call only within the read or save transaction shared with ConversationRepository. */
+    private JSONObject requireStagedMainPauseNote(String id,String run,int epoch,RunControl original,long pause,long scope)throws Exception {
+        if(epoch!=1||scope<1||notificationResumeScope(id,run,epoch,original,pause)!=scope)
+            throw new SecurityException("本次主屏暂停或范围已变化");
+        JSONObject task=originalPhoneAttempt(id,run,epoch,true),first=task.optJSONObject(FIRST_MAIN_SCREEN);
+        JSONObject observation=first==null?null:first.optJSONObject("observation");
+        if(!"main_screen".equals(task.opt("executionMode"))||first==null||!FIRST_MAIN_FORMAT.equals(first.opt("format"))||
+                !id.equals(first.opt("taskId"))||!run.equals(first.opt("runId"))||first.optInt("epoch",-1)!=epoch||
+                !"observed".equals(first.opt("phase"))||observation==null||!run.equals(observation.opt("runId"))||
+                observation.optInt("displayId",-1)!=0||!Boolean.TRUE.equals(observation.opt("structureOnly")))
+            throw new SecurityException("尚不能核对同一次已经读取过的原主屏暂停");
+        conversationRepository.requirePhoneHandoffSource(ConversationPhoneHandoff.association(task).getJSONObject("source"));
+        return task;
+    }
+    private static String mainPauseNoteMarker(String review)throws Exception {
+        if(review==null||!review.matches("[a-f0-9-]{36}"))throw new SecurityException("缺少原暂停保存身份");
+        return capabilityFingerprint(new JSONObject().put("kind","staged_main_pause_note").put("review",review));
+    }
+    private static boolean samePhonePauseNote(JSONObject note,String run,int epoch,long pause) {
+        return note!=null&&run.equals(note.opt("runId"))&&epoch==note.optInt("epoch",-1)&&pause==note.optLong("pauseRevision",-1);
+    }
+    /** Admit a separate one-use, local-only write under this original pause; no permission or run state changes. */
+    public synchronized void saveStagedMainPauseNote(String id,String run,int epoch,RunControl original,long pause,long scope,
+            String review,String note,java.util.function.BooleanSupplier current,RunControl.StoredPauseCommit commit)throws Exception {
+        String text=note.trim(),marker=mainPauseNoteMarker(review);
+        if(text.isEmpty()||text.length()>8000||text.indexOf(0)>=0)throw new IllegalArgumentException("补充须为 1 至 8000 字的文字");
+        String digest=capabilityFingerprint(new JSONObject().put("note",text));
+        JSONObject before=grant(run);
+        if(before==null)throw new SecurityException("原主屏执行范围已失效");
+        // Pre-fence only. The actual source, scope, deadline and absence of a saved note are all checked in the write below.
+        commit.afterRecorded(before.getLong("expiresAt"),()->{
+            db.beginTransaction();try{
+                if(!current.getAsBoolean()||original.isCancelled())throw new SecurityException("原主屏暂停窗口已变化");
+                JSONObject task=requireStagedMainPauseNote(id,run,epoch,original,pause,scope);
+                JSONObject prior=task.optJSONObject("_localPhonePauseInput");
+                if(samePhonePauseNote(prior,run,epoch,pause))throw new SecurityException("原暂停已有补充，不覆盖或重复保存");
+                long expires=Math.min(grant(run).getLong("expiresAt"),TaskExecutionScope.effectiveDeadline(task.getJSONObject("executionScope")));
+                if(expires<=System.currentTimeMillis())throw new SecurityException("原主屏暂停期限已变化");
+                requireExecutionEnabled();OwnerExecutionPolicy.requireRevision(ownerExecutionState(),task.getLong("executionAdmissionRevision"));
+                write(task.put("_localPhonePauseInput",new JSONObject().put("runId",run).put("epoch",epoch).put("pauseRevision",pause)
+                        .put("scopeRevision",scope).put("digest",digest).put("text",text).put("mainSaveMarker",marker)));
+                if(expires<=System.currentTimeMillis()||!current.getAsBoolean()||original.isCancelled())
+                    throw new SecurityException("原主屏暂停窗口或期限已变化");
+                db.setTransactionSuccessful();
+            }finally{db.endTransaction();}
+        });
+    }
+    /** Bodyless read-back for this same live displayed pause; the spent review is not a resume or read authority. */
+    public synchronized JSONObject reviewStagedMainPauseNote(String id,String run,int epoch,RunControl original,long pause,long scope,
+            String priorReview,java.util.function.BooleanSupplier current)throws Exception {
+        if(!current.getAsBoolean())throw new SecurityException("原主屏暂停窗口已变化");
+        db.beginTransactionNonExclusive();try{
+            if(!current.getAsBoolean())throw new SecurityException("原主屏暂停窗口已变化");
+            JSONObject task=requireStagedMainPauseNote(id,run,epoch,original,pause,scope),note=task.optJSONObject("_localPhonePauseInput");
+            boolean recorded=samePhonePauseNote(note,run,epoch,pause);
+            JSONObject result=new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch).put("pauseRevision",pause)
+                    .put("scopeRevision",scope).put("noteRecorded",recorded).put("stagedMain",true);
+            if(priorReview!=null)result.put("saveRecorded",recorded&&scope==note.optLong("scopeRevision",-1)&&mainPauseNoteMarker(priorReview).equals(note.opt("mainSaveMarker")));
+            if(!current.getAsBoolean()||!original.ownerPausedAt(pause))throw new SecurityException("原主屏暂停窗口已变化");
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
+    }
     /** Ordinary displayed/notification resume is available only for a plain private owner pause, not a pending
      * decision, handback, uncertain effect or changed permission. This projection never writes a note. */
     public synchronized long notificationResumeScope(String id,String run,int epoch,RunControl original,long pause)throws Exception{

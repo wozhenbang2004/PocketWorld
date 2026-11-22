@@ -191,6 +191,23 @@ const originalWorkTeamResult = (reading:Data|null, source:WorkTeamResultSource) 
   if(newerTeamReading(reading.run,live))return;
   const result=teamResultReading(reading.run,reading.messages);return result.original?result.messageId:undefined;
 };
+// A one-off roster has no saved definition. Only the current native answer
+// reading may anchor this Result visit; the saved-roster child audit stays separate.
+const reportedTemporaryWorkIdentity = (reading:Data|null,source:WorkTeamResultSource) => {
+  if(reading?.currentCompletedTemporaryAnswersSource!==true||!classicAnswerOwner(reading,true)||
+     !matchesWorkTeamResult(source,reading.ownerWorkLink)||!Array.isArray(reading.attention)||reading.attention.length)return;
+  const run=reading.run,roster=rows(run.members);
+  if(run.definitionKind!=='one_time'||run.operationId!==source.teamRunId||run.summaryStale!==false||
+     !Number.isSafeInteger(run.generation)||run.generation<0||!Number.isSafeInteger(run.revision)||run.revision<1||
+     roster.length!==2||roster[0]?.id===roster[1]?.id||
+     !roster.every(slot=>label(slot?.id)&&slot.runner==='model'&&slot.device==='phone'&&
+       slot.status==='completed'&&slot.exited!==true&&slot.paused!==true&&Number.isSafeInteger(slot.generation)&&slot.generation>=0))return;
+  const live=object(object(bridge.getState().state.teamRuns)[source.teamRunId]);
+  if(newerTeamReading(run,live))return;
+  const result=teamResultReading(run,reading.messages);
+  if(result.original&&result.messageId)
+    return JSON.stringify([run.generation,run.revision,result.messageId,roster.map(slot=>[slot.id,slot.generation,slot.identityRevision??1])]);
+};
 const acceptedSummaryUnavailable='未能核对验收时保存的这份原汇总。没有打开其他版本。';
 async function verifiedAcceptedSummary(reading:Data|undefined,source:WorkTeamResultSource,report:AcceptedWorkTeamReport):Promise<boolean>{
   if(!reading?.ownerWorkLink||!globalThis.crypto?.subtle||!matchesWorkTeamResult(source,reading.ownerWorkLink)||
@@ -512,6 +529,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           const shown=currentReading.current;
           return inSameVisit()&&shown?.run?.generation===generation&&originalWorkTeamResult(shown,originalAnchor.source)===originalMessage;
         });
+      }else if(originalResult&&onOpenWork&&!accepted&&!from&&!project&&!member&&inSameVisit()){
+        const identity=reportedTemporaryWorkIdentity(next,originalResult.source);
+        if(identity)workResultReturn.current=originalResult.arm(()=>inSameVisit()&&shownRunSection.current==='result'&&
+          reportedTemporaryWorkIdentity(currentReading.current,originalResult.source)===identity);
       }
       const stage=member&&inSameVisit()&&checkStageFocus(next,member)?member:undefined;
       if(stage)decisionTarget.current={handle:next.viewHandle,focus:{stage}};

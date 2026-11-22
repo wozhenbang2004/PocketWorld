@@ -333,7 +333,8 @@ internal class PocketWebBridge(
         controller::runTeamPhoneWork, { main.post(it) }, { it.view() }, { publishState() })
 
     private data class PauseNoteReview(val handle: String, val task: String, val run: String, val epoch: Int, val pause: Long, val scope: Long,
-                                       val window: PocketWebWindowTicket, val expires: Long)
+                                       val window: PocketWebWindowTicket, val expires: Long,
+                                       val stagedMain: PocketWorldController.MainPausePageReturn? = null)
     private var pauseNoteReview: PauseNoteReview? = null
     @Volatile private var pauseReadSerial = 0L
     private var taskReturnSection: String? = null
@@ -516,7 +517,7 @@ internal class PocketWebBridge(
             "settings.reviewModelTransport", "settings.saveLocalObservation", "settings.openSystem", "settings.openBrowser", "settings.openAppUpdates",
             "webSearch.snapshot", "webSearch.save",
             "connections.enter", "connections.leave", "models.snapshot", "models.review", "models.select", "models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "devices.snapshot", "history.read", "usage.read", "usage.task", "usage.trends", "usage.trends.close", "usage.close", "usage.reestimate", "trace.read", "trace.detail", "trace.close",
-            "phone.prepare", "phone.readCurrentOnce.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.draft.saveOriginal", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.pause.leavePage", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
+            "phone.prepare", "phone.readCurrentOnce.prepare", "phone.review.settings", "phone.start", "phone.query", "phone.draft.recentStarts", "phone.draft.retireUncreated", "phone.draft.edit", "phone.draft.fromMessage", "phone.draft.saveOriginal", "phone.pauseNote.read", "phone.pauseNote.continue", "phone.pauseNote.save", "phone.pause.leavePage", "phone.ownerStep.review", "phone.ownerStep.leave", "phone.pause", "phone.resume", "phone.stop", "phone.deadline", "background.refresh", "background.discover", "background.cancel", "background.close", "background.pair", "background.connect", "background.mainScreen", "background.selectMainScreen",
             "queued.open", "queued.refresh", "queued.close", "queued.edit", "queued.change", "queued.save", "queued.editor.close",
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
@@ -1906,7 +1907,9 @@ internal class PocketWebBridge(
                 } else if (action != "profile.identity") requireSection("profile")
                 // Only this original, still-visible owner editor receives the full immediate save result.
                 val savedWindow = if (action == "profile.save") captureWindow() else null
-                personal.dispatch(action, args) { result, error ->
+                val exactMemory = if (action == "profile.memory.get" &&
+                    (args.has("expectedRevision") || args.has("originalConversation"))) exactProfileMemoryRead(args) else null
+                personal.dispatch(action, args, exactMemory) { result, error ->
                     if (savedWindow == null) complete(id, result, error, retainValue = false)
                     else completeProfileSave(id, args.opt("expectedRevision"), savedWindow, result, error)
                     publishState()
@@ -2735,9 +2738,15 @@ internal class PocketWebBridge(
                 }
                 return
             }
-            if (action == "phone.pauseNote.read" || action == "phone.pauseNote.continue") {
-                val sending = action.endsWith(".continue")
-                checkedPayload(args, if (sending) setOf("taskId", "runId", "epoch", "reviewHandle", "note", "confirmed") else setOf("taskId", "runId", "epoch"))
+            if (action == "phone.pauseNote.read" || action == "phone.pauseNote.continue" || action == "phone.pauseNote.save") {
+                val saving = action == "phone.pauseNote.save"
+                val sending = saving || action == "phone.pauseNote.continue"
+                val stagedRead = !sending && args.has("stagedMain")
+                checkedPayload(args, when {
+                    sending -> setOf("taskId", "runId", "epoch", "reviewHandle", "note", "confirmed")
+                    stagedRead -> setOf("taskId", "runId", "epoch", "stagedMain", "savedReview")
+                    else -> setOf("taskId", "runId", "epoch")
+                })
                 val target = requiredString(args, "taskId"); val run = requiredString(args, "runId"); val epoch = requiredInt(args, "epoch")
                 val task = requireTask(target); val window = captureWindow()
                 fun current() = !closed && acceptsWindow(window) && taskViewId == target && controller.webPrivateOwnerVisible()
@@ -2750,18 +2759,41 @@ internal class PocketWebBridge(
                 val text = if (sending) {
                     val exact = requiredString(args, "reviewHandle")
                     require(requiredBoolean(args, "confirmed") && reviewed != null && reviewed.handle == exact && reviewed.task == target && reviewed.run == run &&
-                        reviewed.epoch == epoch && acceptsWindow(reviewed.window) && reviewed.expires > android.os.SystemClock.elapsedRealtime()) { "请重新核对同一次暂停；补充没有自动重发" }
+                        reviewed.epoch == epoch && acceptsWindow(reviewed.window) && reviewed.expires > android.os.SystemClock.elapsedRealtime() &&
+                        (reviewed.stagedMain != null) == saving) { "请重新核对同一次暂停；补充没有自动重发" }
                     requiredString(args, "note").trim().also { require(it.isNotEmpty() && it.length <= 8000 && '\u0000' !in it) { "补充须为 1 至 8000 字的文字" } }
                 } else null
-                controller.privatePhonePauseNote(task, reviewed?.pause ?: -1L, reviewed?.scope ?: -1L, text, { current() && pauseReadSerial == serial }) { result, error ->
-                    if (!current() || serial != pauseReadSerial || error != null || result == null) complete(id, null, error ?: "原暂停读取窗口已变化，请重新核对", retainValue = false)
+                val staged = if (saving || stagedRead) {
+                    if (stagedRead) require(requiredBoolean(args, "stagedMain"))
+                    val exact = publishedMainPausePageReturn
+                    require(exact != null && exact.taskId == target && exact.runId == run && exact.epoch == epoch &&
+                        mainPausePageWindow(target) && (!saving || reviewed != null && exact == reviewed.stagedMain &&
+                            exact.pauseRevision == reviewed.pause && exact.scopeRevision == reviewed.scope)) {
+                        "请在原主屏暂停和控制条仍可核对时保存补充"
+                    }
+                    exact
+                } else null
+                val finished: (JSONObject?, String?) -> Unit = { result, error ->
+                    if (!current() || serial != pauseReadSerial || error != null || result == null)
+                        complete(id, null, error ?: "原暂停读取窗口已变化，请重新核对", if (saving) "outcome_unknown" else "not_accepted", retainValue = false)
                     else if (!sending) {
                         val ticket = java.util.UUID.randomUUID().toString()
-                        pauseNoteReview = PauseNoteReview(ticket, target, run, epoch, result.getLong("pauseRevision"), result.getLong("scopeRevision"), window, android.os.SystemClock.elapsedRealtime() + 120_000)
+                        pauseNoteReview = PauseNoteReview(ticket, target, run, epoch, result.getLong("pauseRevision"), result.getLong("scopeRevision"), window, android.os.SystemClock.elapsedRealtime() + 120_000, staged)
                         complete(id, result.put("reviewHandle", ticket), null, retainValue = false)
                     } else complete(id, result, null, retainValue = false)
                     publishState()
                 }
+                if (staged != null) {
+                    val document = requireNotNull(documentId); val fence = commandFence.ticket()
+                    val owner = controller.displayedPhoneWindowVersion()
+                    // A leaving Work/document invalidates the native save without taking any UI lock.
+                    fun stillShown() = !closed && document == documentId && commandFence.accepts(fence) &&
+                        taskViewId == target && pauseReadSerial == serial && controller.displayedPhoneWindowAlive(owner) &&
+                        (!saving || reviewed != null && SystemClock.elapsedRealtime() < reviewed.expires)
+                    val operation = if (saving) requireNotNull(reviewed).handle
+                        else if (args.has("savedReview")) requiredString(args, "savedReview") else null
+                    controller.stagedMainPhonePauseNote(staged, operation, text, ::stillShown, finished)
+                } else controller.privatePhonePauseNote(task, reviewed?.pause ?: -1L, reviewed?.scope ?: -1L, text, { current() && pauseReadSerial == serial }, finished)
                 return
             }
             if (action == "phone.activity.original") {
@@ -2875,6 +2907,39 @@ internal class PocketWebBridge(
     }
     private fun completeOwnerWorkControlRejection(id: String, message: String?) {
         complete(id, JSONObject().put("status", "rejected").put("message", message?.take(300) ?: "这次操作未接受，请重新打开任务。"), null)
+    }
+
+    private fun exactProfileMemoryRead(args: JSONObject): PocketWebPersonal.ExactMemoryRead {
+        checkedPayload(args, setOf("id", "candidate", "expectedRevision", "originalConversation"))
+        val expected = checkedPayload(args.getJSONObject("originalConversation"), setOf("id", "key", "epoch", "revision", "resumeRevision"))
+        val conversation = requiredString(expected, "id"); val key = requiredString(expected, "key")
+        val epoch = requiredInt(expected, "epoch"); val revision = requiredLong(expected, "revision")
+        val resume = requiredLong(expected, "resumeRevision"); val memoryRevision = requiredLong(args, "expectedRevision")
+        require(args.opt("candidate") == false && conversation.length <= 240 && key == "conversation:$conversation" &&
+            epoch >= 0 && revision > 0 && resume >= 0 && memoryRevision > 0) { "原对话和记忆版本须同时核对" }
+        val window = captureWindow()
+        val document = requireNotNull(documentId)
+        val foreground = controller.displayedPhoneWindowVersion()
+        val reader = controller.conversationReaderRevision
+        val memoryGeneration = controller.state.memoryRefreshRevision
+        // Checked under the Book monitor before copying the exact row. Do not take another store lock here.
+        fun bodyCurrent(): Boolean {
+            val draft = controller.composerDraft
+            return !closed && documentId == document && commandFence.accepts(window.bridge) && taskViewId == null &&
+                controller.displayedPhoneWindowAlive(foreground) && controller.composerViewEpochForScopedRead == epoch &&
+                controller.conversationReaderRevision == reader && controller.state.memoryRefreshRevision == memoryGeneration &&
+                !controller.composerSaving && draft != null && draft.conversationId == conversation && draft.key == key && draft.revision == revision
+        }
+        fun current(): Boolean {
+            val view = controller.state
+            return bodyCurrent() && acceptsWindow(window) && section == "profile" && workspaceResumeRevision == resume &&
+                controller.webPrivateOwnerVisible() && view.conversationId == conversation && controller.conversationReader == null &&
+                controller.queuedInputsPage == null && view.filePath == null && !view.fileLoading && !view.fileSaving &&
+                !view.chatAttachmentPickerOpen && !view.attachmentImporting && !controller.attachmentOutcomes.state.open &&
+                !view.chatSubmitting && !view.phoneSubmitting && !phoneComposer.intent && !controller.hasChannelPhoneOrigin
+        }
+        check(current()) { "请回原私人对话核对这条记忆" }
+        return PocketWebPersonal.ExactMemoryRead(memoryRevision, ::current, ::bodyCurrent)
     }
 
     private fun completeProfileSave(id: String, expected: Any?, window: PocketWebWindowTicket, result: JSONObject?, failure: String?) {
