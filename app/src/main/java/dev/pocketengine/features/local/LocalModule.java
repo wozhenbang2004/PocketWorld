@@ -364,12 +364,8 @@ public final class LocalModule implements EngineModule {
         requirePackagePreviewOwner(nativeEvidence);
         JSONObject actual=packageWorkspace().projectPackageMetadata(nativeEvidence.getString("artifactId"),nativeEvidence.getString("artifactSha256"));
         dev.pocketengine.features.local.project.ProjectPackageDelivery.requireArtifact(nativeEvidence,actual);
-        JSONObject manifest=actual.getJSONObject("manifest");JSONArray files=manifest.getJSONArray("files"),choices=new JSONArray();String mode=manifest.getString("mode");
-        for(int i=0;i<files.length();i++){
-            JSONObject file=files.getJSONObject(i);String path=file.getString("path");
-            if("text".equals(file.getString("kind"))&&"text/html".equals(file.getString("mimeType"))&&(!"web_output".equals(mode)||path.equals(manifest.getString("entryPath"))))choices.put(path);
-        }
-        if("web_output".equals(mode)&&choices.length()!=1)throw new SecurityException("原网页成果声明的HTML入口不可核对");
+        JSONObject manifest=actual.getJSONObject("manifest");String mode=manifest.getString("mode");
+        JSONArray choices=projectPackagePreviewEntries(manifest);
         requirePackagePreviewOwner(nativeEvidence);
         return new JSONObject().put("kind","package_preview_choices").put("taskId",nativeEvidence.getString("taskId"))
             .put("operationId",nativeEvidence.getString("packageOperationId")).put("conversationId",nativeEvidence.getString("conversationId"))
@@ -377,6 +373,15 @@ public final class LocalModule implements EngineModule {
             .put("sourceDigest",nativeEvidence.getString("sourceDigest")).put("artifactId",nativeEvidence.getString("artifactId"))
             .put("artifactSha256",nativeEvidence.getString("artifactSha256")).put("mode",mode)
             .put("entryPath","web_output".equals(mode)?manifest.getString("entryPath"):"").put("entryChoices",choices);
+    }
+    private static JSONArray projectPackagePreviewEntries(JSONObject manifest)throws Exception {
+        JSONArray files=manifest.getJSONArray("files"),choices=new JSONArray();String mode=manifest.getString("mode");
+        for(int i=0;i<files.length();i++){
+            JSONObject file=files.getJSONObject(i);String path=file.getString("path");
+            if("text".equals(file.getString("kind"))&&"text/html".equals(file.getString("mimeType"))&&(!"web_output".equals(mode)||path.equals(manifest.getString("entryPath"))))choices.put(path);
+        }
+        if("web_output".equals(mode)&&choices.length()!=1)throw new SecurityException("原网页成果声明的HTML入口不可核对");
+        return choices;
     }
     /** Owner-only read of the pinned source archive, never the mutable checkout bytes or a model tool. */
     public synchronized dev.pocketengine.features.local.project.ProjectPackageArchive.Frozen sourcePackageForOwner(JSONObject source)throws Exception {
@@ -388,12 +393,16 @@ public final class LocalModule implements EngineModule {
     /** Opens only the explicitly selected member of the same verified immutable package. */
     public synchronized dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified openProjectPackagePreviewForOwner(JSONObject nativeEvidence,String entryPath)throws Exception {
         dev.pocketengine.features.workspace.VersionedWorkspace.path(entryPath);
-        JSONArray choices=inspectProjectPackagePreviewForOwner(nativeEvidence).getJSONArray("entryChoices");boolean found=false;
+        requirePackagePreviewOwner(nativeEvidence);
+        // Both the entry choice and the viewer consume these same verified immutable bytes.
+        var frozen=packageWorkspace().originalTaskPackage(nativeEvidence);
+        JSONArray choices=projectPackagePreviewEntries(frozen.manifest());boolean found=false;
+        requirePackagePreviewOwner(nativeEvidence);
         for(int i=0;i<choices.length();i++)if(entryPath.equals(choices.getString(i)))found=true;
         if(!found)throw new SecurityException("请选择这份原固定项目包的实际HTML入口，未猜测或替换文件");
-        JSONObject metadata=previewProjectPackage(new JSONObject().put("artifactId",nativeEvidence.getString("artifactId")).put("sha256",nativeEvidence.getString("artifactSha256")).put("entryPath",entryPath));
+        var opened=ProjectPreviewBundle.fromProjectPackage(frozen,nativeEvidence.getString("artifactId"),nativeEvidence.getString("artifactSha256"),entryPath);
         requirePackagePreviewOwner(nativeEvidence);
-        return projectPreviewForOwner(metadata.getString("previewId"),nativeEvidence.getString("checkoutId"));
+        return projectPreviewForOwner(rememberPackagePreview(opened).identity,nativeEvidence.getString("checkoutId"));
     }
     /** Separate original Work path. No current source, generic package choices or Chat references. */
     public synchronized ProjectPreviewBundle.Verified openDirectViteArchiveForOwner(JSONObject evidence,String entryPath)throws Exception{

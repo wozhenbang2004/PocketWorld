@@ -44,7 +44,7 @@ export function ConversationLinkedReason({conversation,task}:{conversation:strin
  return <p className="pw-linked-reason"><strong>{label}</strong>{reason.length>0&&original!==label&&<span>{reason.slice(0,180).join('')}{reason.length>180?'…':''}</span>}</p>;
 }
 type Props={conversation:string;identity?:WorkIdentity|null;task?:{id:string;status:string;raw?:Record<string,any>};phase:ReplyPhase|null;
- actionElsewhere?:boolean;receiptsInMenu?:boolean;onRead?:(layer:'process'|'overview'|'review',trigger:HTMLButtonElement)=>void};
+ actionElsewhere?:boolean;receiptsInMenu?:boolean;directProcess?:boolean;onRead?:(layer:'process'|'overview'|'review',trigger:HTMLButtonElement)=>void};
 /** Lives in the existing keyed reply article, next to (never inside) its answer.
  * The disclosure owns only its local open/close state. All reads and decisions
  * still go through the original task window with its expected run and epoch. */
@@ -52,7 +52,7 @@ export function ConversationTurnActivity(props:Props){
  if(!props.identity&&!props.phase)return <ReplyActivity phase={null}/>;
  return <BoundTurnActivity {...props}/>;
 }
-function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewhere,receiptsInMenu}:Props){
+function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewhere,receiptsInMenu,directProcess}:Props){
  const detailId=useId(),[expanded,setExpanded]=useState(false);
  const notes=useMemo(()=>conversationTurnNotes(conversation,identity,task),[conversation,identity?.taskId,identity?.runId,identity?.epoch,task]);
  // Keep an open disclosure in place. Otherwise the same reply's existing
@@ -61,6 +61,7 @@ function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewh
  const need=notes?.need,groups=notes?.groups||[],recent=notes?.recent;
  const routine=groups.find(g=>g.kind==='returned'),important=groups.filter(g=>g.kind!=='returned');
  const visible=!deferReceipts&&(!!phase||!!need||groups.length>0);
+ const openProcess=directProcess&&phase&&onRead&&!expanded&&!need&&!recent&&!groups.length&&!notes?.limited?onRead:undefined;
  const shown=need||(phase?.state==='thinking'&&notes?.lastTool?{...phase,label:'最近调用：'+notes.lastTool}:phase);
  return <div className="pw-turn-margin" data-has-notes={visible||undefined}>
   <ReplyActivity phase={shown}/>
@@ -68,7 +69,9 @@ function BoundTurnActivity({conversation,identity,task,phase,onRead,actionElsewh
    {need&&phase?.state==='error'&&phase.label!==need.label&&<p className="pw-turn-dual-status">{phase.label}</p>}
    {!!important.length&&<ul className="pw-turn-receipts" aria-label="已读取的操作回执">{important.map(g=><li key={g.kind} data-kind={g.kind}><strong>{g.title}</strong><span>{g.names}</span></li>)}</ul>}
    {need&&onRead&&!actionElsewhere&&<Button variant="secondary" size="small" className="pw-turn-next" onClick={event=>onRead(need.layer,event.currentTarget)}>{need.action}<IconChevronRight size={14} aria-hidden="true"/></Button>}
-   {(!!recent||!!onRead||!!routine)&&<div className="pw-turn-progress">
+   {openProcess?<div className="pw-turn-progress"><Button size="small" variant="ghost" className="pw-turn-fold"
+    trailingIcon={IconChevronRight} onClick={event=>openProcess('process',event.currentTarget)}>查看执行过程</Button></div>:
+    (!!recent||!!onRead||!!routine)&&<div className="pw-turn-progress">
     <Button size="small" variant="ghost" className="pw-turn-fold" aria-expanded={expanded} aria-controls={detailId} onClick={()=>setExpanded(v=>!v)}>
      {expanded?'收起进展':'查看进展'}{routine&&<span className="pw-turn-count">{routine.count} 条工具回执</span>}<IconChevronDown size={14} aria-hidden="true"/>
     </Button>

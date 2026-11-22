@@ -35,7 +35,8 @@ import './devices-reading.css';
 import './device-workspace-overview.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
-type AddressRepair = { place: DeviceReadingPlace; epoch: number };
+type OriginalPhoneAddress = { focus: SentPhoneGoalFocus; work: string; until: number; window: string; deviceRevision: number };
+type AddressRepair = { place: DeviceReadingPlace; epoch: number; originalPhone?: OriginalPhoneAddress };
 type PresentedReceivedGoal = ReceivedPhoneGoalReturn & {
   waitingBack?: { waitingHandle: string; windowKey: string; trigger: HTMLButtonElement };
 };
@@ -60,8 +61,8 @@ function matchesPinnedWorkspaceWork(state: Data, focus: SentPhoneGoalFocus | und
     !Object.prototype.hasOwnProperty.call(work, 'directPhone') &&
     (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => work.directWorkspace?.[key] === focus[key]);
 }
-function matchesPinnedPhonePreparation(state: Data, focus: SentPhoneGoalFocus | undefined) {
-  if (focus?.purpose !== 'partner_connection') return false;
+function pinnedPhonePreparationRow(state: Data, focus: SentPhoneGoalFocus | undefined): Data | undefined {
+  if (focus?.purpose !== 'partner_connection') return;
   const tasks = rows(state.tasks).filter(row => row.id === focus.taskId);
   const task = tasks.length === 1 ? tasks[0] : undefined, raw = task?.raw, work = raw?.ownerDeviceWork;
   return !!task && !unreadSource(task) && raw?.id === focus.taskId && raw.actorId === 'owner' && raw.spaceId === 'private' &&
@@ -70,9 +71,20 @@ function matchesPinnedPhonePreparation(state: Data, focus: SentPhoneGoalFocus | 
     task.status === 'paused' && raw.status === task.status && raw.runId === '' && raw.coordinatorEpoch === 0 && raw.cancelRequested === false &&
     !('deviceSourceScope' in raw) && work?.format === 'pocketworld.owner-device-work.v1' && work.requestId === task.id &&
     /^[a-f0-9]{64}$/.test(work.requestDigest || '') && !('directWorkspace' in work) &&
-    (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => work.directPhone?.[key] === focus[key]);
+    (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => work.directPhone?.[key] === focus[key]) ? raw : undefined;
+}
+const matchesPinnedPhonePreparation = (state: Data, focus: SentPhoneGoalFocus | undefined) => !!pinnedPhonePreparationRow(state, focus);
+function originalPhoneAddressWork(state: Data, focus: SentPhoneGoalFocus | undefined, now = Date.now()) {
+  const row = pinnedPhonePreparationRow(state, focus), scope = row?.executionScope;
+  return row && scope?.format === 'pocketworld.task-execution-scope.v1' && scope.taskId === focus?.taskId &&
+    scope.state === 'active' && scope.lifetime === 'deadline' && Number.isSafeInteger(scope.deadlineAt) && scope.deadlineAt > now &&
+    Number.isSafeInteger(scope.revision) && scope.revision > 0
+    ? { key: JSON.stringify([row.ownerDeviceWork.requestDigest, scope.revision, scope.deadlineAt]), until: scope.deadlineAt as number } : undefined;
 }
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
+const missingPhoneEndpoint = (peer: Data | undefined) => peer?.revoked === false &&
+  peer.actions?.connect?.available === false && peer.actions.connect.code === 'missing_saved_endpoint' &&
+  peer.connection?.state === 'OFFLINE' && peer.connection.reconnectClientRunning === false;
 const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
 /** The Windows chooser's signed “仅目录和文本” scope, not inferred from platform or missing desktop metadata. */
 function recordedWorkspaceOnlyGrant(peer: Data, local: Data, now: number) {
@@ -450,9 +462,22 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     localReadCurrent && !!peerPlace.current && peer?.revoked === false && peer.actions?.connect?.available === false && peer.actions.connect.code === 'missing_saved_endpoint' &&
     !deviceChannelWasConnected(peer) && peer.connection?.state !== 'CONNECTING' && peer.connection?.reconnectClientRunning !== true &&
     Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0 && supported('devices.reviewConnection');
+  const originalPhoneAddressCurrent = (pin: OriginalPhoneAddress, beforeConfirmation = true) => {
+    const live = bridge.getState();
+    return pin.focus === sourceFocus && live.host?.ready === true && waitingGoalWindow() === pin.window &&
+      (!beforeConfirmation || live.state.deviceWorkspaceRevision === pin.deviceRevision) &&
+      originalPhoneAddressWork(live.state, pin.focus)?.key === pin.work;
+  };
   const matchesAddressRepair = (pin: AddressRepair, here: Data | undefined, partner: Data | undefined) =>
-    addressRepair.current === pin && selectedPeer.current === pin.place.partner.deviceId &&
+    addressRepair.current === pin && (pin.originalPhone ? missingPhoneEndpoint(partner) && originalPhoneAddressCurrent(pin.originalPhone)
+      : selectedPeer.current === pin.place.partner.deviceId) &&
     partner?.revoked === false && partner.authorizationEpoch === pin.epoch && sameDeviceReadingPlace(pin.place, here, partner);
+  const matchesOriginalAddressReview = (pin: AddressRepair, value: Data) => {
+    const { deviceId, instanceId, certificateFingerprint } = pin.place.partner, detail = value.view;
+    return value.kind === 'connection' && detail?.deviceId === deviceId && detail.instanceId === instanceId &&
+      detail.certificateFingerprint === certificateFingerprint && (!pin.originalPhone ||
+        detail.kind === 'lan' && detail.discoveredAddress !== true && Number.isSafeInteger(detail.expiresAt) && detail.expiresAt > Date.now());
+  };
   const openAddressForm = (repair?: AddressRepair) => {
     addressRepair.current = repair; setForm('connection'); setRaw(''); setAddress('');
   };
@@ -462,19 +487,20 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         !sameDeviceReadingPlace(place, local, peer)) return;
     openAddressForm({ place, epoch: peer.authorizationEpoch });
   };
+  const closeOriginalAddressForm = () => {
+    closeReview(); setForm(''); setRaw(''); setAddress('');
+  };
   const reviewAddressForm = (args: { raw: string } | { serviceBase: string }) => {
     const pin = addressRepair.current;
     const changed = '原配对身份已变化，没有更新其他设备的地址。请重读本机连接记录。';
-    if (pin && !matchesAddressRepair(pin, local, peer)) { setError(changed); return; }
+    if ((sourceFocus && (!pin?.originalPhone || !('raw' in args))) ||
+        (pin && !matchesAddressRepair(pin, local, pin.originalPhone ? focusedPeer : peer))) { setError(changed); return; }
     void invoke('devices.reviewConnection', { ...args, deviceId: pin?.place.partner.deviceId || peerId }, (value, actual) => {
       if (pin) {
         const selected = rows(actual?.peers).filter(row => row.deviceId === pin.place.partner.deviceId);
-        const { deviceId, instanceId, certificateFingerprint } = pin.place.partner;
-        if (value.kind !== 'connection' || value.view?.deviceId !== deviceId || value.view?.instanceId !== instanceId ||
-            value.view?.certificateFingerprint !== certificateFingerprint || selected.length !== 1 ||
-            !matchesAddressRepair(pin, actual?.local, selected[0])) {
+        if (!matchesOriginalAddressReview(pin, value) || selected.length !== 1 || !matchesAddressRepair(pin, actual?.local, selected[0])) {
           if (typeof value.viewHandle === 'string' && value.viewHandle) void run('devices.discard', { viewHandle: value.viewHandle }).catch(() => {});
-          throw new Error(changed);
+          throw new Error(pin.originalPhone ? '请使用这台原手机当前的局域网邀请。没有改地址或联系手机。' : changed);
         }
       }
       acceptReview(value);
@@ -539,7 +565,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const captured = item?.phoneActionScope ? item.actions.capturedAt : snapshot?.taskActions?.[task.id]?.capturedAt;
     return [captured + PHONE_ACTION_WINDOW_MS, item?.phoneActionScope?.executionDeadline ?? task.raw.deviceExecutionScope?.deadline, grant?.expiresAt];
   });
-  const nextExpiry = Math.min(...[validUntil, ...actionExpiries, ...tasks.map(task=>unreadSource(task) ? undefined : (peerId ? manualPreparationForPeer(task) : deviceOriginalManualPhonePreparation(task))?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
+  const addressDeadline = addressRepair.current?.originalPhone;
+  const nextExpiry = Math.min(...[validUntil, addressDeadline?.until,
+    addressDeadline && review?.kind === 'connection' ? review.view.expiresAt : undefined, ...actionExpiries, ...tasks.map(task=>unreadSource(task) ? undefined : (peerId ? manualPreparationForPeer(task) : deviceOriginalManualPhonePreparation(task))?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
   useEffect(() => {
@@ -658,13 +686,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const confirmReview = (extra: Data = {}) => {
     if(review?.kind==='goal'&&!originalDeviceInputReady(review.view)){setError('原目标与附带资料未能核对，请从本机接单记录重新打开。');return;}
     const original = review; if (!original || !ack || busy) return;
-    if (original.kind === 'connection' && addressRepair.current && !matchesAddressRepair(addressRepair.current, local, peer)) {
-      closeReview(); setError('原配对身份已变化，没有更新其他设备的地址。请重读本机连接记录。'); return;
+    const repair = original.kind === 'connection' ? addressRepair.current : undefined;
+    if (original.kind === 'connection' && ((sourceFocus && !repair?.originalPhone) ||
+        (repair && (!matchesAddressRepair(repair, local, repair.originalPhone ? focusedPeer : peer) ||
+          (repair.originalPhone && (handle.current !== original.viewHandle || !matchesOriginalAddressReview(repair, original))))))) {
+      closeReview(); setError(sourceFocus ? '原配对身份、工作或邀请已变化。没有更新地址，请重读本机连接记录。'
+        : '原配对身份已变化，没有更新其他设备的地址。请重读本机连接记录。'); return;
     }
     if(original.kind==='result'&&original.view.canRecordDecision!==true){setError('这份原候选现在只能在本机查看。');return;}
+    if (repair?.originalPhone) addressRepair.current = undefined;
     handle.current = ''; setReview(null);
     void invoke('devices.confirm', { viewHandle: original.viewHandle, acknowledged: true, ...(original.kind === 'goal' ? { useForFutureGoals: future } : {}), ...extra }, (value, actual) => {
       if (value.nativeCallReturned !== true || value.kind !== original.kind) throw new Error('原设备操作尚未取得匹配回执，请刷新核对。');
+      if (repair?.originalPhone) {
+        const selected = rows(actual?.peers).filter(row => row.deviceId === repair.place.partner.deviceId);
+        if (originalPhoneAddressCurrent(repair.originalPhone, false) && selected.length === 1 && !retired(selected[0]) &&
+            selected[0].authorizationEpoch === repair.epoch && sameDeviceReadingPlace(repair.place, actual?.local, selected[0]))
+          setNotice('已保存这台原手机的地址。是否接通以本机通道检查为准，没有开始这份工作。');
+        return;
+      }
       if (original.kind === 'pair') { reportPair(original.view, actual); return; }
       if (original.kind === 'action' && original.view.operation === 'peer.connect') {
         if (value.operation !== 'peer.connect') throw new Error('连接请求的本机回执未匹配，请仅重读本机连接记录。');
@@ -715,6 +755,25 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, it))):undefined;
   const pinnedWorkspace = matchesPinnedWorkspaceWork(state, sourceFocus);
   const pinnedPhonePreparation = matchesPinnedPhonePreparation(state, sourceFocus);
+  const missingOriginalPhoneAddress = !!sourceFocus && !!focusedPeer && localReadCurrent && missingPhoneEndpoint(focusedPeer) &&
+    state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && Number.isSafeInteger(state.deviceWorkspaceRevision) &&
+    Number.isSafeInteger(focusedPeer.authorizationEpoch) && focusedPeer.authorizationEpoch > 0 &&
+    supported('devices.reviewConnection') && supported('devices.confirm') && !!originalPhoneAddressWork(state, sourceFocus, now);
+  const openOriginalPhoneAddress = () => {
+    if (busy || !sourceFocus || !missingOriginalPhoneAddress || !focusedPeer) return;
+    const place = deviceReadingPlace(local, focusedPeer), window = waitingGoalWindow(), work = originalPhoneAddressWork(state, sourceFocus);
+    if (!place || !window || !work) return;
+    const originalPhone = { focus: sourceFocus, window, work: work.key, until: work.until, deviceRevision: state.deviceWorkspaceRevision };
+    if (originalPhoneAddressCurrent(originalPhone)) openAddressForm({ place, epoch: focusedPeer.authorizationEpoch, originalPhone });
+  };
+  const originalAddress = addressRepair.current?.originalPhone ? addressRepair.current : undefined;
+  const originalAddressCurrent = !!originalAddress && matchesAddressRepair(originalAddress, local, focusedPeer) &&
+    (review?.kind !== 'connection' || matchesOriginalAddressReview(originalAddress, review));
+  useEffect(() => {
+    if (!originalAddress || originalAddressCurrent || addressRepair.current !== originalAddress) return;
+    closeOriginalAddressForm();
+    setError('原工作、设备或邀请已变化，已清除输入，没有更新地址。');
+  }, [originalAddress, originalAddressCurrent]);
   const pinnedScopePlace = (pinnedWorkspace || pinnedPhonePreparation) && localReadCurrent && focusedPeer?.revoked === false &&
     state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && supported('devices.readSavedPeerScope')
     ? deviceReadingPlace(local, focusedPeer) : undefined;
@@ -1085,7 +1144,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     if (ownText) {closeOwnText();return true;}
     if (review) { closeReview(); return true; }
     if (invitation) { setInvitation(null); return true; }
-    if (form) { clearSensitive(true); refresh(); return true; }
+    if (form) { if (addressRepair.current?.originalPhone) closeOriginalAddressForm(); else { clearSensitive(true); refresh(); } return true; }
     if (desktopOpen) { setDesktopOpen(false); return true; }
     if (sourceFocus) return false; // Return to the same owner task instead of stepping to another peer.
     // Do not step to a different selected peer while this local original Work is being admitted.
@@ -1335,6 +1394,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                     key={JSON.stringify([sourceFocus.taskId, pinnedScopePlace, focusedPeer.authorizationEpoch, state.webWorkspaceResumeRevision, localRead?.revision])}
                     here={local} peer={focusedPeer} busy={busy} read={readPinnedWorkScope} />
                 </>}
+                {missingOriginalPhoneAddress && <Button variant="secondary" disabled={busy} onClick={openOriginalPhoneAddress}>更新这台原手机的地址</Button>}
                 {!deviceChannelWasConnected(focusedPeer) && available(focusedPeer.actions?.connect) && supported('devices.reviewAction') &&
                   <Button variant="secondary" disabled={busy} onClick={() => reviewPeerConnection(focusedPeer)}>核对并连接这台原设备</Button>}</>}
           <Accordion><AccordionItem id="pinned-connection-identity" title="这份工作固定的身份"><p className="pw-source-copy">原设备 {sourceFocus.deviceId}<br/>原证书 {fingerprint(sourceFocus.certificateFingerprint)}</p></AccordionItem></Accordion>
@@ -1719,7 +1779,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     </SettingsDialog>
     <PhoneControlPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
     <DeviceTaskPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
-    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || !!snapshot)} onClose={() => { clearSensitive(true); refresh(); }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
+    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || !!snapshot) &&
+      (!sourceFocus || form === 'connection' && originalAddressCurrent)}
+      onClose={() => { if (addressRepair.current?.originalPhone) closeOriginalAddressForm(); else { clearSensitive(true); refresh(); } }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
         {error && <p className="pw-device-feedback" role="alert">{error}</p>}
         <WorkingStatus active={busy}>正在读取原设备回执…</WorkingStatus>
@@ -1727,6 +1789,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           options={[{id: 'add', label: '对方已发邀请'}, {id: 'invite', label: '从这台手机发出'}]} />}
         {['add', 'connection', 'relay'].includes(form) && <section className="pw-device-form-step">
           {form === 'add' && <p>加入对方的短时邀请，无需开启这台手机的接收或屏幕读取。两端仍需分别核对指纹和权限。</p>}
+          {form === 'connection' && originalAddressCurrent && <p>请从这台原手机复制它当前的局域网邀请。先在本机核对，不联系对方；确认后才更新地址并尝试连接，不重新配对或提交目标。</p>}
           {form==='add'&&firstPair?<div className="pw-device-review">
             <h3>先看这次原邀请</h3>
             <p>发起设备 …{firstPair.deviceId.slice(-8)} · 有效至 {time(firstPair.expiresAt)}</p><p className="pw-source-copy">邀请中的完整证书指纹：<bdi>{fingerprint(firstPair.fingerprint)}</bdi></p>
@@ -1778,7 +1841,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <Button variant="secondary" disabled={busy} onClick={() => { setForm('relay'); setRaw(''); }}>接收异网连接的临时中继租约</Button>
           </AccordionItem>
         </Accordion>}
-        {form === 'connection' && <><SelectField label="已配置的临时中继" value={address} onChange={setAddress} options={Array.from(new Set(rows(actions.relayLeases).map(row => row.serviceBase))).map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button variant="secondary" disabled={busy || !address} onClick={() => reviewAddressForm({ serviceBase: address })}>核对原设备中继地址</Button></>}
+        {form === 'connection' && !sourceFocus && <><SelectField label="已配置的临时中继" value={address} onChange={setAddress} options={Array.from(new Set(rows(actions.relayLeases).map(row => row.serviceBase))).map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button variant="secondary" disabled={busy || !address} onClick={() => reviewAddressForm({ serviceBase: address })}>核对原设备中继地址</Button></>}
         {form === 'relay' && <><p>租约仅提供临时网络通道，不授予设备权限。仍需比较双端指纹并明确选择范围。</p>{rows(actions.relayLeases).map(lease => <div className="pw-source-record" key={lease.serviceBase + lease.inviterDeviceId}><p>{lease.serviceBase} · 至 {time(lease.expiresAt)}</p><Button variant="secondary" disabled={busy} onClick={() => actionReview('relay.remove', { serviceBase: lease.serviceBase, inviterDeviceId: lease.inviterDeviceId })}>核对并移除这份租约</Button></div>)}</>}
         {form === 'recoveryProvide' && <><p>仅开放原结果的短时只读窗口，关闭页面会关闭入口。</p><SelectField label="本机实际地址或原中继" value={address} onChange={setAddress} options={recoveryAddresses.map(value => ({ id: value, label: value }))} isDisabled={busy} /><Button disabled={busy || !address} onClick={() => { void invoke('devices.openRecovery', { inviteId, address }, acceptReview); }}>开启原结果只读窗口</Button></>}
         {form === 'recoveryRead' && <><TextField label="原设备显示的数字地址或已配置中继服务" value={host} onChange={setHost} isDisabled={busy} />{!/^wss:\/\/|^https:\/\//.test(host) && <TextField label="原恢复端口" value={port} onChange={setPort} isDisabled={busy} />}<Button disabled={busy || !host || !/^wss:\/\/|^https:\/\//.test(host) && !/^\d+$/.test(port)} onClick={() => { void invoke('devices.recoverPairing', { inviteId, host, port: /^wss:\/\/|^https:\/\//.test(host) ? 0 : Number(port) }, () => { setForm(''); setNotice('已查询原已提交配对结果，未重新授权。'); }); }}>只读取原配对结果</Button></>}
@@ -1790,8 +1853,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       <Button variant="secondary" onClick={() => setInvitation(null)}>清除显示，回到配对进度</Button>
     </div></SettingsDialog>
     <SettingsDialog isOpen={!!review && (!sourceFocus || !!focusedPeer && (pinnedConnection
-      ? review.kind==='action' && review.view?.operation==='peer.connect' && review.view?.peer?.deviceId===sourceFocus.deviceId &&
-        review.view?.peer?.instanceId===sourceFocus.instanceId && review.view?.peer?.certificateFingerprint===sourceFocus.certificateFingerprint
+      ? (review.kind==='action' && review.view?.operation==='peer.connect' && review.view?.peer?.deviceId===sourceFocus.deviceId &&
+        review.view?.peer?.instanceId===sourceFocus.instanceId && review.view?.peer?.certificateFingerprint===sourceFocus.certificateFingerprint ||
+        !!originalAddress && originalAddressCurrent && matchesOriginalAddressReview(originalAddress, review))
       : review.kind==='history' && review.view?.taskId===sourceFocus.taskId && review.view?.targetDeviceId===sourceFocus.deviceId && review.view?.instanceId===sourceFocus.instanceId))} onClose={closeReview} title={review?.kind === 'pair' ? '范围与双端身份' : review?.kind === 'grant' ? '原设备权限修改' : review?.kind === 'goal' ? '在这台手机接手原工作' : review?.kind === 'result' ? '核对这次原成果' : review?.kind === 'approval' ? '核对这次设备操作' : review?.kind === 'recovery' ? '原配对结果只读窗口' : review?.kind === 'resume' ? '核对这次恢复请求' : review?.kind === 'history' ? (originalView.phoneGoalResult === true ? '这次手机目标与派发' : windowsWorkspaceHistory ? 'Windows 原读取结果' : '原设备操作回执') : '核对原设备操作'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       {review && <div className="pw-device-review">
         {reviewError && <p role="alert">{reviewError}</p>}

@@ -20,7 +20,7 @@ type StoppedReply={original:ChatCancelIdentity;documentEpoch:number;navigation:n
 
 /** A saved reply must name the exact native request AND answer receipt. Similar
  * text, a shared task ID or a completion timestamp cannot merge two answers. */
-function savedRequestKey(conversation:string,message:SavedReply){
+export function savedRequestKey(conversation:string,message:SavedReply){
  const context=messageReplyContext(message),receipt=message.memoryReference;
  if(!context?.replyId||!receipt||receipt.taskId!==context.taskId||receipt.runId!==context.runId||receipt.coordinatorEpoch!==context.epoch||receipt.answerId!==context.replyId||
   typeof receipt.requestId!=='string'||!/^[A-Za-z0-9_-]{1,160}$/.test(receipt.requestId))return null;
