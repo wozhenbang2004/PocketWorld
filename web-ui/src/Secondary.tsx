@@ -14,6 +14,7 @@ import { useFormDrafts, type RegisterBeforeLeave as RegisterFormBeforeLeave } fr
 import { toolServicePresets } from './tool-service-presets';
 import type { PermissionLeaveGuard } from './PermissionPolicySettings';
 import { BackgroundAudioSettings, BackgroundOwnerSettings, BackgroundChecks } from './BackgroundOwnerSettings';
+import { PhoneAccessibilitySetupHelp } from './PhoneAccessibilitySetupHelp';
 import ChannelsWorkspace from './ChannelsWorkspace';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { IconAccount, IconAdd, IconArchive, IconArrowLeft, IconCall, IconCheck, IconChevronRight, IconDevices, IconDownload, IconFileSettings, IconFileText, IconGoal, IconKey, IconLearning, IconLink, IconMcp, IconMedia, IconMemory, IconMicrophone, IconMonitor, IconNotification, IconObserve, IconPhone, IconPlugin, IconPluginCatalog, IconPrivacy, IconRefresh, IconReminder, IconReview, IconServer, IconSettings, IconShieldCheck, IconSkill, IconTeam, IconTerminal, IconUpload } from './icons';
@@ -930,7 +931,12 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
     <Tabs selectedKey={panel} onSelectionChange={key => selectPanel(key as 'setup' | 'checks')} className="pw-background-tabs">
       <TabList aria-label="后台连接内容"><Tab id="setup">连接设置</Tab><Tab id="checks" count={blockedGroups || undefined}>能力检查</Tab></TabList>
       <TabPanel id="setup">
-        {!permissions && <section className="pw-background-preparation"><h3>开启手机操作所需权限</h3><p>完成系统授权后返回，使用右上角刷新核对。</p><div className="pw-background-permission-status"><span>界面读取<b>{state.accessibilityEnabled === true ? '已连接' : '待开启'}</b></span><span>任务通知<b>{state.notificationsEnabled === true ? '已开启' : '待开启'}</b></span></div><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run} primary>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run} primary={state.accessibilityEnabled === true}>允许任务通知</CapabilityAction>}</div></section>}
+        {!permissions && <section className="pw-background-preparation"><h3>开启手机操作所需权限</h3><p>完成系统授权后返回，使用右上角刷新核对。</p><div className="pw-background-permission-status"><span>界面读取<b>{state.accessibilityEnabled === true ? '已连接' : '待开启'}</b></span><span>任务通知<b>{state.notificationsEnabled === true ? '已开启' : '待开启'}</b></span></div><div className="pw-form-actions">{state.accessibilityEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'accessibility' }} supported={supported} run={run} primary>设置界面读取权限</CapabilityAction>}{state.notificationsEnabled !== true && <CapabilityAction action="settings.openSystem" args={{ section: 'notifications' }} supported={supported} run={run} primary={state.accessibilityEnabled === true}>允许任务通知</CapabilityAction>}</div>
+          {connection.supported && display.taskOwned === false && state.backgroundSetupOpen === true &&
+            state.accessibilityEnabled === false && supported('settings.openSystem') &&
+            <PhoneAccessibilitySetupHelp readiness={state.phoneReadiness} action={<CapabilityAction action="settings.openSystem"
+              args={{ section: 'accessibilityAppInfo' }} supported={supported} run={run} disabled={locked}>打开口袋世界的应用信息</CapabilityAction>} />}
+        </section>}
     {!connection.taskOwned && connection.loaded && connection.supported && !connection.helperConnected && <Card title="手机控制" description="主屏无需配对；独立屏优先复用已有授权。">
        <div className="pw-form-actions">
          {wirelessSaved && <Button variant="primary" disabled={locked || !connection.canConnect || !supported(savedEndpoints.length === 1 ? 'background.connect' : 'background.discover') || savedEndpoints.length !== 1 && discovery.discovering === true}

@@ -1,8 +1,13 @@
 package dev.pocketengine.ui.web
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.Choreographer
 import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
@@ -19,6 +24,7 @@ import dev.pocketengine.features.teams.TeamCoordinator
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
 import dev.pocketengine.ui.MediaOwnerUi
+import dev.pocketengine.ui.PhoneCapabilityState
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.accountConnectionsFailure
 import dev.pocketengine.ui.UiChatAttachment
@@ -3038,6 +3044,36 @@ internal class PocketWebBridge(
             "settings.openSystem" -> when (requiredString(args, "section")) {
                 "accessibility" -> controller.openAccessibility(); "notifications" -> controller.openNotifications()
                 "wireless" -> controller.openWirelessSettings(); "background" -> controller.openBackgroundSetup()
+                "accessibilityAppInfo" -> {
+                    checkedPayload(args, setOf("section"))
+                    val shown = controller.state
+                    val display = shown.feature("display")
+                    val preparing = section == "setup" || (section == null && shown.backgroundSetupOpen &&
+                        display.opt("taskOwned") == false)
+                    val readiness = shown.phoneReadiness
+                    val service = readiness.groups.singleOrNull { it.id == "mainObservation" }
+                        ?.checks?.singleOrNull { it.id == "serviceConnected" }
+                    val activity = controller.webPresentationActivity()
+                    check(!closed && documentId != null && preparing && taskViewId == null &&
+                        controller.webPrivateOwnerVisible() && !controller.hasChannelPhoneOrigin &&
+                        controller.conversationReader == null && !controller.attachmentOutcomes.state.open && shown.filePath == null &&
+                        Build.VERSION.SDK_INT >= 34 && display.opt("supportedAndroid") == true &&
+                        activity.hasWindowFocus() && readiness.checkedAtUptimeMs >= 0 &&
+                        service?.let { it.state == PhoneCapabilityState.BLOCKED && it.code == "accessibility_disabled" } == true) {
+                        "请在当前手机准备页核对界面读取权限后，再打开应用信息。"
+                    }
+                    // A disabled service does not prove that Android restricted the setting.
+                    // The stock intent names only our app; the owner decides in Android.
+                    try {
+                        activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", activity.packageName, null)))
+                    } catch (_: ActivityNotFoundException) {
+                        error("Android 未提供应用信息入口。可在系统设置中查看；如果系统不允许，手机操作无法继续。")
+                    } catch (_: SecurityException) {
+                        error("系统不允许打开该设置。不会改动权限，手机操作暂不能继续。")
+                    }
+                    return JSONObject().put("status", "settings_opened")
+                }
                 else -> error("没有已接入的系统设置入口")
             }
             "connections.enter" -> {

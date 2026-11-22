@@ -4,6 +4,7 @@ import { IconArrowLeft, IconChevronRight, IconClose, IconMicrophone, IconModel, 
 import { Accordion, AccordionItem, Button } from './forms-library';
 import { ProgressBar } from './library';
 import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
+import { PhoneAccessibilitySetupHelp } from './PhoneAccessibilitySetupHelp';
 import { backgroundConnection } from './forms-library/host-contracts';
 import { bridge, type PocketSnapshot } from './bridge';
 import { permissionLabel, readSetup, readSetupRuntime, readSetupRuntimeReview, runtimeCancelInput, runtimeLogText, runtimePreparing, runtimeProgressLabel,
@@ -303,7 +304,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     const ticket = generation.current, epoch = bridge.getDocumentEpoch(); pending.current = true; setWorking(action); setError(''); setNotice('');
     try {
       await run(action, args);
-      if (action === 'setup.permission') {
+      if (action === 'setup.permission' || action === 'settings.openSystem' && args.section === 'accessibilityAppInfo') {
         if (alive.current && ticket === generation.current) setNotice('返回这里后会重新检查。你也可以随时点刷新。');
         return;
       }
@@ -377,7 +378,11 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
     if (id === 'tools') return <RuntimePreparation preparation={preparation} can={can} blocked={locked} projectReview={!!viteReady}/>;
     if (id === 'phone') return <>
       <p className="pw-setup-copy">聊天、查资料和生成文件可以直接在 App 内使用。需要操作手机界面时，再开启下面的权限。</p>
-      <section className="pw-setup-purpose-group"><SetupRow title="界面读取与主屏控制" status={permissionLabel(data.permissions.accessibility)} action={permissionAction('accessibility', data.permissions.accessibility)}/><p className="pw-setup-copy">用手机主屏执行时，开启无障碍并保持手机解锁、亮屏。主屏模式免配对。</p></section>
+      <section className="pw-setup-purpose-group"><SetupRow title="界面读取与主屏控制" status={permissionLabel(data.permissions.accessibility)} action={permissionAction('accessibility', data.permissions.accessibility)}/><p className="pw-setup-copy">用手机主屏执行时，开启无障碍并保持手机解锁、亮屏。主屏模式免配对。</p>
+        {connection.supported && data.permissions.accessibility === false && can('settings.openSystem') &&
+          <PhoneAccessibilitySetupHelp readiness={snapshot.state.phoneReadiness} action={<Button variant="secondary" disabled={locked}
+            onClick={() => void command('settings.openSystem', { section: 'accessibilityAppInfo' })}>打开口袋世界的应用信息</Button>} />}
+      </section>
       <section className="pw-setup-purpose-group"><SetupRow title="系统通知" status={permissionLabel(data.permissions.notifications)} action={permissionAction('notifications', data.permissions.notifications, '允许任务通知')}/><p className="pw-setup-copy">手机工作需要保留通知中的停止入口。请同时检查系统通知和手机任务通知类别，返回后重新核对准备情况。</p></section>
       <section className="pw-setup-purpose-group"><SetupRow title="后台独立屏" status={phoneConnection} action={<Button variant="secondary" disabled={locked} onClick={() => void navigate('background')}>连接与检查</Button>}/><p className="pw-setup-copy">独立屏需要 Android 14 或以上。可在这台手机上完成无线调试配对，或使用已授权的 Shizuku。连接后再检查显示、输入和截图能力。</p></section>
       <Accordion className="pw-setup-purpose-details"><AccordionItem id="setup-calendar" title="向日历添加事项" description={`读取${permissionLabel(data.permissions.calendarRead)} · 写入${permissionLabel(data.permissions.calendarWrite)}`}>

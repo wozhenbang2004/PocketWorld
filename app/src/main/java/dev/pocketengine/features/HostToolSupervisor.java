@@ -955,6 +955,15 @@ public final class HostToolSupervisor implements CapabilityPort {
     }
     @Override public JSONObject beforeTool(String name,JSONObject arguments,RunControl original)throws Exception{
         if(workProfile!=null)try{workProfile.checkCurrent();}catch(Exception withdrawn){original.check();return new JSONObject().put("ok",false).put("accepted",false).put("status","not_dispatched").put("code","work_profile_source_changed").put("message","原工作配置或来源已变化；本次尚未派发，请回原任务审阅。").put("replayAllowed",false);}
+        if("teams_start".equals(name)&&allowWrites&&original!=null&&original.matchesHostRun(taskId,runId,epoch)){
+            Tool route=routes.get(name);
+            if(route!=null&&route==nativeRoutes.get(name)&&route.preset==null&&"teams".equals(route.feature)&&"start".equals(route.command)){
+                original.check();
+                TaskStore.OwnerSelectedTeamRefusal refused=tasks.ownerSelectedTeamStartRefusal(taskId,runId,epoch,arguments);
+                if(refused!=null)return new JSONObject().put("ok",false).put("accepted",false).put("status","not_dispatched")
+                        .put("code",refused.code()).put("requiresPause",true).put("automaticReplayAllowed",false).put("message",refused.message());
+            }
+        }
         JSONObject savedTeamGate=savedTeamPrerequisite(name,arguments,original);
         if(savedTeamGate!=null)return savedTeamGate;
         return nativeDevicePort!=null&&nativeDevicePort.supports(name)?nativeDevicePort.beforeTool(name,arguments,original):null;
