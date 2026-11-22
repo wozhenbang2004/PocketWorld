@@ -1462,6 +1462,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun independentReportSourceIndex():Int =
         if(webPrivateOwnerVisible())ownerComposer?.independentReportSourceIndex()?:-1 else -1
 
+    // Classification for a local picker entry, not an attachment or send grant.
+    internal fun ordinaryNewAttachmentDraft(draft: OwnerComposerState.Draft): Boolean {
+        val model = ownerComposer ?: return false
+        return webPrivateOwnerVisible() && !hasChannelPhoneOrigin && state.conversationId == null &&
+            draft.conversationId.isEmpty() && draft.key.startsWith("new:") &&
+            model.active() === draft && model.independentReportFollowUpKey() != draft.key &&
+            model.pending().none { it.draftKey == draft.key }
+    }
+
     internal fun prepareIndependentReportFollowUp(task:String,proof:TaskStore.OwnerWorkReportQuote,
                                                   visible:()->Boolean,done:(JSONObject?,String?)->Unit) {
         val model=ownerComposer?:error("原草稿还在恢复")

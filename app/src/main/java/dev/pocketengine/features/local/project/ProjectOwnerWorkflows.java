@@ -157,7 +157,7 @@ public final class ProjectOwnerWorkflows {
     }
     public record DirectNodeBuildReview(JSONObject preview,OwnerDirectNodeBuild.Review offer,
             OwnerDirectNodeDependencies.Review dependencyOffer,JSONObject dependencyWork,
-            OwnerDirectNodeBuild.Review viteOffer,JSONObject viteWork){}
+            OwnerDirectNodeBuild.Review viteOffer,JSONObject viteWork,LocalModule.DependencyCheckoutOffer dependencyCopy){}
     public DirectNodeBuildReview reviewDirectNodeBuildForOwner(String project,String checkout)throws Exception {
         return reviewNodeBuild(project,checkout,true);
     }
@@ -206,11 +206,16 @@ public final class ProjectOwnerWorkflows {
         var offer=ready&&directCompiler?OwnerDirectNodeBuild.offer(local,plan,pin,snapshot,false):null;
         var viteOffer=ready&&directVite&&viteWork==null?OwnerDirectNodeBuild.offer(local,plan,pin,snapshot,true):null;
         OwnerDirectNodeDependencies.Review dependencyOffer=null;
-        if(supported&&viteWork==null&&dependencyWork==null&&"needs_lock_review".equals(result.opt("dependencyState"))&&
-                local.directNodeDependencyRootAbsentForOwner(project,checkout))
-            dependencyOffer=OwnerDirectNodeDependencies.offer(local,ProjectBuildPlan.lockedNodeDependencies(snapshot,plan.getString("runtimeIdentity"),deps));
-        return new DirectNodeBuildReview(result,offer,dependencyOffer,dependencyWork,viteOffer,viteWork);
+        LocalModule.DependencyCheckoutOffer dependencyCopy=null;
+        if(supported&&viteWork==null&&dependencyWork==null&&"needs_lock_review".equals(result.opt("dependencyState"))){
+            if(local.directNodeDependencyRootAbsentForOwner(project,checkout))
+                dependencyOffer=OwnerDirectNodeDependencies.offer(local,ProjectBuildPlan.lockedNodeDependencies(snapshot,plan.getString("runtimeIdentity"),deps));
+            else if(directVite)dependencyCopy=local.reviewDependencyCheckoutForOwner(ProjectSources.describe(snapshot),deps);
+        }
+        return new DirectNodeBuildReview(result,offer,dependencyOffer,dependencyWork,viteOffer,viteWork,dependencyCopy);
     }
+    public JSONObject confirmDependencyCheckoutForOwner(dev.pocketengine.features.local.OwnerNodeDependencyCheckout review,
+            java.util.function.BooleanSupplier current)throws Exception{return local.confirmDependencyCheckoutForOwner(review,current);}
     public JSONObject prepareCheckoutForOwner(String project,String request)throws Exception{return local.prepareDevelopmentCheckoutForOwner(project,request);}
     /** Project-level saved result shelf, separate from a work draft and from current runtime/tooling. */
     public JSONObject savedBuildWebForOwner(String project,String checkout,String cursor,RunControl control)throws Exception{

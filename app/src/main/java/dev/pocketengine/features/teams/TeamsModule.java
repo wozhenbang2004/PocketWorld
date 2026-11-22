@@ -152,6 +152,16 @@ public final class TeamsModule implements EngineModule {
         if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
         return coordinator.confirmOwnerWorkReport(tasks,report,completed,feedback,current);
     }
+    public TeamCoordinator.OwnerPausedMemberReview reviewPausedOwnerMember(dev.pocketengine.store.TaskStore tasks,JSONObject exact,
+            java.util.function.BooleanSupplier current)throws Exception {
+        context.requireExecutionEnabled();if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
+        return coordinator.reviewPausedOwnerMember(tasks,exact,current,context.settings::matchesApiCatalogRoute);
+    }
+    public JSONObject confirmPausedOwnerMember(dev.pocketengine.store.TaskStore tasks,TeamCoordinator.OwnerPausedMemberReview review,
+            java.util.function.BooleanSupplier current)throws Exception {
+        if(Thread.holdsLock(tasks))throw new IllegalStateException("原团队审阅不得从Tasks锁内进入协调器");
+        return coordinator.confirmPausedOwnerMember(tasks,review,()->context.executionAllowed()&&current.getAsBoolean(),context.settings::matchesApiCatalogRoute);
+    }
     /** Foreground owner receipt recovery only; not exposed by handle() or any model tool. */
     public JSONObject recoverOwnerOriginalFile(String id,String run,int epoch,String operation,java.util.function.BooleanSupplier ownerWindow)throws Exception{
         if(writeHost==null)throw new IllegalStateException("原团队文件宿主不可用");return writeHost.recoverOriginalFile(coordinator,id,run,epoch,operation,ownerWindow);

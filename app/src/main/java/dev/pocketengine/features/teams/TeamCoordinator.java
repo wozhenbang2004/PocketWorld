@@ -4,6 +4,7 @@ import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.workspace.JsonFiles;
+import dev.pocketengine.store.TaskStore;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -1063,6 +1064,9 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
         return resumeSelected(id,memberId,config,evidence,external,wake,useQueuedMessages,false,0);
     }
     private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages,boolean retainedControlOnly,int deferredOwnRound)throws Exception{
+        return resumeSelected(id,memberId,config,evidence,external,wake,useQueuedMessages,retainedControlOnly,deferredOwnRound,null);
+    }
+    private JSONObject resumeSelected(String id,String memberId,ModelConfig config,EvidenceFactory evidence,ExternalMemberFactory external,dev.pocketengine.store.TaskStore.TeamResearchWakeAdmission wake,boolean useQueuedMessages,boolean retainedControlOnly,int deferredOwnRound,RunControl.AuthorityCheck beforeQueue)throws Exception{
         Run run=required(id);
         if(retainedControlOnly&&(run.control==null||run.control.isCancelled()||run.control.isPaused()))throw new SecurityException("原团队控制已停下，未创建替代执行。");
         if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止，不能恢复派发");
@@ -1091,7 +1095,9 @@ if(runs.size()+archived.size()>=RETAINED_RUN_LIMIT)throw new IllegalStateExcepti
 if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态工作项请使用原工作计划的精确继续，不按成员最近轮次猜assignment或追加预算");if(run.json.optString("status").equals("cancelled"))throw new IllegalStateException("该团队任务已停止，不能恢复派发");if(closed)throw new IllegalStateException("团队执行器已关闭");for(Run other:runs.values())if(other!=run&&active(other))throw new IllegalStateException("请先处理另一团队的活动任务");if(config==null||config.model.isEmpty())throw new IllegalStateException("请先配置模型");boolean all=memberId==null||memberId.isEmpty();if(!all&&member(run,memberId).optBoolean("exited"))throw new SecurityException("已退出成员不可恢复；同名新成员使用新ID");
         if(TeamEvidenceDiscussion.enabled(run.json)&&activeMemberCount(run)<2)throw new IllegalStateException("独立证据讨论至少需2名当前成员；请显式加入新身份，不让协调者扮演退出者");
         if((TeamEvidenceDiscussion.enabled(run.json)||researchEnabled(run))&&run.json.optInt("callsUsed")>=run.json.optInt("callLimit"))throw new IllegalStateException("原证据讨论模型预算已用尽；本次继续不会自动追加额度");
-        if(researchEnabled(run)){JSONObject actual=budgetHost.snapshot(id);if(actual.getInt("remainingModelRequests")<1)throw new IllegalStateException("本次调用次数已到上限，已完成内容保留；请在研究预算页明确追加后再继续");nativeBudget(run,new JSONObject().put("parentBudget",actual));}
+        if(researchEnabled(run)){JSONObject actual=budgetHost.snapshot(id);if(actual.getInt("remainingModelRequests")<1)throw new IllegalStateException("本次调用次数已到上限，已完成内容保留；请在研究预算页明确追加后再继续");
+            if(beforeQueue!=null)beforeQueue.check();
+            nativeBudget(run,new JSONObject().put("parentBudget",actual));}
         // An automatic transition never replaces a concurrently stopped/paused control.
         // Explicit owner resume retains its existing renewal behavior.
         if(wake!=null){if(run.control==null||run.control.isCancelled()||run.control.isPaused()||run.paused||all||member(run,memberId).optBoolean("paused"))throw new SecurityException("原研究控制已暂停或停止，自动消息不能续审新控制");}
@@ -1241,19 +1247,116 @@ if(run.json.optJSONObject("workPlan")!=null)throw new SecurityException("动态�
             }
             if(chosen&&!unfinished)return null;
         }
-        JSONObject leader=member(run,run.json.getString("leaderId"));
-        TeamMemberModels.Selection chosen=retainedMemberModel(run,slot),summarizer=retainedMemberModel(run,leader);
-        if(chosen==null||summarizer==null)return null; // no attempt to rebuild a missing private model from JSON
-        ModelConfig[] sources={run.originalConfig,run.originalConfig.forPurpose("SUMMARY"),
-                chosen.config.forPurpose("MEMBER"),chosen.config.forPurpose("MAIN"),
-                chosen.config.forPurpose("SUMMARY"),summarizer.config,summarizer.config.forPurpose("SUMMARY")};
-        for(ModelConfig source:sources)if(!TeamMemberModels.singleBoundApi(source))return null;
-        if(run.config!=run.originalConfig)throw new SecurityException("原团队模型已改变，没有换模型继续这名成员。");
-        for(ModelConfig source:sources)if(!current.matches(source))throw new SecurityException("这名成员或汇总的原模型连接已变化，没有改用默认模型。");
+        if(retainedOriginalMemberApi(run,slot,current)==null)return null;
         ownerCurrent.check();run.control.check();
         // Reuse the original resume, same roster and budget. No new model, child
         // grant, recovery policy or dispatch surface is created by this selection.
         return resumeSelected(run.json.getString("id"),target,run.originalConfig,run.evidenceFactory,run.externalFactory,null,false,true,exactSelfWait?2:0);
+    }
+    private record OriginalMemberApi(ModelConfig member,ModelConfig memberSummary,ModelConfig synthesis){}
+    private OriginalMemberApi retainedOriginalMemberApi(Run run,JSONObject slot,OriginalApiCurrent current)throws Exception {
+        TeamMemberModels.Selection chosen=retainedMemberModel(run,slot),summarizer=retainedMemberModel(run,member(run,run.json.getString("leaderId")));
+        if(chosen==null||summarizer==null)return null; // Never rebuild a missing private model from JSON.
+        ModelConfig member=chosen.config.forPurpose("MEMBER"),memberSummary=chosen.config.forPurpose("SUMMARY");
+        ModelConfig[] sources={run.originalConfig,run.originalConfig.forPurpose("SUMMARY"),member,chosen.config.forPurpose("MAIN"),
+                memberSummary,summarizer.config,summarizer.config.forPurpose("SUMMARY")};
+        for(ModelConfig source:sources)if(!TeamMemberModels.singleBoundApi(source))return null;
+        if(run.config!=run.originalConfig)throw new SecurityException("原团队模型已改变，没有换模型继续这名成员。");
+        for(ModelConfig source:sources)if(!current.matches(source))throw new SecurityException("这名成员或汇总的原模型连接已变化，没有改用默认模型。");
+        return new OriginalMemberApi(member,memberSummary,(run.json.optBoolean("leaderUsesMemberModel")?summarizer.config:run.originalConfig).forPurpose("SUMMARY"));
+    }
+    /** One held foreground review, not a new run, model selection or tool grant. */
+    public static final class OwnerPausedMemberReview {
+        private final TeamCoordinator issuer;
+        private final TaskStore storage;
+        private final Run run;
+        private final RunControl control;
+        private final String input, stopped, preview;
+        private boolean used;
+        private OwnerPausedMemberReview(TeamCoordinator issuer,TaskStore storage,Run run,JSONObject input,JSONObject stopped,JSONObject preview){
+            this.issuer=issuer;this.storage=storage;this.run=run;control=run.control;this.input=input.toString();this.stopped=stopped.toString();this.preview=preview.toString();
+        }
+        public JSONObject preview()throws Exception{return new JSONObject(preview);}
+    }
+    private record PausedMemberFacts(Run run,JSONObject chosen,String retainedMember,JSONObject retainedStage,JSONObject oldTurn){}
+    private PausedMemberFacts pausedMemberFacts(JSONObject exact)throws Exception {
+        String id=exact.getString("runId"),target=exact.getString("memberId");
+        if(closed||!runs.containsKey(id))throw new SecurityException("原分工不在本次仍保留的运行中，只能查看原记录");
+        Run run=requireReviewedControl(exact);JSONObject source=run.json;JSONArray members=roster(run);
+        if(researchFactory==null||budgetHost==null||run.paused||run.executing||run.enqueued||!run.children.isEmpty()||!run.researchTurns.isEmpty()
+                ||researchFactory.hasActiveWork(id)||run.control==null||run.control.isCancelled()||run.control.isPaused()||run.originalConfig==null
+                ||!researchEnabled(run)||!Boolean.FALSE.equals(source.opt("researchBudgetAutoRefill"))||!"collaborate".equals(source.opt("mode"))
+                ||!"classic".equals(source.optString("discussionFormat","classic"))||source.has("workPlan")||source.has("productionScope")
+                ||source.has("nativeWorkProfileModels")||source.has("phoneScope")||run.phoneApproval!=null||source.optInt("rounds")!=1||members.length()!=2
+                ||!"paused".equals(source.opt("status"))||!"waiting_member".equals(source.opt("phase"))
+                ||!ordinaryLocalReportRoster(members)||TeamAttention.forRun(source).length()!=0)
+            throw new SecurityException("原协作或成员尚未到达可核对的单项暂停点，没有继续");
+        JSONObject chosen=member(run,target),other=members.getJSONObject(0)==chosen?members.getJSONObject(1):members.getJSONObject(0);
+        String retained=other.getString("id");
+        if(target.equals(retained)||chosen.optBoolean("exited")||other.optBoolean("exited")||chosen.has("parentPause")
+                ||!Boolean.TRUE.equals(chosen.opt("paused"))||!"paused".equals(chosen.opt("status"))
+                ||!Boolean.FALSE.equals(other.opt("paused"))||!"completed".equals(other.opt("status")))
+            throw new SecurityException("只支持本次原成员明确暂停，另一名成员的原交付须已完成");
+        JSONArray activity=source.getJSONObject("board").getJSONArray("activity");JSONObject pause=null;
+        for(int i=activity.length()-1;i>=0;i--){JSONObject event=activity.getJSONObject(i);
+            if(!("member_completed".equals(event.opt("type"))&&retained.equals(event.opt("memberId")))){pause=event;break;}}
+        if(pause==null||!"paused".equals(pause.opt("type"))||!target.equals(pause.opt("memberId")))
+            throw new SecurityException("没有指向这名成员的本次暂停记录，没有继续");
+        JSONObject a=TeamWorkPlan.state(other,1),b=TeamWorkPlan.state(chosen,1),aResult=a.optJSONObject("researchTask");
+        int old=b.optInt("generation",-1);
+        if(!"completed".equals(a.opt("status"))||a.optInt("generation",-1)!=other.optInt("generation")
+                ||!originalResearchStep(run,other,1,a.optString("researchTaskId"),aResult)||!"completed".equals(aResult.opt("status"))
+                ||researchOriginalReference(aResult).getInt("chars")<=0||!"paused".equals(b.opt("status"))||old<0
+                ||(long)old+1!=chosen.getInt("generation")||!nativeUuid(b.optString("researchTaskId"))||!nativeUuid(b.optString("turnId")))
+            throw new SecurityException("原暂停分工或已交原件不能核对，没有继续");
+        JSONObject oldTurn=new JSONObject().put("taskId",b.getString("researchTaskId")).put("turnId",b.getString("turnId"))
+                .put("memberGeneration",old).put("identityRevision",chosen.optInt("identityRevision",1));
+        return new PausedMemberFacts(run,chosen,retained,a,oldTurn);
+    }
+    private static String receiverLabel(ModelConfig config){return config.provider+" / "+config.model;}
+    private OriginalMemberApi pausedMemberApi(PausedMemberFacts facts,OriginalApiCurrent current)throws Exception {
+        Run run=facts.run();OriginalMemberApi model=retainedOriginalMemberApi(run,facts.chosen(),current);
+        if(model==null)throw new SecurityException("本次原模型连接不能在此继续；不会改用默认模型");
+        // If the chosen leader fails again, the normal partial synthesis uses the
+        // coordinator's original SUMMARY. Never offer a review with two possible recipients.
+        if(run.json.optBoolean("leaderUsesMemberModel")&&facts.chosen().opt("id").equals(run.json.opt("leaderId"))){
+            ModelConfig summary=model.synthesis(),partial=run.originalConfig.forPurpose("SUMMARY");
+            if(!summary.capabilityBinding.equals(partial.capabilityBinding)||!summary.sameCredentials(partial)
+                    ||!summary.baseUrl.equals(partial.baseUrl)||!summary.provider.equals(partial.provider)||!summary.model.equals(partial.model))
+                throw new SecurityException("未完成时与完成后的原汇总接收方不同，此处没有继续");
+        }
+        return model;
+    }
+    synchronized OwnerPausedMemberReview reviewPausedOwnerMember(TaskStore tasks,JSONObject exact,java.util.function.BooleanSupplier current,OriginalApiCurrent modelCurrent)throws Exception {
+        if(!current.getAsBoolean())throw new SecurityException("原分工窗口已关闭，没有继续");
+        PausedMemberFacts facts=pausedMemberFacts(exact);Run run=facts.run();JSONObject chosen=facts.chosen();
+        OriginalMemberApi model=pausedMemberApi(facts,modelCurrent);
+        JSONObject stopped=tasks.ownerPausedTeamMemberSource(exact,facts.retainedMember(),facts.retainedStage(),facts.oldTurn());
+        if(!current.getAsBoolean())throw new SecurityException("原分工窗口已关闭，没有继续");
+        JSONObject preview=new JSONObject().put("runId",exact.getString("runId")).put("revision",exact.getLong("expectedRevision"))
+                .put("generation",exact.getInt("expectedGeneration")).put("memberId",chosen.getString("id"))
+                .put("memberGeneration",exact.getInt("expectedMemberGeneration")).put("retainedMemberId",facts.retainedMember())
+                .put("assignment",chosen.getString("assignment")).put("memberReceiver",receiverLabel(model.member()))
+                .put("memberSummaryReceiver",receiverLabel(model.memberSummary())).put("synthesisReceiver",receiverLabel(model.synthesis()))
+                .put("executionAuthorized",false);
+        return new OwnerPausedMemberReview(this,tasks,run,exact,stopped,preview);
+    }
+    synchronized JSONObject confirmPausedOwnerMember(TaskStore tasks,OwnerPausedMemberReview review,java.util.function.BooleanSupplier current,OriginalApiCurrent modelCurrent)throws Exception {
+        if(review==null||review.issuer!=this||review.storage!=tasks||review.used||!current.getAsBoolean())
+            throw new SecurityException("原分工审阅已关闭或使用，没有继续");
+        review.used=true;
+        JSONObject exact=new JSONObject(review.input);PausedMemberFacts facts=pausedMemberFacts(exact);Run run=facts.run();
+        if(run!=review.run||run.control!=review.control)throw new SecurityException("原成员控制已变化，没有继续");
+        JSONObject result=resumeSelected(exact.getString("runId"),exact.getString("memberId"),run.originalConfig,run.evidenceFactory,run.externalFactory,null,false,true,0,()->{
+            pausedMemberApi(facts,modelCurrent);
+            JSONObject stopped=tasks.ownerPausedTeamMemberSource(exact,facts.retainedMember(),facts.retainedStage(),facts.oldTurn());
+            if(!TeamWorkFiles.canonical(new JSONObject(review.stopped)).equals(TeamWorkFiles.canonical(stopped))||!current.getAsBoolean())
+                throw new SecurityException("原暂停记录或窗口已变化，没有继续");
+        });
+        // Use the same existing reviewed mirror as a native member control. A lost receipt must not retry the queue.
+        try{tasks.updateReviewedTeamControl(exact.getString("runId"),exact,result);}
+        catch(Exception unconfirmed){throw new IllegalStateException("原分工是否已排队待核对，请刷新这次协作，不要重复提交。",unconfirmed);}
+        return result;
     }
     private static boolean originalResearchStep(Run run,JSONObject member,int round,String child,JSONObject receipt)throws Exception {
         return !child.isEmpty()&&receipt!=null&&child.equals(receipt.opt("taskId"))

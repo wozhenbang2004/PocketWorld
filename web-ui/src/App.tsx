@@ -207,6 +207,9 @@ type ChatWorkRowOrigin={work:WorkIdentity;conversation:string;draftEpoch:number;
 type ChatWorkTaskOpen={beforeTaskRequest:number;navigation:number}&({returnTo:ChatWorkReturn;row?:never}|{row:ChatWorkRowOrigin;returnTo?:never});
 type AcknowledgedWorkVisit=TaskReviewWindow&{chatRow?:ChatWorkRowOrigin;chatReturnRequest?:number};
 type ChatDrawerReturn=ChatWorkReturn&{taskId:string;navigation:number;resumeRevision:number};
+type PausedChatPhoneOrigin={phone:ShownPhoneRun;pause:DisplayedPhonePause;conversation:string;draftEpoch:number;
+ document:number;navigation:number;resume:number;request:number;nativeRequest:number;trigger:HTMLButtonElement;row:HTMLElement};
+type PausedChatPhoneWork={source:PausedChatPhoneOrigin;window:TaskReviewWindow;focused:boolean};
 type DeliveredFileVisit={conversation:string;document:number;navigation:number;resume:number;taskRequest:number;trigger:HTMLButtonElement;sources:DeliveredFileSource[]};
 type PreferredChatFile={visit:DeliveredFileVisit;source:DeliveredFileSource;file:Pick<TaskResultFile,'id'|'sha256'>;current:()=>boolean;windowId?:string};
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
@@ -223,9 +226,9 @@ type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitt
 type LiveResultAttachment={result:TaskResult;mimeType:string;size:number;kind:string};
 type SavedAttachmentMessage={id:string;revision:number;resume:number;taskRequest:number;liveResult?:LiveResultAttachment;
  historyResult?:LiveResultAttachment&{sourceGeneration:number}};
-type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage};
+type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage;ordinaryNewDraftVisit?:{route:string;resume:number}};
 type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:boolean;reopening?:boolean};
-type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'>&{resume:number;launch:FileAttachmentPickerLaunch};
+type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'|'ordinaryNewDraftVisit'>&{resume:number;launch:FileAttachmentPickerLaunch};
 type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
@@ -471,6 +474,20 @@ function phoneViewerTask(task?:Task):PhoneViewerTask|null{
  const detail=typeof task.summary==='string'&&task.summary.trim()?task.summary:typeof raw.summary==='string'&&raw.summary.trim()?raw.summary:blocked&&typeof evidence.message==='string'?evidence.message:'';
  return {...identity,title:task.goal,statusLabel:labelStatus(task.status),detail,preparation:blocked?'blocked':['queued','preparing'].includes(task.status)?'pending':undefined,status:terminal(task)||task.status==='interrupted'?(task.status==='failed'?'error':'ended'):task.status==='stopping'?'stopping':task.status==='paused'?'paused':['queued','preparing','running','verifying'].includes(task.status)?'running':'waiting'};
 }
+// Only retained local presentation facts. The original Work viewer still owns every frame read.
+function originalChatPhonePreview(native:ReturnType<typeof bridge.getState>,id:string){
+ const rows=asArray<Task>(native.state.tasks).filter(row=>row.id===id),task=rows.length===1?rows[0]:null;
+ const raw=task?.raw;
+ if(!task||!raw||!isPrivateLocalPhone(task)||raw.status!==task.status||task.executionMode!=='background'||
+    raw.executionMode!=='background'||raw.cancelRequested!==false||raw.teamRunId!=null||raw.teamAssignment!=null||raw.memberId!=null||
+    raw.contextAvailable===false||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.taskCoreReadLimited!==false||raw.metadataLimited===true||raw.taskProjection==='source_unavailable'||phoneConversationId(task)!==native.state.conversationId)return null;
+ const surface=privatePhoneSurface(task,native.state.livePrivatePhones);
+ return surface?.activityHandle&&surface.surfaceState==='bound'&&!surface.stopRequested?{task,surface,activityHandle:surface.activityHandle}:null;
+}
+const quietChatPhonePause=(source:ReturnType<typeof originalChatPhonePreview>)=>source&&source.task.status==='paused'&&source.surface.paused&&
+ source.task.raw?.hasUnresolvedOperations===false&&source.task.raw.historyHasUnconfirmedOperations===false&&
+ source.task.raw.ownerPhoneQuestionHold==null&&!conversationInlineAttention(source.task)?source.surface.displayedPause:undefined;
 const taskBinding=(t?:Task|null)=>t?[t.id,t.updatedAt,t.raw?.runId,t.raw?.coordinatorEpoch,t.raw?.revision,t.raw?.resultReviewDigest,t.raw?.executionScope?.revision,t.raw?.executionScope?.executionPhase,t.raw?.executionScope?.planRevision,t.raw?.executionScope?.planArtifactRef,t.raw?.executionScope?.planHash].join(':'):'';
 function noSavedDraftInReview(task:Task,review:Review|null){
  const fact=review?.projectDraftAcceptance,raw=task.raw;
@@ -715,7 +732,11 @@ export default function App(){
  const phoneNotification=originalPhoneNotice(state.originalPhoneNotification);
  const [phoneNoticePin,setPhoneNoticePin]=useState<PhoneNotice|null>(null),[phoneNoticePanel,setPhoneNoticePanel]=useState<string|null>(null);
  const phoneNoticeRef=useRef<PhoneNotice|null>(null),phoneNoticeSeen=useRef('');
- const phoneActivityPick=useRef<{kind:'activity'|'blank_draft';handle:string;navigation:number;document:number;resume:number;entry:'review'|'overview'}|null>(null);
+ const phoneActivityPick=useRef<{kind:'activity'|'blank_draft';handle:string;navigation:number;document:number;resume:number;entry:'review'|'overview';preview?:PausedChatPhoneOrigin}|null>(null);
+ const pausedChatPhoneWork=useRef<PausedChatPhoneWork|null>(null);
+ const pausedChatPhoneCovered=useRef(true);
+ const pausedChatPhoneExit=useRef<{exited:()=>boolean;retire:()=>void}|null>(null);
+ useEffect(()=>()=>pausedChatPhoneExit.current?.retire(),[]);
  useEffect(()=>{setPhoneViewerExpanded(false)},[state.conversationId,route,taskId,taskOpen]);
  const projectScroll=useRef<HTMLElement>(null),projectListTop=useRef(new Map<string,number>());
  const projectTaskReturn=useRef<ProjectTaskReturn|null>(null);
@@ -2095,12 +2116,67 @@ export default function App(){
   const unsubscribe=bridge.subscribe(invalidate);document.addEventListener('visibilitychange',invalidate);
   return()=>{unsubscribe();document.removeEventListener('visibilitychange',invalidate)};
  },[invalidateContinuation]);
+ const currentPausedChatPhone=useCallback((source:PausedChatPhoneOrigin,phase:'chat'|'opening'|'work'|'return')=>{
+  const native=bridge.getState(),view=obj(native.view),owner=native.state,draft=native.composer;
+  const selected=phase==='chat'?view.taskId===null:phase==='work'?view.taskId===source.phone.taskId:view.taskId===null||view.taskId===source.phone.taskId;
+  if(!selected||pausedChatPhoneCovered.current||document.hidden||view.section!==null||bridge.getDocumentEpoch()!==source.document||view.resumeRevision!==source.resume||
+     navigationWindow.current!==source.navigation||owner.requestedTaskRevision!==source.nativeRequest||owner.conversationId!==source.conversation||
+     owner.conversationReader!==null||owner.filePath!==null||owner.queuedInputsPage||owner.chatAttachmentPickerOpen||owner.attachmentWorkspace?.open!==false||
+     obj(native.phoneDraft).channelOrigin!==false||draft?.ready!==true||draft.key!==`conversation:${source.conversation}`||
+     draft.conversationId!==source.conversation||draft.epoch!==source.draftEpoch||!source.row.isConnected||source.row.dataset.taskId!==source.phone.taskId)return false;
+  const observed=originalChatPhonePreview(native,source.phone.taskId),surface=observed?.surface;
+  if(!surface||surface.runId!==source.phone.runId||surface.epoch!==source.phone.epoch||observed?.activityHandle!==source.phone.activityHandle)return false;
+  return (phase==='work'||phase==='return')||sameDisplayedPause(source.pause,quietChatPhonePause(observed));
+ },[]);
+ const returnFromPausedChatPhone=useCallback(()=>{
+  const visit=pausedChatPhoneWork.current;
+  if(route!=='chat'||!visit||visit.window.taskId!==taskId||visit.window.request!==reviewRequest.current||openedTaskId.current!==taskId||
+     !currentPausedChatPhone(visit.source,'work')||!can('tasks.close')||workSupplementBeforeLeave.current||taskPolicyBeforeLeave.current||
+     projectDraftBeforeLeave.current||preparationBeforeLeave.current)return false;
+  pausedChatPhoneWork.current=null;
+  const {source}=visit;
+  const current=()=>reviewRequest.current===visit.window.request+1&&openedTaskId.current===null&&currentPausedChatPhone(source,'return');
+  let exit=false,ack=false,frame=0,timer=0,unsubscribe=()=>{};
+  const hide=()=>{if(document.hidden)retire()};
+  const retire=()=>{
+   if(pausedChatPhoneExit.current===returning)pausedChatPhoneExit.current=null;
+   unsubscribe();window.clearTimeout(timer);window.cancelAnimationFrame(frame);
+   document.removeEventListener('visibilitychange',hide);
+   document.removeEventListener('pointerdown',retire,true);document.removeEventListener('keydown',retire,true);
+  };
+  const focus=()=>{
+   if(!ack||!exit||frame||pausedChatPhoneExit.current!==returning)return;
+   if(!current()){retire();return;}
+   if(obj(bridge.getState().view).taskId!==null)return;
+   frame=window.requestAnimationFrame(()=>{
+    const trigger=source.trigger.isConnected?source.trigger:source.row.querySelector<HTMLButtonElement>('.pw-phone-activity-open');
+    const active=document.activeElement;
+    if(current()&&obj(bridge.getState().view).taskId===null&&trigger?.isConnected&&!trigger.disabled&&
+       !trigger.closest('[hidden],[inert],[aria-hidden="true"]')&&trigger.getClientRects().length&&
+       !document.querySelector('[role="dialog"][data-state="open"]')&&
+       (active===document.body||active===document.documentElement||active===trigger))trigger.focus({preventScroll:true});
+    retire();
+   });
+  };
+  const returning={retire,exited:()=>{if(!current()){retire();return false;}exit=true;focus();return true;}};
+  pausedChatPhoneExit.current?.retire();pausedChatPhoneExit.current=returning;
+  timer=window.setTimeout(retire,5000);
+  document.addEventListener('visibilitychange',hide);
+  document.addEventListener('pointerdown',retire,true);document.addEventListener('keydown',retire,true);
+  void closeTask().then(closed=>{
+   if(pausedChatPhoneExit.current!==returning)return;
+   if(!closed){retire();return;}
+   ack=true;unsubscribe=bridge.subscribe(focus);focus();
+  },retire);
+  return true;
+ },[route,taskId,can,closeTask,currentPausedChatPhone]);
  const backFromTask=useCallback(()=>{
   if(taskMenuOpen){setTaskMenuOpen(false);return}
   if(deviceScopeBack.current?.()||capabilityBack.current?.()||livePreviewBack.current?.()||receivedTextResultBack.current?.()||taskTransientBack.current?.()||closeCurrentWorkSupplement()||leaveTeamReport())return;
   if(taskLayer==='scope'){showTaskLayer('goal');return}
   const origin=taskReconciliationOrigin.current;
   if(origin?.openedId===taskId){openTask(origin.taskId,origin.layer,false,origin.history);return}
+  if(returnFromPausedChatPhone())return;
   let returnToSource=false;
   void closeTask(true,()=>{
    const visit=acknowledgedWorkVisit.current;
@@ -2123,7 +2199,7 @@ export default function App(){
    returnToSource=returnToRow||returnToMessage||returnFromPendingQuestion||route==='projects'&&!!project?.focusShelf&&project.taskId===taskId&&project.projectId===live.state.projectId&&
     openedTaskId.current===taskId&&view.taskId===taskId;
   }).then(closed=>{if(closed&&searchReturn&&!returnToSource)showWorkSearch()});
- },[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,closeCurrentWorkSupplement,leaveTeamReport,searchReturn,showWorkSearch,route,chatWorkLocation,currentChatWorkRow,currentChatWorkVisit,taskOpening,chatQuestionOrigin]);
+ },[taskMenuOpen,taskId,taskLayer,showTaskLayer,openTask,closeTask,closeCurrentWorkSupplement,leaveTeamReport,searchReturn,showWorkSearch,route,chatWorkLocation,currentChatWorkRow,currentChatWorkVisit,taskOpening,chatQuestionOrigin,returnFromPausedChatPhone]);
  const selectConversation=useCallback((id:string)=>{void navigate('chat',()=>{if(can('conversation.select'))run('conversation.select',{id})});},[can,run,navigate]);
  const chooseConversation=useCallback((target:string|null)=>{
   const action=target===null?'conversation.new':'conversation.select';
@@ -2694,12 +2770,21 @@ export default function App(){
  const enterPhoneNotification=(note:PhoneNotice)=>{
   const differentRun=()=>{const rows=bridge.getState().state?.tasks;const row=Array.isArray(rows)?rows.find(t=>t?.id===note.taskId):null;
    return !!row&&(row.raw?.runId!==note.runId||row.raw?.coordinatorEpoch!==note.epoch)};
-  const stillHere=()=>!document.hidden&&phoneNoticeRef.current?.token===note.token&&originalPhoneNotice(bridge.getState().state?.originalPhoneNotification)?.token===note.token&&!differentRun();
+  const pick=phoneActivityPick.current;
+  const chosen=note.selection&&pick?.kind===note.selection.kind&&pick.handle===note.selection.handle?pick:undefined;
+  const preview=chosen?.preview;
+  const stillHere=()=>!document.hidden&&phoneNoticeRef.current?.token===note.token&&originalPhoneNotice(bridge.getState().state?.originalPhoneNotification)?.token===note.token&&!differentRun()&&
+   (!preview||phoneActivityPick.current===chosen&&currentPausedChatPhone(preview,'opening'));
   if(document.hidden||!note.current||originalPhoneNotice(bridge.getState().state?.originalPhoneNotification)?.token!==note.token)return;
+  if(preview&&(route!=='chat'||taskOpen||taskOpening||reviewRequest.current!==preview.request||!currentPausedChatPhone(preview,'chat')||
+     preview.phone.taskId!==note.taskId||preview.phone.runId!==note.runId||preview.phone.epoch!==note.epoch))return;
   if(differentRun()){setPhoneNoticePanel(note.token);return}
   phoneNoticeRef.current=note;setPhoneNoticePin(note);setPhoneNoticePanel(null);
-  const pick=phoneActivityPick.current;
-  openTask(note.taskId,note.selection&&pick?.kind===note.selection.kind&&pick.handle===note.selection.handle?pick.entry:'overview',false,undefined,undefined,{runId:note.runId,epoch:note.epoch},stillHere);
+  openTask(note.taskId,chosen?.entry??'overview',false,undefined,undefined,{runId:note.runId,epoch:note.epoch},stillHere,undefined,undefined,
+   preview?()=>{const window=acknowledgedWorkVisit.current;
+    if(window?.taskId===preview.phone.taskId&&window.request===preview.request+1&&window.documentEpoch===preview.document&&window.resumeRevision===preview.resume&&
+       stillHere())pausedChatPhoneWork.current={source:preview,window,focused:false};
+   }:undefined);
  };
  useEffect(()=>{
   const note=phoneNotification;if(!note||document.hidden||phoneNoticeSeen.current===note.token||!can('tasks.open'))return;
@@ -2707,7 +2792,7 @@ export default function App(){
   if(note.selection){const pick=phoneActivityPick.current;
    if(pick?.kind!==note.selection.kind||pick.handle!==note.selection.handle||pick.navigation!==navigationWindow.current||pick.document!==bridge.getDocumentEpoch()||pick.resume!==Number(obj(bridge.getState().view).resumeRevision||0))return}
   if(note.current)enterPhoneNotification(note);
-  else setPhoneNoticePanel(note.token)
+  else if(!note.selection||!phoneActivityPick.current?.preview)setPhoneNoticePanel(note.token)
  },[phoneNotification?.token,can,openTask]);
  const returnFromPhoneNotice=()=>{const note=phoneNotification;if(!note)return;
   const release=()=>{setPhoneNoticePanel(null);if(can('phone.notice.close'))void bridge.command('phone.notice.close',{noticeHandle:note.token}).catch(()=>{})};
@@ -3424,6 +3509,11 @@ export default function App(){
    phone.phone===false&&phone.channelOrigin===false&&!owner.conversationReader&&!owner.chatBusy&&!owner.chatSubmitting&&!owner.phoneSubmitting&&input.ready===true&&input.key===draft.key&&
    input.epoch===draft.epoch&&input.conversationId===draft.conversationId&&String(owner.conversationId||'')===draft.conversationId;
  };
+ const ordinaryNewAttachmentDraftCurrent=(draft:FileDraftTarget,native:ReturnType<typeof bridge.getState>)=>{
+  const input=native.composer,owner=native.state;
+  return draft.conversationId===''&&input?.ordinaryNewAttachmentDraft===true&&input.key===draft.key&&input.epoch===draft.epoch&&
+   owner.conversationId===null&&owner.queuedInputsPage===null&&owner.filePath===null;
+ };
  const liveResultMessageCurrent=(native:ReturnType<typeof bridge.getState>,conversationId:string,source:SavedAttachmentMessage)=>{
   const original=source.liveResult?.result;
   if(!original)return false;
@@ -3465,10 +3555,19 @@ export default function App(){
  });
  const startFileAttachmentPicker=async(file:OriginalAttachmentChoice,draft:FileDraftTarget,sourceCurrent:()=>boolean,closeOriginal?:()=>Promise<void>,sourceMessage?:SavedAttachmentMessage)=>{
   const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current,initial=bridge.getState();
-  const liveDraft=()=>filePickerDraftCurrent(draft,documentEpoch,navigation)&&bridge.getState().composer?.revision===draft.revision;
+  const newDocumentDraft=!!file.standaloneDocument&&draft.conversationId==='';
+  const resume=obj(initial.view).resumeRevision;
+  const sameNewDraft=()=>{
+   const live=bridge.getState();
+   return isChatSurface&&intent==='chat'&&!draftSwitchPending()&&Number.isSafeInteger(resume)&&obj(live.view).resumeRevision===resume&&
+    ordinaryNewAttachmentDraftCurrent(draft,live)&&live.composer?.text===chatDraft.currentValue();
+  };
+  const liveDraft=()=>filePickerDraftCurrent(draft,documentEpoch,navigation)&&bridge.getState().composer?.revision===draft.revision&&
+   (!newDocumentDraft||sameNewDraft());
   const launch:FileAttachmentPickerLaunch={requestId:'',cancelled:false,settled:false};
   const current=()=>!launch.cancelled&&sourceCurrent()&&liveDraft();
-  if(!current()||initial.state.chatAttachmentPickerOpen!==false||initial.state.chatAttachmentPickerRequest!=null||fileAttachmentPickerLaunch.current?.settled===false)
+  if((newDocumentDraft&&!closeOriginal)||!current()||initial.state.chatAttachmentPickerOpen!==false||
+     initial.state.chatAttachmentPickerRequest!=null||fileAttachmentPickerLaunch.current?.settled===false)
    throw new Error('原草稿或附件选择已变化，没有加入文件。');
   // Native may publish the open picker before the particular list is proven.
   // Mask any generic picker until this explicit focused request can be shown.
@@ -3481,13 +3580,23 @@ export default function App(){
    const matching=await awaitPickerProjection(current,()=>fileInPicker(file,requestId,sourceMessage));
    if(!matching||!current())throw new Error('尚未在普通附件清单核对到这份原件，没有修改草稿。');
    if(closeOriginal)await closeOriginal();
-   if(launch.cancelled||!liveDraft()||!closeOriginal&&!sourceCurrent()||fileInPicker(file,requestId,sourceMessage)!==true)
+   // The close receipt may precede the ordinary state projection. Never reveal a focused
+   // picker on top of a replacement reader or accept a different draft after the close.
+   const closed=!newDocumentDraft||await awaitPickerProjection(()=>{
+    const view=bridge.getState().state.attachmentWorkspace;
+    return !launch.cancelled&&liveDraft()&&
+     (view?.open===false||view?.windowId===initial.state.attachmentWorkspace?.windowId);
+   },()=>bridge.getState().state.attachmentWorkspace?.open===false?true:undefined);
+   if(!closed||launch.cancelled||!liveDraft()||!closeOriginal&&!sourceCurrent()||fileInPicker(file,requestId,sourceMessage)!==true)
     throw new Error('原草稿或附件选择已变化，没有加入文件。');
    // Only reveal the existing picker once the exact source, draft and list are known.
-   setFileAttachmentPicker({file,draft,requestId,documentEpoch,navigation,sourceMessage});
+   setFileAttachmentPicker({file,draft,requestId,documentEpoch,navigation,sourceMessage,
+    ordinaryNewDraftVisit:newDocumentDraft?{route,resume:Number(resume)}:undefined});
    shown=true;
   }catch(error){
    if(!launch.requestId&&obj(error).code==='outcome_unknown')throw new Error('这次附件选择未确认，没有加入文件。可回输入框重新点「添加附件」。');
+   if(newDocumentDraft&&liveDraft()&&bridge.getState().state.attachmentWorkspace?.open===false)
+    setLocalError(error instanceof Error?error.message:'原附件选择尚未核对，没有加入文件。原草稿保留。');
    throw error;
   }finally{
    launch.settled=true;
@@ -3497,6 +3606,10 @@ export default function App(){
  const existingPrivateAttachmentDraft=route==='chat'&&!!state.conversationId&&canChooseFileForDraft&&!draftSwitching&&
   !state.queuedInputsPage&&!state.filePath&&phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&
   fileDraftTarget?.key===`conversation:${state.conversationId}`&&ordinaryDraftRevision===fileDraftTarget?.revision?fileDraftTarget:undefined;
+ const standaloneDocumentAttachmentDraft=existingPrivateAttachmentDraft??(
+  canChooseFileForDraft&&!draftSwitching&&fileDraftTarget&&ordinaryDraftRevision===fileDraftTarget.revision&&
+  phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&ordinaryNewAttachmentDraftCurrent(fileDraftTarget,snapshot)?
+   {...fileDraftTarget,label:'当前新对话草稿'}:undefined);
  const messageAttachmentDraft=!state.attachmentWorkspace?.open?existingPrivateAttachmentDraft:undefined;
  const chooseSavedMessageAttachment=async(message:Message,file:OriginalAttachmentChoice,draft:FileDraftTarget)=>{
   const documentEpoch=personalDocumentEpoch,navigation=navigationRevision;
@@ -3515,9 +3628,13 @@ export default function App(){
     setLocalError(error instanceof Error?error.message:'尚未核对到原附件，草稿保留。');
   }
  };
- const focusedFileDraftCurrent=(picker:FileAttachmentPickerOrigin)=>
-  filePickerDraftCurrent(picker.draft,picker.documentEpoch,picker.navigation)&&
-  (!picker.sourceMessage||savedMessageAttachmentCurrent(picker.draft,picker.sourceMessage,picker.file));
+ const focusedFileDraftCurrent=(picker:FileAttachmentPickerOrigin)=>{
+  const live=bridge.getState(),visit=picker.ordinaryNewDraftVisit;
+  return filePickerDraftCurrent(picker.draft,picker.documentEpoch,picker.navigation)&&
+   (!visit||route===visit.route&&intent==='chat'&&!draftSwitchPending()&&obj(live.view).resumeRevision===visit.resume&&
+    live.state.attachmentWorkspace?.open===false&&ordinaryNewAttachmentDraftCurrent(picker.draft,live))&&
+   (!picker.sourceMessage||savedMessageAttachmentCurrent(picker.draft,picker.sourceMessage,picker.file));
+ };
  const filePickerVisible=!!fileAttachmentPicker&&!fileAttachmentPickerLaunch.current?.cancelled&&state.chatAttachmentPickerRequest===fileAttachmentPicker.requestId&&
   focusedFileDraftCurrent(fileAttachmentPicker);
  const focusedInventoryReady=filePickerVisible&&obj(obj(state.moduleResultInputs)['attachments.list'])._requestId===fileAttachmentPicker?.requestId&&
@@ -4779,9 +4896,34 @@ export default function App(){
  },[canvasRole,canvasSupported,personalDocumentEpoch,canvasResume]);
  const phoneWorkObscured=!!(searchOriginal||preparationTarget||projectConventionMessage||providedMemoryMessage||conversationMemoryOpen||state.queuedInputsPage||permissionOptionsOpen||organizationTarget||state.attachmentWorkspace?.open||workOpen||commandOpen||projectPickerOpen||fileDisplayOpen||newProjectOpen||newFileOpen||phoneReview||voiceReview||state.chatAttachmentPickerOpen||messageQuoteTarget||messageOriginTarget||sourceSelection||skillDraftTarget||memoryDraftTarget||routeReferenceTarget||state.quickPanelVoice||readingDocuments.length);
  const phoneViewerObscured=phoneWorkObscured||!!state.conversationReader;
+ pausedChatPhoneCovered.current=route!=='chat'||phoneViewerObscured;
+ useLayoutEffect(()=>{
+  const visit=pausedChatPhoneWork.current;
+  if(visit&&(visit.window.request!==reviewRequest.current||route!=='chat'||bridge.getDocumentEpoch()!==visit.source.document||
+     navigationWindow.current!==visit.source.navigation)){pausedChatPhoneWork.current=null;return;}
+  if(!visit||visit.focused||route!=='chat'||!taskOpen||taskOpening||taskLayer!=='overview'||phoneViewerObscured||phoneViewerExpanded||
+     visit.window.request!==reviewRequest.current||openedTaskId.current!==visit.source.phone.taskId||
+     !currentPausedChatPhone(visit.source,'work')||!currentPausedChatPhone(visit.source,'opening'))return;
+  const frame=window.requestAnimationFrame(()=>{
+   if(pausedChatPhoneWork.current!==visit||visit.window.request!==reviewRequest.current||!currentPausedChatPhone(visit.source,'work')||
+      !currentPausedChatPhone(visit.source,'opening'))return;
+   const body=taskScroll.current,cards=body?.querySelectorAll<HTMLElement>('.pw-phone-viewer-card');
+   const card=cards?.length===1?cards[0]:undefined,button=card?.querySelector<HTMLButtonElement>('.pw-phone-viewer-expand');
+   if(!body||!card||!button?.isConnected||button.disabled||button.closest('[hidden],[inert],[aria-hidden="true"]')||!button.getClientRects().length)return;
+   visit.focused=true;
+   body.scrollTop+=card.getBoundingClientRect().top-body.getBoundingClientRect().top;
+   button.focus({preventScroll:true});
+  });
+  return()=>window.cancelAnimationFrame(frame);
+ },[snapshot,taskOpen,taskOpening,taskLayer,route,phoneViewerObscured,phoneViewerExpanded,currentPausedChatPhone]);
  const phoneViewerFor=(task:Task)=>{
   const target=phoneViewerTask(task);if(!target||!can('phone.viewer.open')||!can('phone.viewer.frame')||!can('phone.viewer.close'))return null;
   const local=isPrivateLocalPhone(task),live=privatePhoneSurface(task,state.livePrivatePhones);
+  const entry=phoneActivityPick.current?.preview;
+  const checkFirstView=entry?.phone.taskId===task.id&&noticeBinding?.selection?.handle===entry.phone.activityHandle;
+  const visited=pausedChatPhoneWork.current;
+  if(checkFirstView&&(!entry||!visited||visited.source!==entry||visited.window.request!==reviewRequest.current||!currentPausedChatPhone(entry,'work')||
+     !visited.focused&&!currentPausedChatPhone(entry,'opening')))return null;
   const phoneControllable=!local||(!!live&&!live.stopRequested);
   const conversationId=phoneConversationId(task);
   const relatedViewers=conversationId?tasks.filter(item=>phoneConversationId(item)===conversationId)
@@ -5796,10 +5938,10 @@ export default function App(){
      !document.hidden};
  const sameStopSource=(shown:ShownPhoneRun)=>sameStopWindow()&&!!stoppedSource(shown,asArray<Task>(bridge.getState().state.tasks));
  const stopReceipts=useInlinePhoneStops(stopWindow,sameStopSource);
- const openOriginalActivity=(shown:ShownPhoneRun,entry:'overview'|'review')=>{
+ const openOriginalActivity=(shown:ShownPhoneRun,entry:'overview'|'review',preview?:PausedChatPhoneOrigin)=>{
    if(document.hidden||!shown.activityHandle||!can('phone.activity.original'))return;
    const {taskId,runId,epoch,activityHandle}=shown;
-   phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry};
+   phoneActivityPick.current={kind:'activity',handle:activityHandle,navigation:navigationWindow.current,document:bridge.getDocumentEpoch(),resume:Number(obj(bridge.getState().view).resumeRevision||0),entry,preview};
    run('phone.activity.original',{taskId,runId,epoch,activityHandle});
  };
  const inlinePhoneAllowed=route==='chat'&&!taskOpen&&!taskOpening&&!phoneViewerObscured&&!phoneViewerExpanded&&
@@ -5827,7 +5969,7 @@ export default function App(){
    const held=stopReceipts.rows.find(x=>surface?.activityHandle===x.activityHandle);
    if((held?.phase==='requested'||held?.phase==='local_only')&&surface?.stopRequested)return null;
    const key=JSON.stringify([task.id,task.raw?.runId,task.raw?.coordinatorEpoch]);
-   const view=visibleInlinePhone(bridge.getState(),task.id);
+   const native=bridge.getState(),floor=obj(native.view),view=visibleInlinePhone(native,task.id);
    const watching=!!view&&view.key===inlinePhoneVisit;
    const region='pw-original-phone-inline-'+task.id;
    const viewStillCurrent=()=>!!view&&inlinePhoneSelection.current===view.key&&visibleInlinePhone(bridge.getState(),task.id)?.key===view.key;
@@ -5835,7 +5977,23 @@ export default function App(){
      if(inlinePhoneSelection.current===view.key)chooseInlinePhoneVisit(null);
      else if(visibleInlinePhone(bridge.getState(),task.id)?.key===view.key)chooseInlinePhoneVisit(view.key);
    }}:undefined;
+   const paused=!view&&inlinePhoneAllowed&&!document.hidden&&floor.section===null&&floor.taskId===null&&obj(native.phoneDraft).channelOrigin===false&&
+    can('phone.activity.original')&&can('tasks.open')&&can('tasks.close')?originalChatPhonePreview(native,task.id):null;
+   const displayed=quietChatPhonePause(paused);
    const row=<PhoneTaskStatus key={key} task={task} surface={surface||undefined} can={can} inlineView={toggle}
+     onViewPaused={paused&&displayed?trigger=>{
+       const native=bridge.getState(),floor=obj(native.view),conversation=native.state.conversationId;
+       const row=trigger.closest<HTMLElement>('.pw-phone-activity');
+       if(!row||!trigger.isConnected||trigger.disabled||trigger.closest('[hidden],[inert],[aria-hidden="true"]')||
+          !trigger.getClientRects().length||typeof conversation!=='string'||!conversation||!Number.isSafeInteger(native.composer?.epoch)||
+          !Number.isSafeInteger(floor.resumeRevision)||!Number.isSafeInteger(native.state.requestedTaskRevision))return;
+       const source:PausedChatPhoneOrigin={phone:{taskId:paused.surface.taskId,runId:paused.surface.runId,epoch:paused.surface.epoch,activityHandle:paused.activityHandle},
+        pause:displayed,conversation,draftEpoch:native.composer!.epoch,document:bridge.getDocumentEpoch(),navigation:navigationWindow.current,resume:floor.resumeRevision,
+        request:reviewRequest.current,nativeRequest:native.state.requestedTaskRevision,trigger,row};
+       if(!currentPausedChatPhone(source,'chat'))return;
+       if(inlinePhoneSelection.current)chooseInlinePhoneVisit(null);
+       openOriginalActivity(source.phone,'overview',source);
+     }:undefined}
      onOpen={()=>{if(inlinePhoneSelection.current)chooseInlinePhoneVisit(null);const entry=attention(task)&&can('tasks.review')?'review':'overview';
        if(!isPrivateLocalPhone(task)){openTask(task.id,entry);return}
        if(surface?.activityHandle)openOriginalActivity({...surface,activityHandle:surface.activityHandle},entry)}}
@@ -7213,13 +7371,14 @@ export default function App(){
     historyChatResultAttachmentAvailable?chooseHistoryChatResultAttachment:undefined}
    onAdoptFileNote={fileResultTopic&&fileNoteTarget(snapshot,fileResultTopic)?(note,frame,close)=>adoptFileNote(fileResultTopic,note,frame,close):undefined}
    onVerifyReportFileWork={taskLayer==='homeReport'&&can('ownerWork.report.read')?verifyReportFileWork:undefined}
-   canChooseStandaloneDocument={!!existingPrivateAttachmentDraft}
+   standaloneDocumentAttachmentDraft={standaloneDocumentAttachmentDraft}
    onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} readWorkTextVisit={readWorkTextVisit}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
   <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(compactChatQuestion){backFromTask();return}if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport())closeTask(true)}else setTaskOpen(true)}} direction={compactChatQuestion?'bottom':'right'} handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} data-chat-question={compactChatQuestion||undefined} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
    ownerRequestWindowId.current=null;
    if(phoneWorkReportExit.current?.exited()){chatWorkReturn.current=null;event.preventDefault();return;}
+   if(pausedChatPhoneExit.current?.exited()){chatWorkReturn.current=null;event.preventDefault();return;}
    const chatOrigin=chatWorkReturn.current;chatWorkReturn.current=null;
    if(route==='chat'&&chatOrigin?.taskId===taskId&&chatOrigin.navigation===navigationWindow.current&&restoreChatWorkAt(chatOrigin)){event.preventDefault();return;}
    const visit=acknowledgedWorkVisit.current,sourceRow=visit?.chatRow;

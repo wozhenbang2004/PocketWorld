@@ -282,6 +282,7 @@ internal object PocketWebState {
             .put("canOfferPrimaryDisplayExample", draft?.let(controller::canOfferPrimaryDisplayExample) == true)
             .put("primaryDisplayGate",draft?.takeIf { controller.webPrivateOwnerVisible() }?.let(controller::primaryDisplayDraftGate) ?: JSONObject.NULL)
             .put("conversationId", draft?.conversationId ?: "").put("saving", controller.composerSaving)
+            .put("ordinaryNewAttachmentDraft", draft?.let(controller::ordinaryNewAttachmentDraft) == true)
             .put("firstMessageMemory", draft?.let { controller.firstMessageMemoryState(it.key) } ?: JSONObject.NULL)
             .put("oneMessageLearning", draft?.let { controller.oneMessageLearningState(it.key) } ?: JSONObject.NULL)
             .put("scrollIndex", draft?.scrollIndex ?: 0).put("scrollOffset", draft?.scrollOffset ?: 0)

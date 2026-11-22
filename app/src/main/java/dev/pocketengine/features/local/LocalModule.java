@@ -16,6 +16,7 @@ import dev.pocketengine.features.workspace.JsonFiles;
 import dev.pocketengine.features.workspace.VersionedWorkspace;
 import dev.pocketengine.features.local.project.CheckoutTextMatches;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
+import dev.pocketengine.features.local.project.ProjectPackageArchive;
 import dev.pocketengine.features.local.project.ProjectSourceImport;
 import dev.pocketengine.features.local.project.ProjectSources;
 import dev.pocketengine.features.local.project.ProjectFileBytes;
@@ -1159,7 +1160,10 @@ public final class LocalModule implements EngineModule {
     public synchronized JSONArray managedSkillCheckoutsForHost()throws Exception {
         if(closed)throw new SecurityException("原项目宿主已关闭");JSONArray result=new JSONArray();File[] rows=new File(root,"checkouts").listFiles();if(rows==null)return result;
         java.util.Arrays.sort(rows,java.util.Comparator.comparing(File::getName));
-        for(File entry:rows){if(result.length()>=40)throw new SecurityException("原项目副本清单超过当前容量，未截断当成完整列表");if(Files.isSymbolicLink(entry.toPath())||!entry.isDirectory()||!entry.getName().matches("[a-f0-9-]{36}"))continue;JSONObject row=checkout(entry.getName());if(row.has("teamProjectCopy")||row.has("nativeGitImportPending")||row.has("skillExecutionCopy"))continue;result.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",row.getString("projectId")).put("name",row.getString("name")));}return result;
+        for(File entry:rows){if(result.length()>=40)throw new SecurityException("原项目副本清单超过当前容量，未截断当成完整列表");if(Files.isSymbolicLink(entry.toPath())||!entry.isDirectory()||!entry.getName().matches("[a-f0-9-]{36}"))continue;
+            // A metadata-last source publication may leave a private, unregistered directory.
+            if(Files.notExists(new File(entry,"checkout.json").toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))continue;
+            JSONObject row=checkout(entry.getName());if(row.has("teamProjectCopy")||row.has("nativeGitImportPending")||row.has("skillExecutionCopy"))continue;result.put(new JSONObject().put("checkoutId",row.getString("id")).put("projectId",row.getString("projectId")).put("name",row.getString("name")));}return result;
     }
     /** Exact ordinary private checkout source observation. Execution uses a
      * declared isolated copy; this method grants no write-back or task authority. */
@@ -1358,6 +1362,54 @@ public final class LocalModule implements EngineModule {
         RuntimeWorkspace active=runtimeWorkspace(checkout);
         OwnerDraftNodeDependencies.workspace(active);
         return Files.notExists(active.resolve("node_modules",false).toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+    /** Only the original native review of a supported Vite source with positively mismatching existing packages. */
+    public record DependencyCheckoutOffer(JSONObject view,OwnerNodeDependencyCheckout review){}
+    public synchronized DependencyCheckoutOffer reviewDependencyCheckoutForOwner(JSONObject source,JSONObject lock)throws Exception{
+        String checkout=source.getString("checkoutId"),project=source.getString("projectId");
+        if(!dependencyCheckoutBlocked(project,checkout,lock))return null;
+        JSONArray files=source.getJSONArray("files");
+        for(int i=0;i<files.length();i++)if(ProjectPackageArchive.excluded(
+                files.getJSONObject(i).getString("path"),false,false)!=null)return null;
+        OwnerNodeDependencyCheckout review=new OwnerNodeDependencyCheckout(this,source,lock);
+        JSONObject observed=review.observe(root);
+        return new DependencyCheckoutOffer(observed,"review".equals(observed.opt("state"))?review:null);
+    }
+    private boolean dependencyCheckoutBlocked(String project,String id,JSONObject lock)throws Exception{
+        validateDirectNodeCheckout(project,id);
+        JSONObject original=checkout(id),origin=original.optJSONObject("sourceImport");
+        if(original.has("sourceImport")&&(origin==null||!"new_project".equals(origin.opt("mode"))||!Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))||
+                origin.has("deviceSource")||!java.util.Set.of("external_zip","saf_tree","git_https",ProjectSourceImport.BUILTIN_VITE_STARTER)
+                .contains(origin.optString("sourceKind"))))return false;
+        RuntimeWorkspace workspace=runtimeWorkspace(id);
+        OwnerDraftNodeDependencies.workspace(workspace);
+        var path=workspace.resolve("node_modules",false).toPath();
+        try{
+            var existing=Files.readAttributes(path,java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            return existing.isDirectory()&&existing.fileKey()!=null&&!OwnerDraftNodeDependencies.ready(workspace,lock);
+        }catch(java.nio.file.NoSuchFileException missing){return false;}
+    }
+    /** Independent private source publication only; A, old dependencies and all task/command paths stay untouched. */
+    public synchronized JSONObject confirmDependencyCheckoutForOwner(OwnerNodeDependencyCheckout review,
+            java.util.function.BooleanSupplier window)throws Exception{
+        ProjectPackageArchive.CopyCurrent current=()->{
+            if(closed||Thread.currentThread().isInterrupted()||window==null||!window.getAsBoolean())
+                throw new SecurityException("原项目核对窗口已关闭，未切换副本");
+        };
+        current.check();review.take(this);
+        String project=review.project(),checkout=review.original(),source=review.source();
+        requireAvailableDraftProjectForOwner(project);
+        var lock=review.lock();
+        if(!dependencyCheckoutBlocked(project,checkout,lock))throw new SecurityException("原副本的依赖状态已变化，请重新核对这版源码");
+        JSONObject previous=review.observe(root);
+        if(!"review".equals(previous.opt("state")))return previous;
+        var frozen=capturePackage(new JSONObject().put("checkoutId",checkout).put("expectedSourceDigest",source)
+                .put("mode","source_project").put("includeGeneratedRoots",false),false);
+        return review.publish(root,frozen,current,()->{
+            if(!source.equals(ProjectSources.describe(export(checkout)).opt("sourceDigest"))||
+                    !dependencyCheckoutBlocked(project,checkout,lock))
+                throw new SecurityException("原副本的源码或依赖状态已变化，不登记新副本");
+        });
     }
     /** Actual consent may only fill a missing dependency root, never replace existing packages. */
     public synchronized void requireDirectNodeDependenciesForOwner(OwnerDirectNodeDependencies.Confirmed selected)throws Exception{

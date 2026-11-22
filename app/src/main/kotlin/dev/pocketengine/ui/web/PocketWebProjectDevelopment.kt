@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.features.local.LocalModule
+import dev.pocketengine.features.local.OwnerNodeDependencyCheckout
 import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
 import dev.pocketengine.features.local.project.OwnerDirectNodeBuild
 import dev.pocketengine.features.local.project.OwnerDirectNodeDependencies
@@ -46,12 +47,14 @@ internal class PocketWebProjectDevelopment(
     private data class Review(val handle: String, val page: Page, val input: String, val picked:ProjectConventionDraft.Bound, val modelRevision: Long, val expires: Long, val heldBuildDraftDigest:String?=null)
     private data class DirectReview(val handle: String,val page: Page,val checkout: String,val heldDraft: String,val offered: OwnerDirectNodeBuild.Review)
     private data class DependencyReview(val handle: String, val page: Page, val checkout: String, val heldDraft: String, val offered: OwnerDirectNodeDependencies.Review)
+    private data class DependencyCopyReview(val handle:String,val page:Page,val checkout:String,val heldDraft:String,val offered:OwnerNodeDependencyCheckout)
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var generation = 0L
     @Volatile private var page: Page? = null
     @Volatile private var review: Review? = null
     @Volatile private var directReview: DirectReview? = null
     @Volatile private var dependencyReview: DependencyReview? = null
+    @Volatile private var dependencyCopyReview: DependencyCopyReview? = null
     private var busy = false
     private val files = PocketWebCheckoutFiles(controller)
     // Identifiers and unsent text only. Original checkout metadata / Assistant
@@ -71,7 +74,8 @@ internal class PocketWebProjectDevelopment(
         private const val LOCAL_BUILD_REVIEW = "projects.development.localBuild.review"
         private const val LOCAL_BUILD_CONFIRM = "projects.development.localBuild.confirm"
         private const val LOCAL_DEPENDENCIES_CONFIRM = "projects.development.localDependencies.confirm"
-        val COMMANDS = setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, "projects.development.read", "projects.development.draft", "projects.development.inspect",
+        private const val LOCAL_DEPENDENCY_COPY = "projects.development.localDependencies.confirmCopy"
+        val COMMANDS = setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, LOCAL_DEPENDENCY_COPY, "projects.development.read", "projects.development.draft", "projects.development.inspect",
             "projects.development.taskPackageSource", "projects.development.resolveTaskPackageSource",
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.reviewDraftBuild", "projects.development.review",
@@ -91,6 +95,7 @@ internal class PocketWebProjectDevelopment(
     private fun clearDirectReview() {
         val build = directReview; directReview = null; build?.offered?.close()
         val dependencies = dependencyReview; dependencyReview = null; dependencies?.offered?.close()
+        dependencyCopyReview = null
     }
     fun clear() { generation++; page = null; review = null; clearDirectReview(); busy = false; files.clear() }
     private fun public(value: JSONObject) = PocketWebState.publicValue(value) as JSONObject
@@ -316,14 +321,14 @@ internal class PocketWebProjectDevelopment(
             check(review == null && !busy) { "请先完成或关闭原项目审阅" }
             files.dispatch(action, args, original.project, { current(original) }, done); return
         }
-        if (action in setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, "projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
+        if (action in setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, LOCAL_DEPENDENCY_COPY, "projects.development.draft", "projects.development.prepare", "projects.development.reviewDraftBuild", "projects.development.review", "projects.development.start"))
             check(restoreFailure == null) { restoreFailure ?: "本机项目输入引用不可用" }
         when (action) {
             "projects.development.dismiss" -> {
                 fields(args, "viewHandle", "reviewHandle")
                 val id=text(args, "reviewHandle")
                 if (review?.handle == id) review = null
-                if (directReview?.handle == id || dependencyReview?.handle == id) clearDirectReview()
+                if (directReview?.handle == id || dependencyReview?.handle == id || dependencyCopyReview?.handle == id) clearDirectReview()
                 done(JSONObject().put("dismissed", true).put("taskStopped", false), null)
             }
             "projects.development.draft" -> {
@@ -552,6 +557,19 @@ internal class PocketWebProjectDevelopment(
                                         dependencyReview = DependencyReview(handle, original, checkout, heldDigest, offered)
                                         out.put("directDependencies", ready.put("reviewHandle", handle))
                                     }
+                                    localReview.dependencyCopy()?.let { candidate ->
+                                        val view=candidate.view()
+                                        check(out.opt("directBuildKind")=="vite" && !out.has("directDependencyWork") &&
+                                            !out.has("directViteBuildWork") && !out.has("directDependencies") && localReview.viteOffer()==null &&
+                                            view.opt("projectId")==original.project && view.opt("checkoutId")==checkout &&
+                                            view.opt("sourceDigest")==sourceDigest) { "新依赖副本不属于当前保存的源码" }
+                                        candidate.review()?.let { offered ->
+                                            val handle=UUID.randomUUID().toString()
+                                            dependencyCopyReview=DependencyCopyReview(handle,original,checkout,heldDigest,offered)
+                                            view.put("reviewHandle",handle).put("expiresAt",offered.expiresAt())
+                                        }
+                                        out.put("dependencyCopy",view)
+                                    }
                                     localReview.viteOffer()?.let { offered ->
                                         val ready = offered.view()
                                         if (out.opt("directBuildKind")!="vite" || out.has("directViteBuildWork") ||
@@ -630,6 +648,19 @@ internal class PocketWebProjectDevelopment(
                 working(original, done, effect = true, extraCurrent = ::sameWindow) {
                     try { controller.localTerminalHost().submitDirectNodeDependenciesForOwner(prepared.offered.confirm(::sameWindow)) }
                     finally { prepared.offered.close() }
+                }
+            }
+            LOCAL_DEPENDENCY_COPY -> {
+                fields(args,"viewHandle","reviewHandle")
+                check(!busy && review==null) { "请先核对原项目的依赖副本" }
+                val prepared=dependencyCopyReview?.takeIf { it.page===original && it.handle==text(args,"reviewHandle") }
+                    ?: error("原依赖副本核对已关闭或使用")
+                fun sameWindow()=current(original) && controller.state.filePath==null && files.closedForOriginalDraftRead() &&
+                    shownCheckout(original,prepared.checkout,allowSole=true) && buildDraftDigest(draft(original.project))==prepared.heldDraft
+                check(sameWindow()) { "已离开原项目副本，没有另建副本" }
+                dependencyCopyReview=null
+                working(original,done,effect=true,extraCurrent=::sameWindow) {
+                    controller.projectDevelopmentForWeb().confirmDependencyCheckoutForOwner(prepared.offered,::sameWindow)
                 }
             }
             "projects.development.review" -> {

@@ -29,7 +29,7 @@ type Props={
  onAdoptFileNote?:(note:SavedFileNote,frame:AttachmentFrame,closeOriginal:()=>Promise<unknown>)=>Promise<void>;
  onVerifyReportFileWork?:(taskId:string,windowId:string)=>Promise<void>;
  onChooseAttachment?:(file:OriginalAttachmentChoice,target:FileDraftTarget,stillCurrent:()=>boolean,closeOriginal:()=>Promise<void>)=>Promise<void>;
- canChooseStandaloneDocument?:boolean;
+ standaloneDocumentAttachmentDraft?:FileDraftTarget;
  readWorkTextVisit?:(taskId:string)=>WorkTextVisit|undefined;
  quotedDraftArrival?:QuotedDraftArrival;
 };
@@ -266,7 +266,7 @@ function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:J
  return excerptPdfSource(view,taskId);
 }
 /** One file surface for conversation attachments, task outcomes and the private library. */
-export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,canChooseStandaloneDocument,readWorkTextVisit,quotedDraftArrival}:Props) {
+export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,readWorkTextVisit,quotedDraftArrival}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
@@ -734,11 +734,12 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const editDocument=(variant:'primary'|'secondary'|'ghost')=><Button variant={variant} disabled={busy||draftBusy||view.exportPending||!!view.pendingDocumentTask}
   onClick={()=>run('continueDocument')}>{canReturnGeneratedDraft?'从此版另起修改稿':'从此版继续编辑'}</Button>;
  const offerDocumentEdit=canEditDocument&&canSaveOriginal&&!state.chatAttachmentPickerOpen;
- const standaloneDocument=canChooseStandaloneDocument?standaloneDocumentSelection(view):undefined;
- const canChooseAttachment=!localOnlyFile&&!scopedResultOnly&&(!view.taskId||!!standaloneDocument)&&canSaveOriginal&&!!draftTarget&&!!selection&&!!onChooseAttachment;
+ const standaloneDocument=standaloneDocumentAttachmentDraft?standaloneDocumentSelection(view):undefined;
+ const attachmentDraft=standaloneDocument?standaloneDocumentAttachmentDraft:draftTarget;
+ const canChooseAttachment=!localOnlyFile&&!scopedResultOnly&&(!view.taskId||!!standaloneDocument)&&canSaveOriginal&&!!attachmentDraft&&!!selection&&!!onChooseAttachment;
  const attachmentChoiceError=mode==='original'&&canChooseAttachment&&error;
  const chooseAttachment=async()=>{
-  if(!canChooseAttachment||busy||draftBusy||view.exportPending||attachmentFlight.current||!onChooseAttachment||!draftTarget||!selection)return;
+  if(!canChooseAttachment||busy||draftBusy||view.exportPending||attachmentFlight.current||!onChooseAttachment||!attachmentDraft||!selection)return;
   const epoch=bridge.getDocumentEpoch(),{windowId}=view;
   const read=()=>obj(bridge.getState().state.attachmentWorkspace);
   const stillCurrent=()=>{
@@ -752,7 +753,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   };
   if(!stillCurrent())return;
   attachmentFlight.current=true;setPending(count=>count+1);setError('');
-  try{await onChooseAttachment({...selection,name:String(file.name||'原件'),standaloneDocument},draftTarget,stillCurrent,async()=>{
+  try{await onChooseAttachment({...selection,name:String(file.name||'原件'),standaloneDocument},attachmentDraft,stillCurrent,async()=>{
    if(!stillCurrent())throw new Error('原文件窗口已变化，没有打开附件选择。');
    const frame=attachmentFrame(read());
    if(!frame)throw new Error('请在固定原件重开附件选择。');
@@ -1334,7 +1335,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    <p className="pw-file-draft-status" role="status">已保留 Word 草稿「{markdown.name}」（{new Date(markdown.savedAt).toLocaleString()}）。
     可在「成果 → 本机文档草稿」继续编辑或核对生成，不会改动原件。</p>}
   {canChooseAttachment&&<Button variant={preferSave||offerDocumentEdit||canReturnGeneratedDraft?'secondary':'primary'} className="pw-file-draft-action" disabled={busy||draftBusy||view.exportPending}
-   aria-busy={attachmentFlight.current||undefined} onClick={()=>void chooseAttachment()}>{attachmentFlight.current?'正在核对原文件…':`选作「${draftTarget?.label}」的附件…`}</Button>}
+   aria-busy={attachmentFlight.current||undefined} onClick={()=>void chooseAttachment()}>{attachmentFlight.current?'正在核对原文件…':`选作「${attachmentDraft?.label}」的附件…`}</Button>}
   {attachmentChoiceError&&<p className="pw-file-draft-status pw-error" role="alert">{attachmentChoiceError}</p>}
   {canKeepSupplement&&!compactReaderActions&&<Button variant={preferSave||useInTopic||offerDocumentEdit?'secondary':'primary'} disabled={busy||draftBusy} onClick={revealContinuation}>{supplementLabel}</Button>}
   {!canChooseAttachment&&reuseAction}
