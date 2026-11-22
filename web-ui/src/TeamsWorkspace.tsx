@@ -34,7 +34,7 @@ import { ReadingContext } from './reading-context';
 import { PHONE_OUTPUT_NOT_RETURNED, teamCanPause, teamCanResume, teamGoalTitle, teamHasEnded, teamNeedsAttention, teamPhaseLabel, teamProgressLabel, teamRoleLabel, teamStatusLabel as status, teamTimeLabel } from './team-presentation';
 import type { TeamAttentionLocator } from './NotificationTeamAttention';
 import {sameTeamPackage} from './team-delivered-package';
-import {isDraftTeamSelectionId,matchesWorkTeamMember,matchesWorkTeamResult,sameTeamFiles,sameTeamProposal,type AcceptedWorkTeamReport,type DraftTeamSelection,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
+import {isDraftTeamSelectionId,matchesWorkTeamMember,matchesWorkTeamResult,pendingTeamReportReview,sameTeamFiles,sameTeamProposal,type AcceptedWorkTeamReport,type DraftTeamSelection,type WorkProposalSource,type TeamButlerRequest,type TeamOwnerWorkIntent,type TeamOwnerWorkLink,type TeamRunFocus,type WorkFileSource,type WorkTeamResultReturn,type WorkTeamResultSource} from './team-navigation';
 import { HarnessEvidence } from './HarnessEvidence';
 import { harnessWorkerLabel, isTeamHarness } from './harness-capabilities';
 import './team-continuity.css';
@@ -250,7 +250,7 @@ const memberModelLabel = (member: Data): string => {
 };
 
 /** Uses the adopted BoardUI fields/dialogs and Affect answer presentation on the original team worksite. */
-export function TeamsWorkspace({ state, run, registerTransientBack, registerBeforeLeave, alreadyShownError = '', attentionFocus, onAttentionConsumed, runFocus, onRunFocusConsumed, onAskButler, originalWorkDraft, onOpenWork }: {
+export function TeamsWorkspace({ state, run, registerTransientBack, registerBeforeLeave, alreadyShownError = '', attentionFocus, onAttentionConsumed, runFocus, onRunFocusConsumed, onAskButler, originalWorkDraft, onOpenWork, primaryTeamsRoute = false }: {
   state: Data; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void;
   registerBeforeLeave?: RegisterBeforeLeave; alreadyShownError?: string; attentionFocus?: Data | null;
   onAttentionConsumed?: (requestId: string) => void;
@@ -258,6 +258,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   onAskButler?: (request: TeamButlerRequest) => void;
   originalWorkDraft?: boolean | DraftTeamSelection;
   onOpenWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent, savedTeamId?: string) => void;
+  primaryTeamsRoute?: boolean;
 }) {
   const replacingDraftTeam=typeof originalWorkDraft==='object'?originalWorkDraft:undefined;
   const openReading = useContext(ReadingContext);
@@ -841,7 +842,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const current = reading?.kind === 'run' ? object(reading.run) : null;
   // This relationship comes only from readRun's native parent-work check.
   const ownerWorkLink = reading?.kind === 'run' && reading.ownerWorkLink ? reading.ownerWorkLink as TeamOwnerWorkLink : null;
-  const openOwnerWork = (intent: 'overview' | 'supplement', stillAccepting?: () => boolean) => {
+  const openOwnerWork = (intent: 'overview' | 'supplement' | 'reviewReport', stillAccepting?: () => boolean) => {
     if (!onOpenWork || !ownerWorkLink || busy || materialBusy || intent === 'supplement' && (ownerWorkLink.currentRun !== true || changed || !reading?.viewHandle)) return;
     leaveWithDrafts(() => { if (!stillAccepting || stillAccepting()) onOpenWork(ownerWorkLink, intent); });
   };
@@ -1177,6 +1178,20 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const deliveries = teamResearchDeliveries(current, messages, 'current', !!classicOwner);
   const awaitingMemberAnswerReview = !!classicOwner && reading?.ownerWorkLink?.temporaryAnswersForReview===true &&
     deliveries.some(row=>row.answer?.plainText===true);
+  const reportReview = primaryTeamsRoute && runSection==='result' && awaitingMemberAnswerReview &&
+    ['tasks.open','tasks.review','tasks.confirm','tasks.close'].every(command=>bridge.getState().capabilities.commands.includes(command))
+    ? pendingTeamReportReview(ownerWorkLink) : undefined;
+  const exactReportReview = reportReview && reportReview.generation===current?.generation && reportReview.revision===current?.revision && ownerWorkLink?.teamRunId===current?.id
+    ? reportReview : undefined;
+  const reviewOriginalConclusion = () => {
+    if(!exactReportReview||!current||!reading||!canRead||materialBusy)return;
+    const documentEpoch=bridge.getDocumentEpoch(),resume=object(bridge.getState().view).resumeRevision;
+    const stillCurrent=()=>alive.current&&!document.hidden&&!backgrounded.current&&ownsNativeWindow()&&
+      currentReading.current===reading&&shownRunSection.current==='result'&&bridge.getDocumentEpoch()===documentEpoch&&
+      object(bridge.getState().view).resumeRevision===resume&&
+      !newerTeamReading(current,object(object(bridge.getState().state.teamRuns)[current.id]));
+    if(stillCurrent())openOwnerWork('reviewReport',stillCurrent);
+  };
   const archivedDeliveries = teamResearchDeliveries(current, messages, 'archived');
   const ordinaryAnswers = current?.mode === 'collaborate' && !hasWorkPlan && !current.productionScope &&
     current.researchExecutionFormat === 'pocketworld.team-research-agent.v1';
@@ -1790,7 +1805,9 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
       {changed && <p className="pw-team-reading-notice" role="status">正在更新进展，阅读位置与未发送内容保留。</p>}
       {workspaceActive && !busy && !reading?.viewHandle && <p className="pw-team-reading-notice" role="status">请刷新记录后继续操作，未发送内容保留。</p>}
       <div className="pw-team-run-controls">
-        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight} disabled={busy || materialBusy} onClick={() => openOwnerWork('overview')}>查看原工作</Button>{canSupplementParent && !supplementByQuestion &&
+        <div className="pw-team-work-actions">{ownerWorkLink && onOpenWork ? <><Button variant="ghost" trailingIcon={IconChevronRight}
+          disabled={busy || materialBusy || !!exactReportReview&&!canRead} onClick={exactReportReview?reviewOriginalConclusion:()=>openOwnerWork('overview')}>
+          {exactReportReview?'核对本轮结论':'查看原工作'}</Button>{canSupplementParent && !supplementByQuestion &&
           <Button variant="secondary" disabled={!canRead || materialBusy} onClick={() => openOwnerWork('supplement')}>补充要求</Button>}</> : <span className="pw-team-history-label">保留原目标与执行记录</span>}</div>
         <div className="pw-team-current-actions">
           {!hasWorkPlan && !remainingMember && !stoppedMember && !noWorkRetryForMissingText && (teamCanResume(current.status) || current.phase === 'intervention' || current.phase === 'awaiting_member' && currentMembers.length > 0) && <Button leadingIcon={IconPlay} disabled={!canMutate} onClick={() => control('resume')}>继续协作</Button>}

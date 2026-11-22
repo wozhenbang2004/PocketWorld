@@ -29,6 +29,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var textUntil: Long = 0
         @Volatile var savedEdit: SavedEdit? = null
         @Volatile var savedStaticPageEligible = false
+        @Volatile var savedStaticRoot: SavedStaticRoot? = null
         var priorSavedFile: ListedSave? = null // Main-thread selection from this exact list response.
         val git = PocketWebCheckoutGit(project, checkout)
         @Volatile var opened: Opened? = null
@@ -40,6 +41,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     data class SavedEdit(val id: String, val path: String, val beforeHash: String, val savedHash: String) {
         fun view() = JSONObject().put("id",id).put("path",path).put("beforeHash",beforeHash).put("savedHash",savedHash)
     }
+    // An immutable observation from a successful, explicitly reviewed root capture.
+    // It carries no old editor handle; the companion request uses the current editor.
+    private class SavedStaticRoot(val entry: ProjectFileDraft, val paths: Set<String>)
     private data class ListedSave(val id: String, val path: String, val sha: String)
     private class Adoption(val handle: String, val file: Opened, val revision: Long, val review: JSONObject, val expires: Long)
     private class PythonReview(val id: String, val opened: Opened, val native: OwnerPythonRun.Review, val stillCurrent: () -> Boolean)
@@ -67,7 +71,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             "projects.development.files.import", "projects.development.files.dismissImport", "projects.development.files.openFormal",
             PYTHON_REVIEW, PYTHON_CONFIRM, PYTHON_DISMISS)
     }
-    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.directory=null; old?.textPage=null; old?.priorSavedFile=null; old?.let(::clearPython); old?.opened?.let { store.release(it.draft) } }
+    fun clear() { val old = page; page = null; busy = false;old?.matches=null; old?.directory=null; old?.textPage=null; old?.priorSavedFile=null; old?.savedStaticRoot=null; old?.let(::clearPython); old?.opened?.let { store.release(it.draft) } }
     private fun clearPython(original: Page) { val old = original.python; original.python = null; old?.native?.close() }
     fun closedForOriginalDraftRead() = page == null
     private fun current(original: Page) = page === original && original.parentCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == original.project
@@ -99,8 +103,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         val read: (() -> Boolean) -> ProjectPreviewBundle.Verified)
 
     fun savedStaticPage(args: JSONObject, selectedCheckout: (String) -> Boolean): SavedStaticPage {
-        require(args.keys().asSequence().toSet() ==
-            setOf("viewHandle", "filesHandle", "fileHandle", "revision", "editSequence", "resourcePaths")) {
+        val companion = args.has("companion")
+        val fields = setOf("viewHandle", "filesHandle", "fileHandle", "revision", "editSequence", "resourcePaths")
+        require(args.keys().asSequence().toSet() == if (companion) fields + "companion" else fields) {
             "请从原已保存编辑器选择这次网页资源"
         }
         val original = selected(args)
@@ -109,24 +114,51 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             original.adoption == null && original.python == null && selectedCheckout(original.checkout)) {
             "只从原项目已核对的私人副本编辑器打开已保存网页"
         }
+        val request = if (companion) args.getJSONObject("companion") else null
+        if (request != null) require(request.keys().asSequence().toSet() == setOf("savedEditId", "entrySha256"))
+        val saved = request?.let {
+            original.savedEdit?.takeIf { saved -> saved.id == text(it,"savedEditId") }
+                ?: error("本次编辑器的保存回执已变化，没有打开其他版本")
+        }
+        val root = request?.let {
+            original.savedStaticRoot?.takeIf { root -> root.entry.baseHash == text(it,"entrySha256",64) }
+                ?: error("原网页已离开或变化，请从原 index.html 重新预览")
+        }
         val sequence = number(args,"editSequence")
         val held = synchronized(store) {
             requireDraft(file)
             val draft=file.draft
-            check(!file.saveUnknown && file.formal == null && file.sequence == sequence &&
-                draft.revision == number(args,"revision") && LocalModule.savedStaticEditorEntry(draft)) {
+            check(!file.saveUnknown && file.formal == null && file.sequence == sequence && draft.revision == number(args,"revision")) {
+                "原已保存文件已变化，没有打开其他页面"
+            }
+            if (saved == null) check(LocalModule.savedStaticEditorEntry(draft)) {
                 "请先保存或重新核对原 index.html，没有打开其他页面"
+            }
+            else {
+                val actual = draft.latestReview()
+                check(root != null && root.entry.projectId == original.project && root.entry.checkoutId == original.checkout &&
+                    saved.path == draft.path && saved.path.substringAfterLast('.', "").lowercase() in setOf("css","js","mjs") &&
+                    !draft.creating && !draft.dirty() && !draft.conflict() && draft.baseHash == saved.savedHash &&
+                    actual != null && actual.opt("deleted") == false && actual.opt("path") == saved.path &&
+                    actual.opt("projectId") == original.project && actual.opt("checkoutId") == original.checkout &&
+                    actual.opt("sha256") == saved.savedHash && actual.opt("expectedHash") == saved.savedHash &&
+                    actual.opt("content") == draft.baseContent) { "请先核对这份刚保存的网页资源" }
             }
             draft
         }
+        val entry = root?.entry ?: held
         val selected = args.getJSONArray("resourcePaths")
         require(selected.length() <= ProjectPreviewBundle.MAX_SAVED_STATIC_ASSETS) { "最多选择24份网页资源" }
         val paths = (0 until selected.length()).map { index ->
             (selected.opt(index) as? String)?.takeIf { it.isNotEmpty() && it.length <= 240 }
                 ?: error("仅支持明确选择的原副本相对文件")
         }
+        if (saved != null) check(root != null && saved.path in paths && paths.all { it in root.paths }) {
+            "只预览原网页已核对的资源，必须保留本次保存的文件"
+        }
         fun sameFile() = current(original) && selectedCheckout(original.checkout) && original.opened === file &&
-            file.draft === held && file.sequence == sequence && !file.saveUnknown && file.formal == null
+            file.draft === held && file.sequence == sequence && !file.saveUnknown && file.formal == null &&
+            (root == null || original.savedStaticRoot === root && original.savedEdit === saved)
         check(sameFile()) { "原文件已变化，请关闭重开预览" }
         val viewHandle = text(args,"viewHandle")
         val missingReview: (List<String>) -> JSONObject = { missing ->
@@ -134,13 +166,23 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             JSONObject().put("kind","saved_static_resource_review").put("opened",false)
                 .put("projectId",original.project).put("checkoutId",original.checkout)
                 .put("viewHandle",viewHandle).put("filesHandle",original.handle).put("fileHandle",file.handle)
-                .put("revision",held.revision).put("editSequence",sequence).put("entrySha256",held.baseHash)
+                .put("revision",held.revision).put("editSequence",sequence).put("entrySha256",entry.baseHash)
                 .put("resourcePaths",JSONArray(paths)).put("missingPaths",JSONArray(missing))
         }
-        return SavedStaticPage(original.project, original.checkout, held.baseHash, ::sameFile, missingReview) { keepReading ->
+        return SavedStaticPage(original.project, original.checkout, entry.baseHash, ::sameFile, missingReview) { keepReading ->
             check(sameFile() && keepReading()) { "原文件预览窗口已关闭" }
             val local=controller.nativeButlerHost().features.module("local") as? LocalModule ?: error("原本机项目不可读取")
-            local.readSavedStaticPageForOwner(held,paths) { sameFile() && keepReading() }
+            val captured=local.readSavedStaticPageForOwner(entry,paths) { sameFile() && keepReading() }
+            if (saved != null) {
+                val manifest = captured.manifest()
+                check((0 until manifest.length()).any { index ->
+                    val row = manifest.getJSONObject(index)
+                    row.opt("path") == saved.path && row.opt("sha256") == saved.savedHash
+                }) { "所选资源已不是这次保存的版本，未打开网页" }
+            }
+            check(sameFile() && keepReading()) { "原文件预览窗口已关闭" }
+            if (saved == null) original.savedStaticRoot = SavedStaticRoot(entry, paths.toSet())
+            captured
         }
     }
     private fun textPage(original: Page,args: JSONObject): CheckoutTextMatches {

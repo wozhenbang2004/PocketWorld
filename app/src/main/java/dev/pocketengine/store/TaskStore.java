@@ -3465,7 +3465,9 @@ public final class TaskStore {
                         &&memberReview.conversation.equals(work.opt("conversationId"))
                         &&memberReview.digest.equals(resultReviewDigest(work))&&memberReview.team.equals(teamRunId)
                         &&memberReview.generation==resultGeneration&&memberReview.revision==resultRevision)
-                    link.put("temporaryAnswersForReview",true);
+                    link.put("temporaryAnswersForReview",true).put("temporaryAnswerReview",new JSONObject()
+                            .put("resultReviewDigest",memberReview.digest).put("summarySha256",memberReview.sha256)
+                            .put("generation",memberReview.generation).put("revision",memberReview.revision));
             }catch(Exception unavailable){
                 // Unavailable optional result evidence must not retire the original Team reading.
                 if(Thread.currentThread().isInterrupted()||unavailable instanceof InterruptedException)throw unavailable;

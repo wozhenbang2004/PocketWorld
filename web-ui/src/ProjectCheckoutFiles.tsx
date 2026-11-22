@@ -21,6 +21,9 @@ type EditorPosition = { start: number; end: number; scrollTop: number; scrollLef
 type SavedMarkdownFile = { fileHandle: string; path: string; sha256: string; content: string };
 type MarkdownVisit = Omit<SavedMarkdownFile,'content'> & { caret: EditorPosition; drawerScroll: number };
 type StaticPreviewVisit = { editor:SavedStaticEditor; file:Data; generation:number; caret:EditorPosition; drawerScroll:number };
+type StaticRootObservation = Pick<SavedStaticEditor,'projectId'|'checkoutId'|'viewHandle'|'filesHandle'|'documentEpoch'|'entrySha256'> & {
+  paths:readonly string[];
+};
 type FileFind = { fileHandle: string; query: string; result?: { text: string; at: number; line: number; wrapped: boolean } };
 type FolderEditor = { fileHandle: string; resumable: boolean };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
@@ -108,6 +111,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const markdownTrigger=useRef<HTMLButtonElement>(null), markdownHeading=useRef<HTMLHeadingElement>(null);
   const [staticPreview,setStaticPreview]=useState<StaticPreviewVisit|null>(null);
   const activeStaticPreview=useRef<StaticPreviewVisit|null>(null), staticPreviewReturn=useRef<StaticPreviewVisit|null>(null);
+  const reviewedStaticRoot=useRef<StaticRootObservation|null>(null);
   const staticPreviewClose=useRef<(()=>void)|null>(null), staticPreviewTrigger=useRef<HTMLButtonElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
@@ -452,33 +456,53 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       (!sha||sha===value.baseHash)&&typeof actual.content==='string'&&value.baseContent===actual.content&&value.text===actual.content&&
       currentText.current===value.text&&!interfaceDrafts.has(keyFor(value.path));
   };
-  const staticEligible=!sourceMember&&!hostFile&&finder!=='changes'&&!!file&&file.path==='index.html'&&
-    file.canPreviewSavedStatic===true&&!folderEditorNow.current&&!localFind&&!choice&&!adoption&&!pythonRunReview&&
+  const companionReview=(source:Data)=>{
+    const root=reviewedStaticRoot.current, saved=recentSave;
+    return root&&saved&&root.projectId===projectId&&root.checkoutId===checkoutId&&root.viewHandle===viewHandle&&
+      root.filesHandle===handle.current&&root.documentEpoch===bridge.getDocumentEpoch()&&
+      saved.path===source.path&&/\.(css|js|mjs)$/i.test(saved.path)&&root.paths.includes(saved.path)&&
+      source.baseHash===saved.savedHash&&source.text===saved.after?{root,saved}:null;
+  };
+  const staticCompanion=file&&companionReview(file);
+  const staticEligible=!sourceMember&&!hostFile&&finder!=='changes'&&!!file&&
+    (!!staticCompanion||file.path==='index.html'&&file.canPreviewSavedStatic===true)&&
+    !folderEditorNow.current&&!localFind&&!choice&&!adoption&&!pythonRunReview&&
     !markdownVisit&&orphan===null&&!blockedEdit.current&&cleanChangeSource(file)&&
     Number.isSafeInteger(file.editSequence)&&file.editSequence>=0&&file.editSequence===editSequence.current&&canOpenSavedStaticPreview();
   const sameStaticEditor=(visit:StaticPreviewVisit)=>{
-    const area=editorInput.current, source=visit.file, pin=visit.editor;
-    return live(visit.generation)&&pin.projectId===projectId&&pin.checkoutId===checkoutId&&pin.viewHandle===viewHandle&&
+    const area=editorInput.current, source=visit.file, pin=visit.editor, companion=pin.companion;
+    const sameCompanion=companion&&companionReview(source);
+    const sameSource=companion?!!sameCompanion&&sameCompanion.root.entrySha256===pin.entrySha256&&
+      sameCompanion.root.paths===companion.reviewedPaths&&sameCompanion.saved.id===companion.savedEditId&&
+      source.path===companion.path&&sameCompanion.saved.savedHash===companion.sha256:
+      source.canPreviewSavedStatic===true&&source.path==='index.html'&&currentText.current===pin.html;
+    return sameSource&&live(visit.generation)&&pin.projectId===projectId&&pin.checkoutId===checkoutId&&pin.viewHandle===viewHandle&&
       bridge.getDocumentEpoch()===pin.documentEpoch&&handle.current===pin.filesHandle&&currentFile.current===source&&
-      source.canPreviewSavedStatic===true&&source.fileHandle===pin.fileHandle&&source.revision===pin.revision&&
-      source.editSequence===pin.editSequence&&editSequence.current===pin.editSequence&&source.path==='index.html'&&
+      source.fileHandle===pin.fileHandle&&source.revision===pin.revision&&source.editSequence===pin.editSequence&&editSequence.current===pin.editSequence&&
       !entered.current&&!edits.current&&!blockedEdit.current&&!folderEditorNow.current&&!activeAdoption.current&&
-      cleanChangeSource(source,pin.entrySha256)&&currentText.current===pin.html&&area?.isConnected===true&&area.value===textareaText(pin.html);
+      cleanChangeSource(source,companion?.sha256??pin.entrySha256)&&area?.isConnected===true&&area.value===textareaText(currentText.current);
   };
   const showStaticPreview=()=>{
     const area=editorInput.current, sequence=generation.current;
     if(!file||!staticEligible||!area?.isConnected||activeStaticPreview.current||activeMarkdown.current||
       area.value!==textareaText(currentText.current)||currentFile.current!==file||!live(sequence)||entered.current||edits.current)return;
-    const listedPaths=!listingStale&&listing?.readOnly===true&&listing.filesHandle===handle.current&&
+    const asset=companionReview(file);
+    const listedPaths=!asset&&!listingStale&&listing?.readOnly===true&&listing.filesHandle===handle.current&&
       listing.projectId===projectId&&listing.checkoutId===checkoutId?rows(listing.files).flatMap(item=>
         typeof item?.path==='string'&&item.change!=='deleted'&&fileHash(item.sha256)?[item.path]:[]):[];
     const visit:StaticPreviewVisit={file,generation:sequence,editor:{projectId,checkoutId,viewHandle,filesHandle:handle.current,
-      fileHandle:file.fileHandle,revision:file.revision,editSequence:file.editSequence,entrySha256:file.baseHash,
-      documentEpoch:bridge.getDocumentEpoch(),html:currentText.current,listedPaths},
+      fileHandle:file.fileHandle,revision:file.revision,editSequence:file.editSequence,entrySha256:asset?.root.entrySha256??file.baseHash,
+      documentEpoch:bridge.getDocumentEpoch(),html:asset?'':currentText.current,listedPaths,
+      ...(asset?{companion:{path:asset.saved.path,sha256:asset.saved.savedHash,savedEditId:asset.saved.id,reviewedPaths:asset.root.paths}}:{})},
       caret:{start:area.selectionStart,end:area.selectionEnd,scrollTop:area.scrollTop,scrollLeft:area.scrollLeft},
       drawerScroll:area.closest('.pw-settings-dialog-content')?.scrollTop??0};
     if(!sameStaticEditor(visit))return;
     activeStaticPreview.current=visit;setStaticPreview(visit);
+  };
+  const rememberStaticRoot=(visit:StaticPreviewVisit,paths:readonly string[])=>{
+    if(activeStaticPreview.current!==visit||visit.editor.companion||!sameStaticEditor(visit))return;
+    const {projectId,checkoutId,viewHandle,filesHandle,documentEpoch,entrySha256}=visit.editor;
+    reviewedStaticRoot.current={projectId,checkoutId,viewHandle,filesHandle,documentEpoch,entrySha256,paths:[...paths]};
   };
   const leaveStaticPreview=(visit:StaticPreviewVisit)=>{
     if(activeStaticPreview.current!==visit)return;
@@ -772,7 +796,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
-      generation.current++; entered.current = null; initialDirectoryRead.current = null; pythonReviewNow.current=undefined; const old = handle.current; handle.current = '';
+      generation.current++; entered.current = null; initialDirectoryRead.current = null; pythonReviewNow.current=undefined; reviewedStaticRoot.current=null; const old = handle.current; handle.current = '';
       if (old) void latest.current.run(command + 'close', { viewHandle, filesHandle: old }).catch(() => {});
     };
     const hidden = () => { if (document.hidden || originalWindow.current !== windowKey()) { retire(); latest.current.onClose(); } };
@@ -884,7 +908,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     closeLabel={showingStatic||readingMarkdown?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
     {showingStatic&&staticPreview&&<ProjectSavedStaticPreview editor={staticPreview.editor}
       current={()=>activeStaticPreview.current===staticPreview&&sameStaticEditor(staticPreview)}
-      onLeave={()=>leaveStaticPreview(staticPreview)} registerBack={closer=>{staticPreviewClose.current=closer}} />}
+      onLeave={()=>leaveStaticPreview(staticPreview)} onVerifiedRoot={paths=>rememberStaticRoot(staticPreview,paths)}
+      registerBack={closer=>{staticPreviewClose.current=closer}} />}
     {readingMarkdown && <section className="pw-checkout-files">
       <header><h3 ref={markdownHeading} tabIndex={-1} dir="auto">{readingMarkdown.path}</h3>
         <small>已核对保存版本 · <code>{readingMarkdown.sha256.slice(0,8)}</code> · 不加载图片，不打开链接</small></header>
@@ -1046,7 +1071,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           </Button></> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
-          {staticEligible&&<Button ref={staticPreviewTrigger} variant="secondary" disabled={locked} onClick={showStaticPreview}>预览已保存网页</Button>}
+          {staticEligible&&<Button ref={staticPreviewTrigger} variant="secondary" disabled={locked} onClick={showStaticPreview}>
+            {staticCompanion?'预览网页（带上本次保存）':'预览已保存网页'}</Button>}
         </div>}
         {pythonRunReview && <section className="pw-checkout-adoption" aria-label="核对本机运行脚本">
           <h3 ref={pythonHeading} tabIndex={-1}>{pythonRunReview.programFiles?'同目录 Python 程序：':'在这部手机运行 '}<bdi>{pythonRunReview.path}</bdi>？</h3>

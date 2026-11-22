@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Accordion, AccordionItem, Button } from './forms-library';
 import {bridge} from './bridge';
 import {reportedHomeWork,sameHomeReport,verifyHomeReport,type VerifiedHomeReport} from './ButlerReturnedReport';
-import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconError, IconFileText, IconFolder, IconInfo, IconMonitor, IconPauseCircle, IconPhone } from './icons';
+import { IconCheckCircle, IconChevronDown, IconChevronRight, IconClock, IconDevices, IconError, IconFileText, IconFolder, IconInfo, IconMonitor, IconPauseCircle, IconPhone } from './icons';
 import { ProgressCircle } from './library';
 import { MotionFeedback, useCollectionMotion } from './library/journey-motion';
 import { getRecentTaskProgress } from './task-presentation';
@@ -26,6 +26,7 @@ export type ButlerHomeProps = {
   onTryLocal?: () => void;
   onReadLocalFiles?: () => void;
   onReadPairedWindowsFile?: (trigger: HTMLButtonElement) => void;
+  onOpenDeviceInbox?: (trigger: HTMLButtonElement) => void;
   onImportProject?: () => void;
   stagingLocal?: boolean;
   modelSetup: ReactNode;
@@ -91,7 +92,7 @@ function partialFailureReport(task: ButlerHomeTask, view = workCollectionPresent
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onReadPairedWindowsFile, onImportProject, stagingLocal=false, modelSetup, firstDraftConnect=false, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onReadPairedWindowsFile, onOpenDeviceInbox, onImportProject, stagingLocal=false, modelSetup, firstDraftConnect=false, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -308,6 +309,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal;
   const showFiles = ready && active && !localDisplayDraft && !stagingLocal && !!onReadLocalFiles;
   const showPairedFile = ready && active && !localDisplayDraft && !stagingLocal && !!onReadPairedWindowsFile;
+  const showDeviceInbox = ready && active && !localDisplayDraft && !stagingLocal && !!onOpenDeviceInbox;
   const showProjectImport = empty && active && !localDisplayDraft && !stagingLocal && !firstHostSave && !!onImportProject;
   const localHint=showLocal?(stagingLocal?'正在填入问题…':'只填入问题，按发送才读取。不用模型。'):'';
   const nextHint=(!firstUse&&localHint)||
@@ -317,10 +319,12 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const localFiles=showFiles&&<Button variant="ghost" size="small" leadingIcon={IconFileText} onClick={onReadLocalFiles}>本机文件与草稿</Button>;
   const pairedFile = showPairedFile && <Button variant="ghost" size="small" leadingIcon={IconMonitor}
     data-workspace-entry="home-windows-file" onClick={event => onReadPairedWindowsFile?.(event.currentTarget)}>从配对电脑读取文件</Button>;
+  const deviceInbox = showDeviceInbox && <Button variant="ghost" size="small" leadingIcon={IconDevices}
+    data-workspace-entry="home-device-inbox" onClick={event => onOpenDeviceInbox?.(event.currentTarget)}>查看设备来单</Button>;
   const localTools = showLocal || showProjectImport || showFiles;
   const scheduleAction=scheduleEntry&&<Button variant="ghost" className="pw-butler-all-work" trailingIcon={IconChevronRight}
     data-workspace-entry="home-schedule" disabled={!active} onClick={event=>scheduleEntry(event.currentTarget)}>提醒与目标</Button>;
-  const nextSteps=(showPairedFile||localTools||showSetup&&!!(modelSetup||firstHostSave)||!!nextHint||firstUse&&!!scheduleAction)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
+  const nextSteps=(showPairedFile||showDeviceInbox||localTools||showSetup&&!!(modelSetup||firstHostSave)||!!nextHint||firstUse&&!!scheduleAction)&&<div key="butler-next-steps" className="pw-butler-model-setup pw-butler-next-steps" data-quiet-setup={showLocal||workFirst||undefined}>
     {!firstUse&&localExample}
     {!firstUse&&localImport}
     {showSetup&&modelSetup}
@@ -336,7 +340,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
       </AccordionItem></Accordion>}
       {scheduleAction}
     </div>}
-    {pairedFile}
+    {pairedFile}{deviceInbox}
   </div>;
 
   return <main className="pw-chat-workspace pw-butler-workspace" aria-label="管家" data-empty={empty || undefined}>

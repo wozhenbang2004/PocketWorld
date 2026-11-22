@@ -35,7 +35,9 @@ import './devices-reading.css';
 import './device-workspace-overview.css';
 
 type Run = (action: string, args?: Data) => Promise<any>;
-export type DeviceWorkspaceReading = DeviceReadingSlot & { homeWindowsFile?: boolean };
+// A presentation-only, one-use request from an explicit Home tap.
+export type HomeDeviceInboxVisit = { current: () => boolean; claim: () => boolean; retire: () => void };
+export type DeviceWorkspaceReading = DeviceReadingSlot & { homeWindowsFile?: boolean; homeDeviceInbox?: HomeDeviceInboxVisit };
 type OriginalPhoneAddress = { focus: SentPhoneGoalFocus; work: string; until: number; window: string; deviceRevision: number };
 type AddressRepair = { place: DeviceReadingPlace; epoch: number; originalPhone?: OriginalPhoneAddress };
 type PresentedReceivedGoal = ReceivedPhoneGoalReturn & {
@@ -269,7 +271,9 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const pinnedConnection=sourceFocus?.purpose==='partner_connection';
   const [allDevices, setAllDevices] = useState(false);
   const homeWindowsFile = !sourceFocus && !modelReturn && reading?.homeWindowsFile === true && !allDevices;
-  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown; window: string }>();
+  const homeDeviceInbox = !sourceFocus && !modelReturn && !homeWindowsFile ? reading?.homeDeviceInbox : undefined;
+  const deviceInboxSection = useRef<HTMLElement>(null);
+  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown; window: string; arrival?: HomeDeviceInboxVisit }>();
   const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
   const addressRepair = useRef<AddressRepair | undefined>(undefined);
   const placeRead = useRef(!peerPlace.current);
@@ -353,13 +357,19 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     finally { if (scope.current.finish(ticket) && alive.current) setPending(false); }
   };
   // Supplying a deviceId asks that peer for fresh capabilities. Local reads must also work offline.
-  const refresh = () => {
-    if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending()) return;
+  const refreshLocal = (arrival?: HomeDeviceInboxVisit) => {
+    if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending()) { arrival?.retire(); return; }
     setLocalRead(undefined); // A failed reread must not mark the previous directory as current.
-    void invoke('devices.snapshot', {}, (_value, actual) => {
-      if (actual) { placeRead.current = true; setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision, window: waitingGoalWindow() }); }
+    let observed = false;
+    const read = invoke('devices.snapshot', {}, (_value, actual) => {
+      if (actual) {
+        observed = true; placeRead.current = true;
+        setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision, window: waitingGoalWindow(), arrival });
+      }
     });
+    if (arrival) void read.then(() => { if (!observed) arrival.retire(); });
   };
+  const refresh = () => refreshLocal();
   const closeReview = () => {
     const old = handle.current; handle.current = ''; addressRepair.current = undefined; scope.current.invalidate(document.visibilityState === 'visible');
     setReview(null); setAck(false); setFuture(false); setHistoryReceipt(null); setLastWindowsRead(null); setWindowsReadFailure(null); setPhoneGoalResult(null); setHistoryStopSubmitted(false); setWorkBusy(false); setControlBusy(false);
@@ -395,13 +405,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   useEffect(() => { if (document.visibilityState === 'visible') { try { acceptSnapshot(data); } catch { /* A summary is not a native device snapshot. */ } } }, [data]);
   useEffect(() => {
-    alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refresh();
-    return () => { alive.current = false; scope.current.invalidate(false); handle.current = ''; void run('devices.discard', {}).catch(() => {}); };
+    alive.current = true; scope.current.invalidate(document.visibilityState === 'visible'); refreshLocal(homeDeviceInbox);
+    return () => { homeDeviceInbox?.retire(); alive.current = false; scope.current.invalidate(false); handle.current = ''; void run('devices.discard', {}).catch(() => {}); };
   }, []);
   useEffect(() => { if (resumed.current === state.webWorkspaceResumeRevision) return; resumed.current = state.webWorkspaceResumeRevision; clearSensitive(document.visibilityState === 'visible', true); refresh(); }, [state.webWorkspaceResumeRevision]);
   useEffect(() => {
-    const changed = () => { clearSensitive(document.visibilityState === 'visible', true); if (document.visibilityState === 'visible') refresh(); };
-    const hidden = () => clearSensitive(false, true);
+    const changed = () => { homeDeviceInbox?.retire(); clearSensitive(document.visibilityState === 'visible', true); if (document.visibilityState === 'visible') refresh(); };
+    const hidden = () => { homeDeviceInbox?.retire(); clearSensitive(false, true); };
     document.addEventListener('visibilitychange', changed); window.addEventListener('pagehide', hidden);
     return () => { document.removeEventListener('visibilitychange', changed); window.removeEventListener('pagehide', hidden); };
   }, []);
@@ -946,20 +956,37 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   };
   const waitingFindLane=waitingPage?.withdrawnOnly?'withdrawn':waitingPage?.declinedOnly?'declined':'pending';
   const waitingFindLabel=waitingFindLane==='withdrawn'?'发起设备在启动前撤回':waitingFindLane==='declined'?'本机不接手':'待接手';
-  const readWaiting = (direction?: 'older' | 'newer', wanted:'pending'|'started'|'results'|'declined'|'failed'|'withdrawn'='pending',query='') => {
-    if (busy || selectedPeer.current || direction && !waitingPage) return;
+  const readWaiting = (direction?: 'older' | 'newer', wanted:'pending'|'started'|'results'|'declined'|'failed'|'withdrawn'='pending',query='',stillHere?: () => boolean) => {
+    if (busy || selectedPeer.current || direction && !waitingPage || stillHere?.() === false) return;
+    if (!stillHere) homeDeviceInbox?.retire();
     if(localInbox){closeOwnText();setClosedReceipt(null);setClosedInbox(null);setClosedDraft('');void run('devices.discard',{closedHandle:localInbox.closedHandle}).catch(()=>{});}
     const lane=direction?(waitingPage!.withdrawnOnly?'withdrawn':waitingPage!.failedOnly?'failed':waitingPage!.declinedOnly?'declined':waitingPage!.startedOnly?'started':waitingPage!.resultOnly?'results':'pending'):wanted;setWaitingBlock(null);
     const search=direction?(waitingPage!.searchText||''):query.trim();
     if(search&&(!['pending','declined','withdrawn'].includes(lane)||!supported('devices.findWaitingPhoneGoals')))return;
     void invoke(search?'devices.findWaitingPhoneGoals':'devices.readWaitingPhoneGoals',direction?{waitingHandle:waitingPage!.waitingHandle,direction}:{...(search?{searchText:search}:{}),...(lane!=='pending'?{queue:lane}:{})},value=>{
-      if (!selectedPeer.current) {
+      if (!selectedPeer.current && stillHere?.() !== false) {
         const page = waitingPhoneGoalPage(value,local,search);
         if ((page.withdrawnOnly===true)!==(lane==='withdrawn')||(page.failedOnly===true)!==(lane==='failed')||(page.resultOnly === true)!==(lane==='results')||(page.startedOnly===true)!==(lane==='started')||(page.declinedOnly===true)!==(lane==='declined')) throw new Error('原设备工作页已变化，未切换到其他记录。');
         setWaitingPhones(page);
       }
     });
   };
+  useLayoutEffect(() => {
+    const receipt = localRead, arrival = receipt?.arrival;
+    if (!receipt || !arrival || busy || state.webWorkspaceSection !== 'devices') return;
+    const current = () => arrival.current() && alive.current && !selectedPeer.current &&
+      bridge.getState().state.deviceWorkspaceRevision === receipt.revision;
+    const target = deviceInboxSection.current;
+    if (!current() || !Number.isSafeInteger(receipt.revision) || snapshot?.capturedAt !== receipt.capturedAt ||
+        !local.deviceId || !local.instanceId || !supported('devices.readWaitingPhoneGoals') ||
+        waitingPhones || closedInbox || form || review || desktopOpen ||
+        !target?.isConnected || target.closest('[hidden],[inert]')) { arrival.retire(); return; }
+    if (scope.current.hasPending() || !arrival.claim()) return;
+    target.scrollIntoView({ block: 'nearest' });
+    target.focus({ preventScroll: true });
+    readWaiting(undefined,'pending','',current);
+  }, [localRead,busy,state.webWorkspaceSection,state.deviceWorkspaceRevision,snapshot?.capturedAt,local.deviceId,local.instanceId,
+      peerId,waitingPhones,closedInbox,form,review,desktopOpen]);
   const reviewWaiting = (row:Data) => {
     if(busy||selectedPeer.current||!waitingPage||waitingPage.resultOnly||waitingPage.startedOnly||waitingPage.declinedOnly||waitingPage.withdrawnOnly||waitingPage.failedOnly)return;
     const blockedNow=pickupUnavailable(row,Date.now());if(blockedNow){setError(blockedNow);return;}
@@ -1614,7 +1641,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             </Accordion>
             </div>
           </section>
-          {supported('devices.readWaitingPhoneGoals') && local.deviceId && <section className="pw-device-section" aria-label="交给这台手机的工作">
+          {supported('devices.readWaitingPhoneGoals') && local.deviceId && <section ref={homeDeviceInbox?deviceInboxSection:undefined} tabIndex={homeDeviceInbox?-1:undefined} className="pw-device-section" aria-label="交给这台手机的工作">
             <WorkspaceSectionHeading title="交给这台手机的工作" description="只看本机接纳记录。查看不会联系对方或开始执行。" actions={<>
               <Button variant={pendingInbox || (!waitingPage && !localInbox && (trusted.length > 0 || snapshot.hasMorePeers)) ? 'primary' : 'secondary'} disabled={busy}
                 onClick={() => readWaiting()}>{pendingInbox ? '重读最新待接手' : '查看待接手'}</Button>

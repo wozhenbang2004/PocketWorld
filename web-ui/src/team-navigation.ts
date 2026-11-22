@@ -15,11 +15,22 @@ export type TeamOwnerWorkLink = {
   teamTaskId?: string;
   stopping?: boolean;
   savedResultForDraft?: true;
+  temporaryAnswersForReview?: true;
+  temporaryAnswerReview?: PendingTeamReportReview;
 };
-export type TeamOwnerWorkIntent = 'overview' | 'supplement' | 'followUp' | 'returnResult';
+export type TeamOwnerWorkIntent = 'overview' | 'supplement' | 'followUp' | 'returnResult' | 'reviewReport';
 
 export type DraftTeamSelection = { id:string; label:string };
 export const isDraftTeamSelectionId=(id:unknown):id is string=>typeof id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id);
+export type PendingTeamReportReview={resultReviewDigest:string;summarySha256:string;generation:number;revision:number};
+export function pendingTeamReportReview(link:TeamOwnerWorkLink|null|undefined):PendingTeamReportReview|undefined{
+  const pin=link?.temporaryAnswerReview,sha=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  return link?.temporaryAnswersForReview===true&&link.readOnly===true&&link.currentRun===true&&link.stopping===false&&
+    link.savedResultForDraft!==true&&isDraftTeamSelectionId(link.taskId)&&isDraftTeamSelectionId(link.runId)&&
+    isDraftTeamSelectionId(link.conversationId)&&isDraftTeamSelectionId(link.teamRunId)&&link.teamTaskId===link.teamRunId&&
+    Number.isSafeInteger(link.epoch)&&link.epoch>0&&pin&&sha(pin.resultReviewDigest)&&sha(pin.summarySha256)&&
+    Number.isSafeInteger(pin.generation)&&pin.generation>=0&&Number.isSafeInteger(pin.revision)&&pin.revision>0?pin:undefined;
+}
 export type TeamButlerRequest = {
   teamId?: string;
   goal?: string;

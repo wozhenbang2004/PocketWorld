@@ -64,10 +64,11 @@ function directAssets(html:string):string[] {
   return Array.from(paths);
 }
 
+type SavedStaticCompanion={path:string;sha256:string;savedEditId:string;reviewedPaths:readonly string[]};
 export type SavedStaticEditor={projectId:string;checkoutId:string;viewHandle:string;filesHandle:string;fileHandle:string;
-  revision:number;editSequence:number;entrySha256:string;documentEpoch:number;html:string;listedPaths:readonly string[]};
+  revision:number;editSequence:number;entrySha256:string;documentEpoch:number;html:string;listedPaths:readonly string[];companion?:SavedStaticCompanion};
 type Snapshot={sessionId:string;manifestIdentity:string;resourceIdentity:string;ready:boolean;visible:boolean;generation:number;error:string|null};
-type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;published:boolean;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
+type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;published:boolean;verifiedRoot?:true;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
 function missingResourceReview(value:unknown,editor:SavedStaticEditor,paths:readonly string[]):string[]|null {
   const review=row(value), sent=review.resourcePaths, missing=review.missingPaths;
   if(review.kind!=='saved_static_resource_review'||review.opened!==false||Object.hasOwn(review,'sessionId')||
@@ -84,8 +85,8 @@ function clearPublicationTimer(original:Visit) {
   original.publicationTimer=undefined;
 }
 function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly string[]):Snapshot|null {
-  const view=row(value), resources=view.resources;
-  if(view.kind!=='saved_static_page'||view.projectId!==editor.projectId||view.checkoutId!==editor.checkoutId||
+  const view=row(value), resources=view.resources, companion=editor.companion;
+  if((companion&&!paths.includes(companion.path))||view.kind!=='saved_static_page'||view.projectId!==editor.projectId||view.checkoutId!==editor.checkoutId||
     view.entryPath!=='index.html'||view.entrySha256!==editor.entrySha256||!hash(view.manifestIdentity)||
     typeof view.sessionId!=='string'||!view.sessionId||view.sessionId.length>200||
     typeof view.ready!=='boolean'||typeof view.visible!=='boolean'||!(view.error===null||typeof view.error==='string')||
@@ -100,7 +101,8 @@ function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly st
     if(path==='index.html'){
       if(entry||resource.sha256!==editor.entrySha256||resource.mimeType!=='text/html'||Number(resource.bytes)>256*1024)return null;
       entry=true;
-    }else if(!assetPath(path)||!remaining.delete(path)||resource.mimeType!==pathMime(path)||Number(resource.bytes)>maximumAssetBytes)return null;
+    }else if(!assetPath(path)||!remaining.delete(path)||resource.mimeType!==pathMime(path)||Number(resource.bytes)>maximumAssetBytes||
+      (companion&&path===companion.path&&resource.sha256!==companion.sha256))return null;
     bytes+=Number(resource.bytes);
     identities.push(JSON.stringify([path,resource.sha256,resource.bytes,resource.mimeType]));
   }
@@ -109,17 +111,19 @@ function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly st
 }
 
 /** Same editor and BoardUI surface. The viewport is only a slot for the native session. */
-export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:{editor:SavedStaticEditor;current:()=>boolean;
-  onLeave:()=>void;registerBack:(handler:(()=>void)|null)=>void}) {
-  const suggestions=useMemo(()=>directAssets(editor.html),[editor]);
-  const other=useMemo(()=>Array.from(new Set(editor.listedPaths.filter(path=>assetPath(path)&&!suggestions.includes(path)))).slice(0,40),[editor,suggestions]);
-  const [selected,setSelected]=useState<string[]>(()=>suggestions);
+export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot,registerBack}:{editor:SavedStaticEditor;current:()=>boolean;
+  onLeave:()=>void;onVerifiedRoot?:(paths:readonly string[])=>void;registerBack:(handler:(()=>void)|null)=>void}) {
+  const companion=editor.companion;
+  const suggestions=useMemo(()=>editor.companion?.reviewedPaths??directAssets(editor.html),[editor]);
+  const other=useMemo(()=>editor.companion?[]:Array.from(new Set(editor.listedPaths.filter(path=>assetPath(path)&&!suggestions.includes(path)))).slice(0,40),[editor,suggestions]);
+  const [selected,setSelected]=useState<string[]>(()=>[...suggestions]);
   const [missing,setMissing]=useState<string[]>([]);
   const hasSelectedMissing=selected.some(path=>missing.includes(path));
+  const hasRequiredAsset=!companion||selected.includes(companion.path);
   const [stage,setStage]=useState<'review'|'opening'|'preview'|'closing'|'error'>('review');
   const [shown,setShown]=useState<Snapshot|null>(null), [error,setError]=useState('');
   const visit=useRef<Visit|null>(null), mounted=useRef(false), heading=useRef<HTMLHeadingElement>(null);
-  const callbacks=useRef({current,onLeave});callbacks.current={current,onLeave};
+  const callbacks=useRef({current,onLeave,onVerifiedRoot});callbacks.current={current,onLeave,onVerifiedRoot};
   const viewport=useProjectPreviewViewport(stage==='preview',shown?.sessionId||'',!shown||!!shown.error,available,
     `${editor.documentEpoch}:${editor.filesHandle}:${editor.fileHandle}:${editor.revision}`,'.pw-settings-dialog-content');
   const owns=()=>mounted.current&&callbacks.current.current()&&bridge.getDocumentEpoch()===editor.documentEpoch;
@@ -144,7 +148,12 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
       state.resourceIdentity===original.ack.resourceIdentity&&state.generation>=original.ack.generation){
       clearPublicationTimer(original);
       original.published=true;
-      if(!original.returning){setShown(state);setStage('preview');}
+      if(!original.returning){
+        setShown(state);setStage('preview');
+        if(!editor.companion&&!original.verifiedRoot&&state.ready&&state.visible&&!state.error){
+          original.verifiedRoot=true;callbacks.current.onVerifiedRoot?.(original.paths);
+        }
+      }
     }else if(original.published){original.closed=true;leave(original);}
   };
   const dismiss=()=>{
@@ -187,11 +196,12 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
     };
   },[editor]);
   const show=()=>{
-    if(!owns()||stage!=='review'||visit.current||!canOpenSavedStaticPreview()||hasSelectedMissing||selected.length>maximumResources)return;
+    if(!owns()||stage!=='review'||visit.current||!canOpenSavedStaticPreview()||hasSelectedMissing||!hasRequiredAsset||selected.length>maximumResources)return;
     const original:Visit={paths:[...selected],published:false,returning:false,closing:false,dismissed:false,closed:false};
     visit.current=original;setStage('opening');setError('');
     const {viewHandle,filesHandle,fileHandle,revision,editSequence}=editor;
-    void bridge.command(openPreview,{viewHandle,filesHandle,fileHandle,revision,editSequence,resourcePaths:original.paths}).then(value=>{
+    void bridge.command(openPreview,{viewHandle,filesHandle,fileHandle,revision,editSequence,resourcePaths:original.paths,
+      ...(companion?{companion:{entrySha256:editor.entrySha256,savedEditId:companion.savedEditId}}:{})}).then(value=>{
       const unavailable=missingResourceReview(value,editor,original.paths);
       if(unavailable){
         if(!live(original))return;
@@ -219,24 +229,26 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
     });
   };
   const options=(paths:readonly string[])=>paths.map(path=><CheckboxField key={path} isSelected={selected.includes(path)}
-    isDisabled={!selected.includes(path)&&selected.length>=maximumResources}
-    onChange={checked=>setSelected(previous=>checked?(previous.length<maximumResources&&!previous.includes(path)?[...previous,path]:previous):previous.filter(p=>p!==path))}>
+    isDisabled={path===companion?.path||!selected.includes(path)&&selected.length>=maximumResources}
+    onChange={checked=>{if(path!==companion?.path)setSelected(previous=>checked?(previous.length<maximumResources&&!previous.includes(path)?[...previous,path]:previous):previous.filter(p=>p!==path))}}>
     <bdi className="pw-preview-entry-path">{path}</bdi>
+    {path===companion?.path&&<span className="pw-field-hint"> · 本次保存</span>}
     {missing.includes(path)&&<span className="pw-field-hint"> · 本次未找到</span>}
   </CheckboxField>);
   return stage==='review'?<section className="pw-form-flow" aria-label="核对本机网页预览">
     <h3 ref={heading} tabIndex={-1}>index.html</h3>
-    <p>用当前已保存的入口和你选中的资源。预览只在本机打开，不联网、不构建，也不改动文件。</p>
-    {suggestions.length>0&&<div className="pw-form-flow" role="group" aria-label="入口直接引用的文件">{options(suggestions)}</div>}
+    <p>{companion?<>核对刚才打开的同一网页，并带上这次保存的 <bdi>{companion.path}</bdi>。</>:'用当前已保存的入口和你选中的资源。'}预览只在本机打开，不联网、不构建，也不改动文件。</p>
+    {suggestions.length>0&&<div className="pw-form-flow" role="group" aria-label={companion?'上次已核对的网页资源':'入口直接引用的文件'}>{options(suggestions)}</div>}
     {other.length>0&&<Accordion defaultExpandedKeys={other.some(path=>missing.includes(path))?['static-listed-resources']:undefined}>
       <AccordionItem id="static-listed-resources" title="从已读取的文件清单再选" headingLevel={4}>
       <div className="pw-form-flow" role="group" aria-label="清单中的其他可选资源">{options(other)}</div>
     </AccordionItem></Accordion>}
     {(suggestions.length>0||other.length>0)&&<p className="pw-field-hint" role="status">已选 {selected.length} 项，最多 {maximumResources} 项。</p>}
-    {hasSelectedMissing&&<p className="pw-field-hint" role="status">请取消勾选未找到的资源，或者返回补齐文件后再预览。</p>}
+    {hasSelectedMissing&&<p className="pw-field-hint" role="status">{companion&&missing.includes(companion.path)?
+      '未找到本次保存的资源，请返回编辑器核对。':'请取消勾选未找到的资源，或者返回补齐文件后再预览。'}</p>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     <div className="pw-form-actions"><Button variant="secondary" onClick={dismiss}>返回编辑</Button>
-      <Button disabled={hasSelectedMissing} onClick={show}>打开本机预览</Button></div>
+      <Button disabled={hasSelectedMissing||!hasRequiredAsset} onClick={show}>打开本机预览</Button></div>
   </section>:<section className="pw-preview-pane pw-original-local-web" aria-label="已保存网页的本机预览" aria-busy={stage==='opening'||stage==='closing'||stage==='preview'&&!shown?.ready&&!shown?.error}>
     <p className="pw-reading-note">index.html · 此次已保存版本</p>
     {stage!=='error'&&<div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={shown?.sessionId}>

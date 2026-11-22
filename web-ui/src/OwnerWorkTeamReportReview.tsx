@@ -57,16 +57,16 @@ export function teamReportDecisionSaved(value:unknown,report:TeamReportRead,comp
   Object.entries(report.evidence).every(([key,expected])=>saved[key]===expected);
 }
 
-export function OwnerWorkTeamReportReview({reading,error,done,pending,disabled,note,edit,decide,leave}:{
+export function OwnerWorkTeamReportReview({reading,error,done,pending,disabled,note,edit,decide,leave,returnLabel='返回原工作'}:{
  reading?:TeamReportRead;error?:string;done?:boolean;pending:boolean;disabled:boolean;note:string;
- edit:(text:string)=>void;decide:(completed:boolean)=>void;leave:()=>void;
+ edit:(text:string)=>void;decide:(completed:boolean)=>void;leave:()=>void;returnLabel?:string;
 }) {
  const title=useRef<HTMLHeadingElement>(null);
  useLayoutEffect(()=>{title.current?.focus({preventScroll:true});title.current?.scrollIntoView({block:'nearest'})},[]);
  const contract=reading?.contract;
  return <section className="pw-task-overview pw-task-review" aria-label="用原团队汇总核对原工作">
   <header className="pw-section-heading"><h3 ref={title} tabIndex={-1}>用团队汇总核对原工作</h3>
-   <Button variant="ghost" disabled={pending} onClick={leave}>返回原工作</Button></header>
+   <Button variant="ghost" disabled={pending} onClick={leave}>{returnLabel}</Button></header>
   {contract&&<section className="pw-work-goal" aria-label="本次工作的目标和交付要求">
    <h4>本次工作的目标</h4><p className="pw-work-goal-text" dir="auto">{contract.goal}</p>
    <dl>{contract.deliverable&&<div><dt>交付内容</dt><dd dir="auto">{contract.deliverable}</dd></div>}
