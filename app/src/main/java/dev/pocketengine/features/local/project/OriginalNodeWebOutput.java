@@ -27,6 +27,7 @@ public final class OriginalNodeWebOutput {
     public static final String WITNESS="firstNodeWebOutput", EDITED_ROUTE="editedNodeWebVersion", EXISTING_ROUTE="existingNodeWebVersion";
     public static final String OUTPUT_LIMITATION="firstNodeWebOutputLimitation", NESTED_VITE_OUTPUT="nested_vite_output";
     private static final String EDITED_TREES="editedOutputTrees", EXISTING_TREES="existingOutputTrees";
+    static final String IDENTICAL_REWRITE="identical_rewrite";
     private static final Set<String> BINDING=Set.of("taskId","runId","epoch","buildOperationId","buildReceiptIdentity",
         "checkoutSequence","projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity","operationId");
     private static final Set<String> WITNESS_KEYS=Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
@@ -101,6 +102,11 @@ public final class OriginalNodeWebOutput {
         public String checkoutId(){return facts.optString("checkoutId");}
         public String operationId(){return facts.optString("operationId");}
         public boolean directOwnerVite(){return direct;}
+        /** Positive observation in this original direct exit witness, not a comparison to a saved artifact. */
+        public boolean identicalRewrite(){
+            JSONObject trees=witness.optJSONObject(EXISTING_TREES);
+            return direct&&trees!=null&&IDENTICAL_REWRITE.equals(trees.opt("result"));
+        }
         public String saveTool(){return direct?DIRECT_TOOL:TOOL;}
     }
     public static String directVersion(JSONObject exact,JSONObject binding)throws Exception{
@@ -155,7 +161,7 @@ public final class OriginalNodeWebOutput {
             .put("operationId",ownerOp);
         for(String key:ListKeys.SOURCE)facts.put(key,plan.get(key));
         JSONObject witness=actual.optJSONObject(WITNESS);
-        requireWitness(facts,witness,editedVersion,existingVersion);
+        requireWitness(facts,witness,editedVersion,existingVersion,direct);
         return new Build(plan,binding,facts,witness,direct);
     }
     private static void requireVersionRoute(JSONObject route,String key,String expected){
@@ -501,7 +507,8 @@ public final class OriginalNodeWebOutput {
         boolean existing=!invocation.existingWebVersion().isEmpty();
         if(versioned){
             exit.requireSameRead(WebDistObservation.read(root.directory().toPath(),source.nestedPublic));
-            changedTrees=launch.before.changedTo(exit,frozen).put("version",existing?invocation.existingWebVersion():invocation.editedWebVersion());
+            changedTrees=launch.before.changedTo(exit,frozen,invocation.directWebOutput())
+                .put("version",existing?invocation.existingWebVersion():invocation.editedWebVersion());
         }else{
             requireOutputPaths(root.directory(),source);
             var again=ProjectPackageArchive.capture(root.directory(),info,"web_output",ENTRY,true);
@@ -516,15 +523,15 @@ public final class OriginalNodeWebOutput {
         if(source.vite())stamp.put("outputProfile",source.profile());
         return stamp.putOpt(existing?EXISTING_TREES:EDITED_TREES,changedTrees);
     }
-    private static void requireWitness(JSONObject facts,JSONObject witness,String editedVersion,String existingVersion)throws Exception{
+    private static void requireWitness(JSONObject facts,JSONObject witness,String editedVersion,String existingVersion,boolean direct)throws Exception{
         boolean edited=!editedVersion.isEmpty(),existing=!existingVersion.isEmpty();
         if(witness==null||edited&&existing||!ENTRY.equals(witness.opt("entryPath"))||
            witness.length()!=WITNESS_KEYS.size()+(witness.has("outputProfile")?1:0)+(edited||existing?1:0)||
            ((existing||witness.has("outputProfile"))&&!VITE.equals(witness.opt("outputProfile"))))
             throw new SecurityException("这笔原构建没有在成功退出时留下可核对的网页原证据；不补读当前 dist");
         for(String key:WITNESS_KEYS)if(!witness.has(key))throw new SecurityException("原整站退出证据缺少字段");
-        requireTrees(witness,EDITED_TREES,editedVersion);
-        requireTrees(witness,EXISTING_TREES,existingVersion);
+        requireTrees(witness,EDITED_TREES,editedVersion,false);
+        requireTrees(witness,EXISTING_TREES,existingVersion,direct);
         for(String key:Set.of("taskId","runId","epoch","buildOperationId","checkoutSequence",
             "projectId","checkoutId","sourceDigest","planDigest","runtimeIdentity"))
             if(!ProjectSources.canonical(facts.get(key)).equals(ProjectSources.canonical(witness.opt(key))))
@@ -534,11 +541,19 @@ public final class OriginalNodeWebOutput {
         if(witness.optLong("archiveBytes")<=0||witness.optLong("archiveBytes")>ProjectPackageArchive.MAX_ARCHIVE_BYTES)
             throw new SecurityException("原整站退出大小不可核对");
     }
-    private static void requireTrees(JSONObject witness,String key,String version){
+    private static void requireTrees(JSONObject witness,String key,String version,boolean direct){
         JSONObject trees=witness.optJSONObject(key);
-        if(version.isEmpty()?witness.has(key):trees==null||trees.length()!=3||!version.equals(trees.opt("version"))||
-            !trees.optString("before").matches("[a-f0-9]{64}")||!trees.optString("after").matches("[a-f0-9]{64}")||trees.opt("before").equals(trees.opt("after")))
-            throw new SecurityException("这次构建缺少已改变的原网页字节证据");
+        if(version.isEmpty()){
+            if(!witness.has(key))return;
+        }else if(trees!=null&&version.equals(trees.opt("version"))&&
+            trees.optString("before").matches("[a-f0-9]{64}")&&trees.optString("after").matches("[a-f0-9]{64}")){
+            Object before=trees.opt("before"),after=trees.opt("after");
+            boolean equal=before.equals(after);
+            if(trees.length()==3&&!equal)return;
+            if(direct&&trees.length()==4&&equal&&before instanceof String&&after instanceof String&&
+                IDENTICAL_REWRITE.equals(trees.opt("result")))return;
+        }
+        throw new SecurityException("这次构建缺少已改变的原网页字节证据");
     }
     public static void requireExitBytes(JSONObject witness,ProjectPackageArchive.Frozen frozen)throws Exception{
         JSONObject bytes=ProjectPackageDelivery.archiveIdentity(frozen);

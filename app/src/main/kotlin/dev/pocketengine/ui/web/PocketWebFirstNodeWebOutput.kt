@@ -98,7 +98,10 @@ internal class PocketWebFirstNodeWebOutput(
                         }
                     }
                     else-> error("未知网页成果操作")
-                }.also{it.remove("savedPin");it.put("eligible",true)}
+                }.also{
+                    it.remove("savedPin");it.put("eligible",true)
+                    if(build.identicalRewrite())it.put("identicalRewrite",true)
+                }
             }
             main.post{
                 if(active===control)active=null

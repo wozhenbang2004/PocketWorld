@@ -240,7 +240,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   runFocus?: TeamRunFocus | null; onRunFocusConsumed?: (requestId: string) => void;
   onAskButler?: (request: TeamButlerRequest) => void;
   originalWorkDraft?: boolean;
-  onOpenWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent) => void;
+  onOpenWork?: (link: TeamOwnerWorkLink, intent: TeamOwnerWorkIntent, savedTeamId?: string) => void;
 }) {
   const openReading = useContext(ReadingContext);
   const formDraft = useFormDrafts(run, 'teams');
@@ -1180,7 +1180,14 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         if (fresh?.kind === 'run' && fresh.viewHandle && fresh.run?.id === link.teamRunId) acceptReading(fresh);
         else release(fresh);
         if (!same) throw new Error('这次协作的原成果已变化，没有关联到草稿。');
-        onOpenWork(next, 'followUp');
+        const teamId = label(fresh.run.teamId), originalRoster = classicAnswerOwner(original);
+        const saved = catalogTeams.filter(team => team.id === teamId);
+        // The returned Work is the result source. A still-saved named definition
+        // is a separate optional choice, never a reason to reject the Work carry.
+        const savedTeamId = catalogReady && originalRoster && originalRoster === classicAnswerOwner(fresh) &&
+          Array.isArray(catalog.history) && !rows(catalog.history).some(row => row.id === link.teamRunId) &&
+          saved.length === 1 && modelTeamKind(saved[0]) === 'ordinary' ? teamId : undefined;
+        onOpenWork(next, 'followUp', savedTeamId);
       });
     });
   };

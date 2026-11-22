@@ -19,6 +19,7 @@ type Fact = Partial<BuildPosition> & {
   packageOperationId?: string; reviewHandle?: string; manifestIdentity?: string; entryPath?: string; outputProfile?: string;
   sourceDigest?: string; artifactId?: string; archiveSha256?: string; archiveBytes?: number; files?: FileFact[];
   reason?: 'artifact_count_limit'|'project_package_bytes_limit'; reviewedArchiveSha256?: string;
+  identicalRewrite?: true;
 };
 const hash = /^[0-9a-f]{64}$/;
 const id = /^[A-Za-z0-9_-]{1,80}$/;
@@ -262,6 +263,8 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
           !['ready','review','pending','saved','not_published'].includes(data.state||'')) throw Error('未核对到这一轮原网页成果。');
       if(directVite&&(data.buildOperationId!==directVite.buildOperationId||data.sourceDigest!==directVite.sourceDigest||
         data.state==='review'&&data.outputProfile!=='vite_fresh_dist_v1'))throw Error('原网页回执不属于这一次本机构建。');
+      if(data.identicalRewrite!==undefined&&(data.identicalRewrite!==true||!directVite))
+        throw Error('未核对到这次本机构建的网页文件观察。');
       if(command!==read && data.buildOperationId!==fact?.buildOperationId) throw Error('没有采用另一轮构建。');
       if(attempt && (data.buildOperationId!==attempt.buildOperationId || data.operationId!==attempt.operationId || data.sourceDigest!==attempt.sourceDigest ||
           (command===save ? data.state!=='saved'&&data.state!=='not_published' : data.state==='review') ||
@@ -336,6 +339,7 @@ export function FirstNodeWebOutput({target, ownerWindow, open, onSaved, hideInel
     <div className="pw-reading-section-heading"><h4>原构建网页</h4></div>
     {checkBuildAfterFailure && fact?.eligible===true && <p className="pw-reading-note">这项工作没有完成，但本机构建步骤已核对为成功退出。下面只处理原构建的网页。</p>}
     {beforeGoalAcceptance && fact?.eligible===true && <p className="pw-reading-note">本机构建已核对为成功退出。核对或保存网页不会替你验收目标。</p>}
+    {directVite&&fact?.identicalRewrite===true&&<p className="pw-reading-note" role="status">构建结束时已核对：网页文件已全部替换，内容与构建前一致。</p>}
     {noSavedWeb&&buildWebGap==='nested_vite_output'?<p className="pw-reading-note" role="status"><strong>构建通过，固定网页未保存。</strong>
       {' '}输出含额外子目录，不在本机固定网页支持范围。{canEditBuildCopy?'可在下方继续编辑构建所用的副本。':'可在「过程」查看本次构建记录。'}</p>:
       noSavedWeb?<p className="pw-reading-note" role="status"><strong>构建通过（退出码 0），固定网页未保存。</strong> 可在「过程」查看本次构建记录。</p>:

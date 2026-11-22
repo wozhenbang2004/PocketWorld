@@ -384,6 +384,22 @@ function sameTeamDraftInput(visit:TeamDraftInput,current:TeamDraftInput|null,rev
  return visit.kind==='goal'?current.kind==='goal'&&current.text===visit.text:
    current.kind==='work'&&current.generation===visit.generation&&workIdentityKey(current.work)===workIdentityKey(visit.work);
 }
+type CarriedTeamRoster={teamId:string;work:WorkIdentity;input:ModelSetupInput;generation:string;navigation:number;resume:number};
+function carriedTeamDraft(live:ReturnType<typeof bridge.getState>,work:WorkIdentity,conversation:string,doc:number){
+ const draft=live.composer,input=modelSetupInput(live,doc),view=obj(live.view),owner=live.state,phone=obj(live.phoneDraft);
+ const tasks=asArray<Task>(owner.tasks).filter(row=>row.id===work.taskId),task=tasks.length===1?tasks[0]:undefined;
+ const original=ordinaryChatWorkRow(task,conversation),generation=task?.raw?.ownerWork?.generation;
+ if(!draft||!input||input.conversation!==conversation||input.key!==`conversation:${conversation}`||
+    view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||phone.phone!==false||phone.channelOrigin!==false||
+    owner.filePath||owner.queuedInputsPage||owner.attachmentWorkspace?.open||owner.chatAttachmentPickerOpen||
+    owner.chatBusy||owner.chatSubmitting||owner.phoneSubmitting||!live.capabilities.commands.includes('composer.object.add')||
+    !original||workIdentityKey(original)!==workIdentityKey(work)||task?.status!=='completed'||task.raw?.cancelRequested===true||
+    typeof generation!=='string'||!generation||!Number.isSafeInteger(draft.revision)||draft.revision<1||
+    !Array.isArray(draft.pending)||draft.pending.some((row:Json)=>row?.draftKey===input.key)||!Array.isArray(draft.objectRefs))return null;
+ const refs=asArray<Json>(draft.objectRefs),selected=refs.filter(ref=>ref?.kind==='work'&&ref.id===work.taskId);
+ return selected.length===1&&selected[0].runId===work.runId&&selected[0].epoch===work.epoch?
+  {input,generation,resume:Number(view.resumeRevision),teams:refs.filter(ref=>ref?.kind==='team'),count:refs.length}:null;
+}
 const originalTeamDraftChanged='原工作或草稿已变化，没有把编组加到其他输入。';
 function savedOwnerAttachmentChoices(message:Message):OriginalAttachmentChoice[]{
  if(message.role!=='user'||!message.id||!Number.isSafeInteger(message.sourceRevision)||Number(message.sourceRevision)<1)return [];
@@ -673,7 +689,9 @@ export default function App(){
  },[closePreparation]);
  const [returningConversation,setReturningConversation]=useState('');
  const conversationReturnRequest=useRef(0);
- useEffect(()=>{const cancel=()=>{if(document.hidden){conversationReturnRequest.current++;setReturningConversation('')}};document.addEventListener('visibilitychange',cancel);return()=>document.removeEventListener('visibilitychange',cancel)},[]);
+ const [carriedTeamRoster,setCarriedTeamRoster]=useState<CarriedTeamRoster|null>(null);
+ const attemptedRosterAttach=useRef<CarriedTeamRoster|null>(null);
+ useEffect(()=>{const cancel=()=>{if(document.hidden){conversationReturnRequest.current++;setReturningConversation('');setCarriedTeamRoster(null)}};document.addEventListener('visibilitychange',cancel);return()=>document.removeEventListener('visibilitychange',cancel)},[]);
  const historyWindowBack=useRef<(()=>boolean)|null>(null);
  const chatHistoryReturn=useRef<{conversationId:string;document:number;navigation:number;trigger:HTMLButtonElement}|null>(null);
  const registerHistoryWindowBack=useCallback((handler:(()=>boolean)|null)=>{historyWindowBack.current=handler},[]);
@@ -2385,9 +2403,9 @@ export default function App(){
    return false;
   }finally{independentReportBusy.current=false}
  };
- const returnToOriginalTaskConversation=async(taskId:string,conversationId:string,work?:Pick<WorkIdentity,'runId'|'epoch'>,fromTeam=false,
+ const returnToOriginalTaskConversation=async(taskId:string,conversationId:string,work?:Pick<WorkIdentity,'runId'|'epoch'>,teamFollowUp:false|{savedTeamId?:string}=false,
   stageFile?:((inEditor:()=>boolean)=>Promise<boolean>)|{chooseAttachment:(inEditor:()=>boolean)=>Promise<void>},fileReader?:HistoryResultOrigin,stillSource?:()=>boolean)=>{
-  const associate=!!work,justRead=!associate&&!stageFile;
+  const fromTeam=!!teamFollowUp,associate=!!work,justRead=!associate&&!stageFile;
   if(!conversationId||returningConversation||!can('conversation.select')||
      (associate||stageFile)&&bridge.getState().state.chatSubmitting)return;
   const request=++conversationReturnRequest.current,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
@@ -2482,7 +2500,14 @@ export default function App(){
         '这份草稿已关联这件工作的另一轮，文字和关联都保留。要改用本轮，请先在输入框上方的「关于」中移除原关联，再从本轮追问。');return;
       }
       if(!await stageButlerObject({kind:'work',id:taskId,runId:work.runId,epoch:work.epoch},draftCurrent))return;
-      if(draftCurrent())setLocalStatus(fromTeam?'已关联原工作。可以写下下一件事，尚未发送。':'已关联这次工作。追问写在原对话草稿里，尚未发送。');
+      if(draftCurrent()){
+       setLocalStatus(fromTeam?'已关联原工作。可以写下下一件事，尚未发送。':'已关联这次工作。追问写在原对话草稿里，尚未发送。');
+       if(teamFollowUp&&teamFollowUp.savedTeamId){
+        const original={taskId,...work},draft=carriedTeamDraft(bridge.getState(),original,conversationId,documentEpoch);
+        if(draft&&!draft.teams.length&&draft.count<4)setCarriedTeamRoster({teamId:teamFollowUp.savedTeamId,work:original,
+          input:draft.input,generation:draft.generation,navigation:destination,resume:draft.resume});
+       }
+      }
     }
     requestAnimationFrame(()=>{if(current()&&navigationWindow.current===destination&&bridge.getState().state.conversationId===conversationId&&!bridge.getState().state.conversationReader)workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea')?.focus({preventScroll:true})});
    }
@@ -4664,7 +4689,7 @@ export default function App(){
       ...(original?{fromWorkResult:{source,arm,accepted}}:{})});
    });
  };
- const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:TeamOwnerWorkIntent)=>{
+ const openTeamOwnerWork=(link:TeamOwnerWorkLink,intent:TeamOwnerWorkIntent,savedTeamId?:string)=>{
    if(intent==='returnResult'){
      const origin=relatedOrigin.current,pin=origin?.task?.teamResult;
      if(origin&&pin&&route==='teams'&&pin.current()&&matchesWorkTeamResult(pin.source,link))
@@ -4682,7 +4707,9 @@ export default function App(){
      };
      // Secondary's retained forms guard calls back after their draft writes.
      // Continue only from the actual navigation callback, not its scheduled return.
-     void navigate('chat',()=>{void returnToOriginalTaskConversation(link.taskId,link.conversationId,{runId:link.runId,epoch:link.epoch},true)},
+     const team=savedTeamId&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(savedTeamId)?savedTeamId:undefined;
+     void navigate('chat',()=>{void returnToOriginalTaskConversation(link.taskId,link.conversationId,
+       {runId:link.runId,epoch:link.epoch},{savedTeamId:team})},
        {taskClosed:true,stillCurrent:fromOriginalTeam});
      return;
    }
@@ -6653,6 +6680,42 @@ export default function App(){
  };
  const chooseDraftTeam=isChatSurface&&intent==='chat'&&!taskOpen&&!draftSwitching&&snapshot?.view?.section===null&&snapshot.view.taskId===null&&
    can('teams.snapshot')&&can('teams.readDefinition')?originalTeamDraft(snapshot,undefined,route==='butler'):null;
+ const currentCarriedRoster=(offer:CarriedTeamRoster,live:ReturnType<typeof bridge.getState>)=>{
+  if(document.hidden||draftSwitchPending()||navigationWindow.current!==offer.navigation||
+     !sameModelSetupInput(offer.input,live,bridge.getDocumentEpoch()))return null;
+  const draft=carriedTeamDraft(live,offer.work,offer.input.conversation,offer.input.document);
+  return draft?.generation===offer.generation&&draft.resume===offer.resume?draft:null;
+ };
+ useEffect(()=>{
+  if(!carriedTeamRoster)return;
+  const live=bridge.getState(),draft=live.composer,offer=carriedTeamRoster,work=offer.work;
+  if(navigationWindow.current!==offer.navigation||bridge.getDocumentEpoch()!==offer.input.document||
+     obj(live.view).resumeRevision!==offer.resume||draft?.ready===true&&(draft.key!==offer.input.key||draft.epoch!==offer.input.epoch||
+       !asArray<Json>(draft.objectRefs).some(ref=>ref?.kind==='work'&&ref.id===work.taskId&&ref.runId===work.runId&&ref.epoch===work.epoch)))
+   setCarriedTeamRoster(current=>current===offer?null:current);
+ },[carriedTeamRoster,snapshot,navigationRevision]);
+ const rosterDraft=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&!draftSwitching&&carriedTeamRoster?
+  currentCarriedRoster(carriedTeamRoster,snapshot):null;
+ const attachCarriedRoster=async(offer:CarriedTeamRoster)=>{
+  const live=bridge.getState(),draft=currentCarriedRoster(offer,live);
+  if(attemptedRosterAttach.current===offer||!draft||draft.teams.length||draft.count>=4)return;
+  if(live.composer?.text!==chatDraft.currentValue()){
+   setLocalError('当前文字尚在同步，请稍后关联编组。原文字不变。');return;
+  }
+  // This is the second explicit gesture, not part of carrying the Work. The
+  // native composer CAS can add only to this exact draft; never retry an unknown result.
+  attemptedRosterAttach.current=offer;setCarriedTeamRoster(current=>current===offer?null:current);setLocalError('');
+  const current=()=>{
+   const now=currentCarriedRoster(offer,bridge.getState());
+   return !!now&&(now.teams.length===0||now.teams.length===1&&now.teams[0].id===offer.teamId);
+  };
+  try{
+   if(await stageButlerObject({kind:'team',id:offer.teamId},current,true)&&current())
+    setLocalStatus('已关联原工作和同一编组，尚未发送。');
+  }catch(error){
+   if(current())setLocalError(error instanceof Error?error.message:'编组关联尚未确认。原工作和草稿保留，尚未发送。');
+  }
+ };
  const composerRegion=<div className="pw-composer-region">
    {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context">
     <Button variant="ghost" size="small" leadingIcon={homeHostMessage?IconServer:IconChat} onClick={homeHostMessage?continueSavedHostFromHome:foregroundTurn&&!pendingHere?returnToForegroundReply:()=>void navigate('chat')} aria-label={homeHostMessage?`${continueSavedHostLabel}：${currentConversation?.title||'原交办'}`:pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}>
@@ -6677,6 +6740,8 @@ export default function App(){
     <Button variant="ghost" size="small" disabled={draftSwitching||registration.waiting||reportDraftSwitching}
      onClick={()=>{void abandonEmptyReportDraft()}}>放弃空追问</Button>}
    {intent==='chat'&&<ComposerObjectReferences key={`objects:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.object.remove')}/>}
+   {carriedTeamRoster&&rosterDraft&&!rosterDraft.teams.length&&rosterDraft.count<4&&
+    <Button variant="ghost" size="small" leadingIcon={IconTeam} onClick={()=>void attachCarriedRoster(carriedTeamRoster)}>也关联这次用的编组</Button>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
    <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
      contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined} sendDisabled={keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">

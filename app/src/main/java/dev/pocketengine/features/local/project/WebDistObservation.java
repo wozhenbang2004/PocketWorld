@@ -7,6 +7,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
@@ -138,20 +139,37 @@ final class WebDistObservation {
         if(!checkout.equals(again.checkout)||!files.equals(again.files)||!directories.equals(again.directories))
             throw new SecurityException("退出后实际网页仍在变化，未采用部分结果");
     }
-    JSONObject changedTo(WebDistObservation after,ProjectPackageArchive.Frozen frozen)throws Exception {
+    JSONObject changedTo(WebDistObservation after,ProjectPackageArchive.Frozen frozen,boolean directVite)throws Exception {
         if(!checkout.equals(after.checkout))throw new SecurityException("原物理工作副本已改变");
         JSONArray archivedDirectories=frozen.manifest().getJSONArray("directories");
         if(archivedDirectories.length()!=after.directories.size())throw new SecurityException("固定包目录与原退出不同");
         for(int i=0;i<archivedDirectories.length();i++)if(!after.directories.containsKey(archivedDirectories.getString(i)))
             throw new SecurityException("固定包目录与原退出不同");
         String former=treeDigest(),next=after.treeDigest();
-        if(former.equals(next)||!next.equals(archiveTreeDigest(frozen)))throw new SecurityException("本次没有可分辨的新网页，或固定件与原退出字节不同");
+        boolean equal=former.equals(next);
+        if((equal&&(!directVite||!identicalReplacement(after)))||!next.equals(archiveTreeDigest(frozen)))
+            throw new SecurityException("本次没有可分辨的新网页，或固定件与原退出字节不同");
+        if(equal)return new JSONObject().put("before",former).put("after",next).put("result",OriginalNodeWebOutput.IDENTICAL_REWRITE);
         for(var file:after.files.entrySet()){
             Leaf prior=files.get(file.getKey()),current=file.getValue();
             if(prior!=null&&prior.sha.equals(current.sha)&&!current.stamp.rewrittenSince(prior.stamp))
                 throw new SecurityException("原地址仍含未重写的旧文件，不将其作为本次整站成果");
         }
         return new JSONObject().put("before",former).put("after",next);
+    }
+    /** Equal content must come from a wholly different set of physical files.
+     * Timestamps, a directory change or moving old files between paths are not enough. */
+    private boolean identicalReplacement(WebDistObservation after) {
+        if(files.isEmpty()||!files.keySet().equals(after.files.keySet()))return false;
+        var identities=new HashSet<Object>();
+        for(Leaf leaf:files.values())
+            if(leaf.stamp.identity==null||!identities.add(leaf.stamp.identity))return false;
+        for(var actual:after.files.entrySet()){
+            Leaf earlier=files.get(actual.getKey()),current=actual.getValue();
+            if(current.stamp.identity==null||!identities.add(current.stamp.identity)||
+                earlier.stamp.bytes!=current.stamp.bytes||!earlier.sha.equals(current.sha))return false;
+        }
+        return true;
     }
     private String treeDigest()throws Exception {
         JSONArray entries=new JSONArray();
