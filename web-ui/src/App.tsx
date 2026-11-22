@@ -8494,7 +8494,7 @@ export default function App(){
   !projectPreview.fromSavedWebShelf&&!projectPreview.fromOriginalChat&&!!archiveVisit?.origin.task?.fixedArchive&&
   archiveVisit.target.taskId===archiveChoice.taskId&&archiveVisit.target.operationId===archiveChoice.operationId;
  const ordinaryChatProjectBack=route==='projects'&&relatedOrigin.current?.drawerChat?.ordinaryDraftEpoch!==undefined;
- const relatedWorkspaceBackLabel=ordinaryChatProjectBack&&projectPreview.expanded?'返回项目':relatedOrigin.current?.label;
+ const relatedWorkspaceBackLabel=ordinaryChatProjectBack&&projectPreview.expanded?'返回项目':(relatedOrigin.current?.label??'返回');
  const backFromRelatedWorkspace=()=>{
   // The new root arrow must respect the same child stack as Android Back.
   if(ordinaryChatProjectBack&&(projectWorkBack.current?.()||projectDevelopmentBack.current?.()||projectPreview.handleBack()))return;
