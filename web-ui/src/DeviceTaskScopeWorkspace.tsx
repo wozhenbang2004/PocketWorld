@@ -164,7 +164,7 @@ export function canReviewDirectWorkspace(taskId: string, snapshot: PocketSnapsho
 }
 
 type WorkspaceFileModelStart = { disabled: boolean; start: () => void };
-type WorkspaceReadSource = { kind: 'file'; path: string } | { kind: 'directory' } |
+type WorkspaceReadSource = { kind: 'file'; path: string } | { kind: 'directory'; relativeDirectory: string } |
   { kind: 'listed'; path: string; runId: string; directoryOperationId: string; entryIndex: number };
 type WorkspaceFileDraft = WorkspaceReadSource & { work: string; choice: string; epoch: number; workspace: string;
   reviewing?: boolean; review?: { handle: string; expiresAt: number }; error?: string };
@@ -246,10 +246,12 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
   const check = () => {
     const value = currentDraft.current;
     if (!value || value.reviewing || value.review || disabledRef.current || !draftCurrent(value) ||
-      value.kind === 'file' && !validWorkspaceFilePath(value.path)) return;
+      value.kind === 'file' && !validWorkspaceFilePath(value.path) ||
+      value.kind === 'directory' && value.relativeDirectory !== '' && !validWorkspaceFilePath(value.relativeDirectory)) return;
     const flight: WorkspaceFileDraft = { ...value, reviewing: true, error: undefined };
     const action = flight.kind === 'file' ? workspaceFileReview : flight.kind === 'directory' ? workspaceDirectoryReview : workspaceListedReview;
-    const args = flight.kind === 'file' ? { taskId, path: flight.path } : flight.kind === 'directory' ? { taskId } :
+    const args = flight.kind === 'file' ? { taskId, path: flight.path } : flight.kind === 'directory' ?
+      flight.relativeDirectory === '' ? { taskId } : { taskId, relativeDirectory: flight.relativeDirectory } :
       { taskId, runId: flight.runId, epoch: 1, directoryOperationId: flight.directoryOperationId, entryIndex: flight.entryIndex };
     change(flight);
     void bridge.command(action, args).then(result => {
@@ -259,7 +261,7 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
         (flight.kind === 'file' ? reply.format !== 'pocketworld.owner-windows-workspace-read-review.v1' ||
           reply.exactPath !== flight.path || reply.maxDisplayBytes !== 8192 :
           flight.kind === 'directory' ? reply.format !== 'pocketworld.owner-windows-workspace-directory-review.v1' ||
-            reply.relativeDirectory !== '' || reply.remoteToolLimit !== 2 :
+            reply.relativeDirectory !== flight.relativeDirectory || reply.remoteToolLimit !== 2 :
             reply.format !== 'pocketworld.owner-windows-workspace-listed-file-review.v1' || reply.exactPath !== flight.path || reply.maxDisplayBytes !== 8192 ||
             reply.runId !== flight.runId || reply.epoch !== 1 || reply.directoryOperationId !== flight.directoryOperationId || reply.entryIndex !== flight.entryIndex))
         throw new Error('unmatched review');
@@ -280,7 +282,7 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
       !epoch || !workInWindow(work.key, epoch) || disabledRef.current || currentDraft.current || currentAttempt.current) return;
     const captured = { work: work.key, choice: choice.key, epoch, workspace: choice.workspaceId };
     if (kind === 'file') change({ ...captured, kind, path: '' });
-    else { change({ ...captured, kind }); check(); }
+    else { change({ ...captured, kind, relativeDirectory: '' }); check(); }
   };
   const beginListed = (shown: NonNullable<ReturnType<typeof originalWindowsWorkspacePickerAt>>, entryIndex: number) => {
     const live = bridge.getState(), work = originalWorkspaceFileWork(live, taskId), epoch = bridge.getDocumentEpoch();
@@ -347,6 +349,8 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
     directory ? '目前不能继续选择文件；已收到的目录仍可查看。' : '尚未核对到可查看的原目录。';
   const reviewTitle = draft?.kind === 'directory' ? '核对列出目录' : draft?.kind === 'listed' ? '核对所选原文件' :
     draft?.review ? '确认从原电脑读取' : '核对原电脑文件';
+  const invalidDirectory = draft?.kind === 'directory' && draft.relativeDirectory !== '' && !validWorkspaceFilePath(draft.relativeDirectory);
+  const shownFolder = directory?.relativeDirectory ? <>目录 <bdi style={{ overflowWrap: 'anywhere' }}>{directory.relativeDirectory}</bdi>。 </> : null;
   return <>
     {(choice || directoryChoice) && !attempt && <div className="pw-form-actions">
       <Button onClick={() => begin(directoryChoice ? 'directory' : 'file')} disabled={disabled}>{directoryChoice ? '浏览电脑文件' : '读取一个电脑文件'}</Button>
@@ -364,18 +368,18 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
     {picker && directory && <section className="pw-operation-entry" aria-label="这次从原电脑收到的目录">
       {canChoose && directory.choices.length > 0 ? <>
         <h4>选择一个文件</h4>
-        <p className="pw-muted">最多列出 8 个可选文件。尚未读取正文；确认后只用原连接读取选中的相对路径。</p>
+        <p className="pw-muted">{shownFolder}最多列出 8 个可选文件。尚未读取正文；确认后只用原连接读取选中的相对路径。</p>
         <ul>{directory.choices.map(row => <li key={row.entryIndex}>
           <Button variant="secondary" disabled={disabled} onClick={() => beginListed(picker, row.entryIndex)}>
-            <bdi style={{ overflowWrap: 'anywhere' }}>{row.path}</bdi>
+            <bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi>
           </Button>
         </li>)}</ul>
         {directory.received.truncated && <p>电脑只返回了部分目录项。</p>}
       </> : <Accordion variant="divided" className="pw-compact-disclosures">
         <AccordionItem id="workspace-picker-original-directory" headingLevel={4} title="查看当时列出的目录">
-          <p className="pw-muted">当时返回 {directory.received.returned} 项；这不是当前目录。</p>
+          <p className="pw-muted">{shownFolder}当时返回 {directory.received.returned} 项；这不是当前目录。</p>
           {directory.choices.length > 0 ? <ul>{directory.choices.map(row =>
-            <li key={row.entryIndex}><bdi style={{ overflowWrap: 'anywhere' }}>{row.path}</bdi></li>)}</ul> :
+            <li key={row.entryIndex}><bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi></li>)}</ul> :
             directory.received.entries.length > 0 && <ul>{directory.received.entries.map((row, index) =>
               <li key={index}><bdi style={{ overflowWrap: 'anywhere' }}>{row.name}</bdi> · {row.kind === 'file' ? '文件' : row.kind === 'directory' ? '目录' : '不可选'}</li>)}</ul>}
           {directory.choices.length ? <p>仅列出当时可选择的前 8 个文件。</p> :
@@ -388,8 +392,20 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
       closeLabel={draft?.kind === 'file' && draft.review ? '返回修改路径' : draft?.kind === 'listed' ? '返回原目录' : '返回原工作'}>
       {draft && <section className="pw-collaboration-dialog">
         <p>电脑工作区 <bdi>{draft.workspace}</bdi></p>
+        {draft.kind === 'directory' && <>
+          <TextField label="相对目录（可选）" hint="留空列出根目录。也可输入 docs 或 src/components；核对时不会读取电脑。" value={draft.relativeDirectory}
+            isDisabled={draft.reviewing || disabled} maxLength={2048} onChange={relativeDirectory => {
+              if (currentDraft.current !== draft || draft.reviewing || disabledRef.current || relativeDirectory === draft.relativeDirectory || !draftCurrent(draft)) return;
+              // Typing is not a new review or a listing. Retire only the old checked literal.
+              change({ ...draft, relativeDirectory, review: undefined, error: undefined });
+              retire(draft.review?.handle, draft.epoch);
+            }}/>
+          {invalidDirectory && <p className="pw-field-hint">请输入工作区内的相对目录，用 / 分隔，不用盘符、通配符或上级路径。</p>}
+        </>}
         {draft.review ? <>
-          <p ref={reviewSummary} tabIndex={-1}>{draft.kind === 'directory' ? '只列出这个工作区的根目录，不读文件正文。接下来仍须单独确认一个文件。' :
+          <p ref={reviewSummary} tabIndex={-1}>{draft.kind === 'directory' ? <>
+            只列出{draft.relativeDirectory ? <>目录 <bdi style={{ overflowWrap: 'anywhere' }}>{draft.relativeDirectory}</bdi></> : '这个工作区的根目录'}，不读文件正文。接下来仍须单独确认一个文件。
+          </> :
             <>只读 <bdi style={{ overflowWrap: 'anywhere' }}>{draft.path}</bdi>。可完整显示 8 KiB 以内的 UTF-8 文本。{draft.kind === 'listed' && '读取确认时该路径的内容，文件可能已变化。'}</>} 不调用模型，不改动电脑文件。</p>
           <div className="pw-form-actions"><Button variant="secondary" onClick={back}>{draft.kind === 'file' ? '返回修改' : draft.kind === 'listed' ? '返回原目录' : '返回原工作'}</Button>
             <Button disabled={disabled} onClick={confirm}>{draft.kind === 'directory' ? '确认列出目录' : '确认读取一次'}</Button></div>
@@ -400,10 +416,11 @@ function WorkspaceFileRead({ taskId, active, disabled, modelStart, registerBack,
             }}/>
             {draft.path && !validWorkspaceFilePath(draft.path) && <p className="pw-field-hint">请输入一个准确的相对文件路径，用 / 分隔，不用盘符、通配符或上级路径。</p>}
           </>}
-          {draft.reviewing && <p role="status">{draft.kind === 'directory' ? '正在核对原工作区范围…' : '正在核对所选工作区和路径…'}</p>}
+          {draft.reviewing && <p role="status">{draft.kind === 'directory' ? '正在核对要列出的目录…' : '正在核对所选工作区和路径…'}</p>}
           {draft.error && <p className="pw-error" role="alert">{draft.error}</p>}
           <div className="pw-form-actions"><Button variant="secondary" onClick={back}>{draft.kind === 'listed' ? '返回原目录' : '返回原工作'}</Button>
             {draft.kind === 'file' && <Button disabled={disabled || draft.reviewing || !validWorkspaceFilePath(draft.path)} onClick={check}>核对读取范围</Button>}
+            {draft.kind === 'directory' && !draft.reviewing && <Button disabled={disabled || invalidDirectory} onClick={check}>核对目录范围</Button>}
           </div>
         </>}
       </section>}

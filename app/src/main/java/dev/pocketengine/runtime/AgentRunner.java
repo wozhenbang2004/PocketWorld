@@ -36,6 +36,7 @@ import dev.pocketengine.runtime.context.RunContextBudget;
 import dev.pocketengine.runtime.context.ContextCompactor;
 import dev.pocketengine.runtime.context.CompactionPlan;
 import dev.pocketengine.phone.observation.AdaptiveObservationPolicy;
+import dev.pocketengine.phone.observation.PhoneFinalPageReceipt;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -620,7 +621,8 @@ public final class AgentRunner {
             emit(taskId, "run", "running", DeferredPhoneSession.initialized(phone)&&intent.deviceReadAllowed()?(storedMessages == null ? "开始观察手机，准备执行目标。" : "正在恢复任务并重新观察手机。"):"正在处理原目标；实际使用手机时才准备并读取原显示。", null, intent.diagnostics(), initialConfig, sink);
             if(phone!=null)phone.clearReferences();
             JSONObject latest;
-            if(ownerFirstMainStructure!=null){
+            boolean usingOwnerFirstMain=ownerFirstMainStructure!=null;
+            if(usingOwnerFirstMain){
                 JSONObject originalFirst=new JSONObject(ownerFirstMainStructure);ownerFirstMainStructure=null;
                 JSONObject binding=originalFirst.getJSONObject("observationBinding");
                 if(openingRestoredTurn||!(phone instanceof DeferredPhoneSession session)||!"main_screen".equals(session.executionMode())||
@@ -633,8 +635,10 @@ public final class AgentRunner {
             }else latest=!DeferredPhoneSession.initialized(phone)||!control.phoneSurfaceActive()||!intent.deviceReadAllowed()?new JSONObject().put("noDeviceObservation",true):observe(taskId,initialConfig,control,sink,planning);
             evidence = latest;
             if (!latest.optBoolean("ok", true)) return finish(taskId, "awaiting_user", latest.optString("message", "无法观察当前手机，请检查页面和操作权限后继续。"), evidence, steps, initialConfig, sink);
+            int beforeOpening=history.length();
             appendCapturedObservation(history, latest, initialConfig, contextBudget,screens,control);
             checkpoint(taskId, journal, history, steps, latest, initialConfig, sink, contextBudget,repeatedTools);
+            var openingMainRead=usingOwnerFirstMain&&history.length()>beforeOpening?PhoneFinalPageReceipt.bindOwnerFirstMainRead(control,latest):null;
             if(capabilities!=null&&!lifecycleBegun){capabilities.beginRun(clean(goal,initialConfig),control);lifecycleBegun=true;}
             String lastFeedback=saved.optString("feedback");
             String recallIntent=latestOwnerRecallQuery(history,lastFeedback.isEmpty()?goal:lastFeedback);
@@ -1071,7 +1075,7 @@ public final class AgentRunner {
                     JSONObject phoneFinalPage=null;
                     if(finalRun!=null&&finalRun.equals(finalReadOwner)&&phone instanceof DeferredPhoneSession session&&session.originalControl()==control&&
                             session.matchesHostScope(taskId,finalRun.runId(),finalRun.epoch())){
-                        phoneFinalPage=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.from(control,finalRun,session.executionMode(),skippedFinalScreen,evidence);
+                        phoneFinalPage=PhoneFinalPageReceipt.from(control,finalRun,session.executionMode(),skippedFinalScreen,evidence,openingMainRead);
                     }
                     if(finalRun!=null){evidence.put("nativeFinalAnswer",new JSONObject().put("format","pocketworld.runner-final-answer.v1").put("taskId",taskId).put("runId",finalRun.runId()).put("coordinatorEpoch",finalRun.epoch()).put("messageIndex",finalAnswerIndex).put("historyLength",history.length()).put("answerFingerprint",CompactionPlan.fingerprint(finalMessage.getString("content"))).put("inputBoundaryEmpty",true));
                         // A text hash alone cannot distinguish identical queued replies in the same run.
@@ -1080,7 +1084,7 @@ public final class AgentRunner {
                     if(instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)
                         return finish(taskId,"needs_confirmation",clean(answer,config),evidence,steps,config,sink);
                     String verificationNotice = !intent.deviceReadAllowed()?"以下仅为讨论答复；没有读取或操作设备。":!DeferredPhoneSession.initialized(phone)?"以下答复基于实际工具结果；本次未启用手机，外部效果仍以对应收据为准。":evidence.optBoolean("ok", true) ? "模型已结束操作，请核对当前页面。" : "结果页面暂时无法重新读取，请在手机上亲自确认。";
-                    String nativeCheck=dev.pocketengine.phone.observation.PhoneFinalPageReceipt.ownerNotice(phoneFinalPage);
+                    String nativeCheck=PhoneFinalPageReceipt.ownerNotice(phoneFinalPage);
                     if(nativeCheck!=null)verificationNotice=nativeCheck;
                     return finish(taskId, "needs_confirmation", verificationNotice + "\n" + clean(answer, config), evidence, steps, config, sink);
                 }

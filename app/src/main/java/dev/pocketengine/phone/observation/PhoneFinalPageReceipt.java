@@ -4,18 +4,46 @@ import dev.pocketengine.core.RunControl;
 import org.json.JSONObject;
 import java.util.Set;
 
-/** Structural receipt of the one existing final read. No page text, coordinates, App name, image or new observation. */
+/** Receipt of the existing closing read, or an opening-only fact. No page text, coordinates, App name, image or new observation. */
 public final class PhoneFinalPageReceipt {
     private static final String FORMAT="pocketworld.phone-final-page.v1";
-    private static final Set<String> STATES=Set.of("not_allowed","not_entered","other_surface","read_failed","unconfirmed","changed","empty","observed");
+    private static final String OPENING_ONLY="opening_structure_only";
+    private static final Set<String> STATES=Set.of("not_allowed","not_entered","other_surface","read_failed","unconfirmed","changed","empty","observed",OPENING_ONLY);
     private static final Set<String> METHODS=Set.of("structure","local_text","local_geometry","frame");
     private PhoneFinalPageReceipt(){}
     private static long number(JSONObject row,String key){Object v=row.opt(key);return v instanceof Integer||v instanceof Long?((Number)v).longValue():-1;}
     private static String text(JSONObject row,String key){Object v=row.opt(key);return v instanceof String?(String)v:"";}
+    /** Ephemeral witness for the first owner-confirmed structure already admitted and appended by this Runner. */
+    public static final class FirstMainRead {
+        private final RunControl owner;
+        private final RunControl.HostRunIdentity run;
+        private FirstMainRead(RunControl owner,RunControl.HostRunIdentity run){this.owner=owner;this.run=run;}
+    }
+    public static FirstMainRead bindOwnerFirstMainRead(RunControl control,JSONObject actual){
+        var run=control.hostRunIdentity();
+        if(run==null||run.epoch()!=1||!control.phoneSurfaceActive()||actual==null||!"main".equals(actual.opt("executionMode"))||
+                !Boolean.TRUE.equals(actual.opt("ok"))||!Boolean.FALSE.equals(actual.opt("changedDuringRead"))||
+                actual.has("imageBase64")||number(actual,"displayId")!=0)return null;
+        JSONObject b=actual.optJSONObject("observationBinding"),sources=actual.optJSONObject("observationSources");
+        if(b==null||sources==null||!Boolean.TRUE.equals(sources.opt("treeAdequate"))||!Boolean.FALSE.equals(sources.opt("imageIncluded"))||
+                !run.taskId().equals(b.opt("taskId"))||!run.runId().equals(b.opt("runId"))||run.epoch()!=number(b,"epoch")||
+                number(b,"displayId")!=0||control.pauseRevision()!=number(b,"pauseRevision")||
+                !text(actual,"observationId").matches("[a-f0-9-]{36}")||!text(actual,"observationId").equals(b.opt("observationId"))||
+                text(actual,"sessionId").isBlank()||!text(actual,"sessionId").equals(b.opt("sessionId")))return null;
+        return new FirstMainRead(control,run);
+    }
     public static JSONObject from(RunControl control,RunControl.HostRunIdentity run,String mode,String skip,JSONObject actual)throws Exception{
+        return from(control,run,mode,skip,actual,null);
+    }
+    public static JSONObject from(RunControl control,RunControl.HostRunIdentity run,String mode,String skip,JSONObject actual,FirstMainRead opening)throws Exception{
         if(run==null||!control.matchesHostRun(run.taskId(),run.runId(),run.epoch())||!("main_screen".equals(mode)||"background".equals(mode)))return null;
         String state="unconfirmed",method="";
-        if(skip!=null){if(!Set.of("not_allowed","not_entered","other_surface").contains(skip))return null;state=skip;}
+        if(skip!=null){
+            if(!Set.of("not_allowed","not_entered","other_surface").contains(skip))return null;
+            // An uninitialized deferred port rules out a terminal read, not the earlier native structure.
+            state="not_entered".equals(skip)&&"main_screen".equals(mode)&&opening!=null&&opening.owner==control&&run.equals(opening.run)&&
+                    actual!=null&&Boolean.TRUE.equals(actual.opt("noDeviceObservation"))?OPENING_ONLY:skip;
+        }
         else if(actual!=null&&Boolean.FALSE.equals(actual.opt("ok")))state="read_failed";
         else if(actual!=null&&Boolean.TRUE.equals(actual.opt("ok"))){
             JSONObject b=actual.optJSONObject("observationBinding");String observation=text(actual,"observationId"),session=text(actual,"sessionId");
@@ -48,7 +76,8 @@ public final class PhoneFinalPageReceipt {
     public static JSONObject project(JSONObject source,String task,String run,int epoch)throws Exception{
         if(source==null||!FORMAT.equals(source.optString("format"))||!task.equals(source.optString("taskId"))||!run.equals(source.optString("runId"))||
                 epoch!=source.optInt("epoch",-1)||!Boolean.FALSE.equals(source.opt("businessResultVerified"))||!Boolean.FALSE.equals(source.opt("containsScreenContent")))return null;
-        String state=source.optString("state");if(!STATES.contains(state))return null;
+        String state=source.optString("state");
+        if(!STATES.contains(state)||OPENING_ONLY.equals(state)&&(epoch!=1||source.has("method")))return null;
         JSONObject out=new JSONObject().put("format",FORMAT).put("taskId",task).put("runId",run).put("epoch",epoch).put("state",state)
                 .put("businessResultVerified",false).put("containsScreenContent",false);
         if("observed".equals(state)){if(!METHODS.contains(source.optString("method")))return null;out.put("method",source.getString("method"));}
@@ -59,6 +88,7 @@ public final class PhoneFinalPageReceipt {
         return switch(receipt.optString("state")){
             case "not_allowed"->"收尾阶段没有读屏；这段答复不是新的设备回执。";
             case "not_entered"->"本轮没有启用手机观察；外部效果仍以原工具回执为准。";
+            case OPENING_ONLY->"已读取你在开始时确认的主屏结构，收尾未再次读取。";
             case "other_surface"->"收尾时手机工作面已切出，没有重新读取最后一屏。";
             case "read_failed","unconfirmed"->"没有取得可核对的最后一屏，请在原任务确认结果。";
             case "changed"->"最后一次读取时页面仍在变化，不能据此确认目标已达成。";

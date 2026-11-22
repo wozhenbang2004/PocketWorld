@@ -27,14 +27,18 @@ public final class OwnerWindowsWorkspaceRead {
     public static boolean marked(JSONObject task){return task!=null&&task.has(FIELD);}
 
     /** Keep the reviewed spelling byte-for-byte. The Windows native handle still owns path admission. */
-    public static String path(String value)throws Exception {
-        if(value==null||value.isEmpty()||value.length()>2048)throw invalidPath();
-        for(String part:value.split("/",-1))if(part.isEmpty()||part.endsWith(".")||part.endsWith(" ")||
-                WINDOWS_RESERVED.matcher(part).matches()||part.codePoints().anyMatch(c->invisible(c)||"<>:\"|?*\\".indexOf(c)>=0))throw invalidPath();
-        DeviceSourceToolContracts.validate(DirectedWorkspaceTarget.VERSION,READ,new JSONObject().put("path",value));
+    public static String path(String value)throws Exception {return relativePath(value,false);}
+    public static String directoryPath(String value)throws Exception {return relativePath(value,true);}
+    private static String relativePath(String value,boolean directory)throws Exception {
+        if(value==null||value.length()>2048||value.isEmpty()&&!directory)throw invalidPath(directory);
+        if(!value.isEmpty())for(String part:value.split("/",-1))if(part.isEmpty()||part.endsWith(".")||part.endsWith(" ")||
+                WINDOWS_RESERVED.matcher(part).matches()||part.codePoints().anyMatch(c->invisible(c)||"<>:\"|?*\\".indexOf(c)>=0))throw invalidPath(directory);
+        DeviceSourceToolContracts.validate(DirectedWorkspaceTarget.VERSION,directory?LIST:READ,new JSONObject().put("path",value));
         return value;
     }
-    private static IllegalArgumentException invalidPath(){return new IllegalArgumentException("请输入工作区内准确的相对文件路径，例如 docs/README.md。不接受绝对路径、目录跳转或 Windows 保留名称。");}
+    private static IllegalArgumentException invalidPath(boolean directory){return new IllegalArgumentException(directory?
+            "请输入工作区内准确的相对目录，例如 docs/notes。不接受绝对路径、目录跳转或 Windows 保留名称。":
+            "请输入工作区内准确的相对文件路径，例如 docs/README.md。不接受绝对路径、目录跳转或 Windows 保留名称。");}
     private static boolean invisible(int c){
         return switch(Character.getType(c)){
             case Character.CONTROL,Character.FORMAT,Character.SURROGATE,Character.LINE_SEPARATOR,Character.PARAGRAPH_SEPARATOR -> true;
@@ -99,13 +103,15 @@ public final class OwnerWindowsWorkspaceRead {
     public record Directory(Body state,Map<Integer,String> choices) {}
     private static Directory noDirectory(Body state){return new Directory(state,Map.of());}
     /** The bounded raw indices (not displayed names or filtered positions) identify the new file choice. */
-    public static Directory directory(JSONObject saved,DirectedWorkspaceTarget target,JSONObject route,String task,String run,String operation)throws Exception {
+    public static Directory directory(JSONObject saved,DirectedWorkspaceTarget target,JSONObject route,String task,String run,String operation,
+            String reviewedDirectory)throws Exception {
         if(!matchesReceipt(saved,target,route,task,run,operation))return noDirectory(Body.UNVERIFIED);
         if(Set.of("failed","rejected","cancelled").contains(saved.optString("status")))return noDirectory(Body.REJECTED);
+        String folder=directoryPath(reviewedDirectory),prefix=folder.isEmpty()?"":folder+"/";
         JSONObject data=saved.optJSONObject("payload");
         if(!"succeeded".equals(saved.opt("status"))||!"reported".equals(saved.opt("effectState"))||data==null||
                 !DeviceProtocol.objectKeys(data).equals(Set.of("path","directoryIdentity","truncated","files"))||
-                !"".equals(data.opt("path"))||!(data.opt("truncated") instanceof Boolean)||
+                !folder.equals(data.opt("path"))||!(data.opt("truncated") instanceof Boolean)||
                 DeviceProtocol.canonicalBytes(data).length>24576)return noDirectory(Body.UNVERIFIED);
         JSONArray identity=data.optJSONArray("directoryIdentity"),files=data.optJSONArray("files");
         if(identity==null||identity.length()!=3||files==null||files.length()>200)return noDirectory(Body.UNVERIFIED);
@@ -115,13 +121,13 @@ public final class OwnerWindowsWorkspaceRead {
             JSONObject row=files.getJSONObject(i);
             if(!DeviceProtocol.objectKeys(row).equals(Set.of("name","path","kind","bytes","modifiedAt"))||
                     !(row.opt("name") instanceof String name)||name.isEmpty()||name.codePointCount(0,name.length())>255||
-                    name.equals(".")||name.equals("..")||name.indexOf('/')>=0||name.indexOf('\\')>=0||!name.equals(row.opt("path"))||
+                    name.equals(".")||name.equals("..")||name.indexOf('/')>=0||name.indexOf('\\')>=0||!(prefix+name).equals(row.opt("path"))||
                     !(row.opt("kind") instanceof String kind)||!Set.of("file","directory","reparse_point","unsupported").contains(kind)||
                     !names.add(name))return noDirectory(Body.UNVERIFIED);
             long bytes=DeviceProtocol.integer(row.opt("bytes"),"directory entry bytes",0,DeviceProtocol.MAX_SAFE_INTEGER);
             DeviceProtocol.integer(row.opt("modifiedAt"),"directory entry time",0,DeviceProtocol.MAX_SAFE_INTEGER);
             if(choices.size()<8&&"file".equals(kind)&&bytes<=MAX_DISPLAY_BYTES){
-                try{choices.put(i,path(name));}catch(Exception ineligible){/* Never replace an ineligible spelling. */}
+                try{choices.put(i,path(row.getString("path")));}catch(Exception ineligible){/* Never replace an ineligible spelling. */}
             }
         }
         return new Directory(Body.COMPLETE,Map.copyOf(choices));

@@ -137,7 +137,7 @@ internal class PocketWebDeviceTaskScope(
                 REVIEW_WORKSPACE_FILE, REVIEW_WORKSPACE_DIRECTORY, REVIEW_WORKSPACE_LISTED_FILE -> {
                     val expected = when (action) {
                         REVIEW_WORKSPACE_FILE -> setOf("taskId", "path")
-                        REVIEW_WORKSPACE_DIRECTORY -> setOf("taskId")
+                        REVIEW_WORKSPACE_DIRECTORY -> if (input.has("relativeDirectory")) setOf("taskId", "relativeDirectory") else setOf("taskId")
                         else -> setOf("taskId", "runId", "epoch", "directoryOperationId", "entryIndex")
                     }
                     require(input.keys().asSequence().toSet() == expected)
@@ -159,7 +159,11 @@ internal class PocketWebDeviceTaskScope(
                                 prepared = Pair(native.view(), { host.startOwnerWindowsWorkspaceRead(native) })
                             }
                             REVIEW_WORKSPACE_DIRECTORY -> {
-                                val native = host.reviewOwnerWindowsWorkspaceDirectory(task, ::current)
+                                val directory = if (input.has("relativeDirectory")) {
+                                    input.opt("relativeDirectory") as? String ?: error("请输入工作区内准确的相对目录。")
+                                } else ""
+                                require(directory.length <= 2048)
+                                val native = host.reviewOwnerWindowsWorkspaceDirectory(task, directory, ::current)
                                 startAction = START_WORKSPACE_DIRECTORY
                                 prepared = Pair(native.view(), { host.startOwnerWindowsWorkspaceRead(native) })
                             }

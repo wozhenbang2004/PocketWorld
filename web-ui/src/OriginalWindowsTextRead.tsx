@@ -17,9 +17,9 @@ type Snapshot = { text: string; bytes: number; recordedAt: number };
 type Received = { identity: string; requestDigest: string; content: string; bytes: number; version: string };
 const directoryKinds = { directory: '目录', file: '文件', reparse_point: '重解析点，未跟随', unsupported: '其他' };
 type DirectoryEntry = { name: string; kind: keyof typeof directoryKinds };
-type ListedFile = { entryIndex: number; path: string };
+type ListedFile = { entryIndex: number; path: string; name: string };
 type ReceivedDirectory = { identity: string; returned: number; truncated: boolean; entries: DirectoryEntry[]; linkedFileIndex?: number;
-  picker?: { workspaceId: string; choices: ListedFile[]; linkedPath?: string } };
+  picker?: { workspaceId: string; relativeDirectory: string; choices: ListedFile[]; linkedPath?: string } };
 
 export const validWindowsWorkspaceFilePath = (path: string) => path.length > 0 && path.length <= 2048 &&
   !/[\\<>:"|?*\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(path) && path.split('/').every(part =>
@@ -115,7 +115,7 @@ function receivedWindowsText(held: OriginalRead): Received | undefined {
 }
 
 function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation, page: AuditPage,
-  file?: { read: OriginalRead; operation: TaskOperation; bytes: number }, rootPicker = false): ReceivedDirectory | undefined {
+  file?: { read: OriginalRead; operation: TaskOperation; bytes: number }, ownerPicker = false): ReceivedDirectory | undefined {
   const original = originalWindowsReadAt(task, op, 'workspace.list');
   const held = original && receivedOriginalWindowsReadAt(task, op, original, page);
   if (!held?.data || !held.args || Object.keys(held.args).some(key => key !== 'path')) return;
@@ -124,7 +124,7 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
   // The initial Windows workspace.list has its own checked directory identity.
   // A locally generated summary, later query wrapper, or POSIX list is not it.
   if (typeof path !== 'string' || path.length > 2048 || data.path !== path || Object.keys(data).length !== 4 ||
-    rootPicker && (path !== '' || args.path !== '' || !held.workspace) ||
+    ownerPicker && (!Object.hasOwn(args, 'path') || path !== '' && !validWindowsWorkspaceFilePath(path) || !held.workspace) ||
     !Array.isArray(data.directoryIdentity) || data.directoryIdentity.length !== 3 ||
     !data.directoryIdentity.every((part: unknown) => typeof part === 'number' && Number.isInteger(part) && part >= 0 && part <= 0xffffffff) ||
     typeof data.truncated !== 'boolean' || !Array.isArray(data.files) || data.files.length > 200) return;
@@ -138,18 +138,18 @@ function receivedOriginalWindowsDirectoryAt(task: TaskHeader, op: TaskOperation,
     if (!entry || Object.keys(entry).length !== 5 || typeof name !== 'string' || !name || [...name].length > 255 ||
       name === '.' || name === '..' || /[/\\]/.test(name) || names.has(name) || entry.path !== prefix + name ||
       !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || !Number.isSafeInteger(entry.modifiedAt) ||
-      rootPicker && entry.modifiedAt < 0 || typeof kind !== 'string' || !Object.hasOwn(directoryKinds, kind)) return;
+      ownerPicker && entry.modifiedAt < 0 || typeof kind !== 'string' || !Object.hasOwn(directoryKinds, kind)) return;
     names.add(name);
     // Preserve the raw index, even if earlier directory entries were not selectable.
-    if (rootPicker && choices.length < 8 && kind === 'file' && entry.bytes <= RECEIVED_TEXT_LIMIT && validWindowsWorkspaceFilePath(name))
-      choices.push({ entryIndex, path: name });
+    if (ownerPicker && choices.length < 8 && kind === 'file' && entry.bytes <= RECEIVED_TEXT_LIMIT && validWindowsWorkspaceFilePath(prefix + name))
+      choices.push({ entryIndex, path: prefix + name, name });
     if (entries.length < 8) {
       if (file && typeof linkedPath === 'string' && entry.path === linkedPath && kind === 'file' && entry.bytes === file.bytes)
         linkedFileIndex = entries.length;
       entries.push({ name: name.replace(/\p{C}/gu, '�'), kind: kind as DirectoryEntry['kind'] });
     }
   }
-  const picker = rootPicker ? { workspaceId: held.workspaceId, choices,
+  const picker = ownerPicker ? { workspaceId: held.workspaceId, relativeDirectory: path, choices,
     linkedPath: choices.find(row => row.path === linkedPath)?.path } : undefined;
   return { identity: JSON.stringify([...proof, op.position, data.directoryIdentity, data.truncated, data.files.length, linkedFileIndex, ...(picker ? [picker] : [])]),
     returned: data.files.length, truncated: data.truncated, entries, linkedFileIndex, picker };
@@ -232,7 +232,8 @@ function originalPickerDirectory(task: TaskHeader, marker: NonNullable<ReturnTyp
   const rows = operations.filter(op => op.operationId === marker.directoryOperationId);
   if (rows.length !== 1) return;
   const operation = rows[0], folder = receivedOriginalWindowsDirectoryAt(task, operation, audit.page, undefined, true);
-  if (folder?.picker) return { operation, operations, folder, choices: folder.picker.choices, workspaceId: folder.picker.workspaceId };
+  if (folder?.picker) return { operation, operations, folder, choices: folder.picker.choices,
+    workspaceId: folder.picker.workspaceId, relativeDirectory: folder.picker.relativeDirectory };
 }
 
 function originalPickerText(task: TaskHeader, directory: NonNullable<ReturnType<typeof originalPickerDirectory>>, page: AuditPage) {
@@ -247,7 +248,7 @@ function originalPickerText(task: TaskHeader, directory: NonNullable<ReturnType<
   if (original && received && linked?.picker?.linkedPath) return { original, received, exactPath: linked.picker.linkedPath };
 }
 
-/** Local projection only, from the exact Work's authenticated root-list receipt. No history command. */
+/** Local projection only, from the exact Work's authenticated directory receipt. No history command. */
 export function originalWindowsWorkspacePickerAt(snapshot: PocketSnapshot, taskId: string) {
   const shown = originalWindowsOverviewTask(snapshot, taskId);
   const marker = shown && ownerWindowsPickerMarker(shown.task);
@@ -255,7 +256,7 @@ export function originalWindowsWorkspacePickerAt(snapshot: PocketSnapshot, taskI
   const audit = marker.directoryOperationId && originalWindowsOverviewAudit(shown.task);
   const data = audit ? originalPickerDirectory(shown.task, marker, audit) : undefined;
   const directory = data && marker.directoryOperationId ? { operationId: marker.directoryOperationId,
-    received: data.folder, choices: data.choices, workspaceId: data.workspaceId } : undefined;
+    received: data.folder, choices: data.choices, workspaceId: data.workspaceId, relativeDirectory: data.relativeDirectory } : undefined;
   const fileReceived = marker.phase === 'ended' && !!(audit && data && originalPickerText(shown.task, data, audit.page));
   return { ...marker, directory, fileReceived, canChoose: !!directory && data?.operations.length === 1 && marker.phase === 'waiting_for_file' &&
     marker.liveChoice && shown.raw.status === 'running' && shown.raw.cancelRequested === false && shown.raw.hasUnresolvedOperations === false &&
@@ -397,7 +398,8 @@ function OriginalWindowsDirectory({ received, current, linked }: { received: Rec
       <AccordionItem id="original-directory" headingLevel={4}
         title={linked ? '查看当时的目录和已读文件' : '查看当时列出的目录'}>
         {open && <>
-          <p className="pw-muted">本机留存：当时返回 {received.returned} 项，不是当前目录。</p>
+          <p className="pw-muted">{received.picker?.relativeDirectory && <>目录 <bdi style={{ overflowWrap: 'anywhere' }}>{received.picker.relativeDirectory}</bdi>。 </>}
+            本机留存：当时返回 {received.returned} 项，不是当前目录。</p>
           {received.entries.length > 0 && <ul>{received.entries.map((row, index) =>
             <li key={index}><bdi>{row.name}</bdi> · {directoryKinds[row.kind]}
               {index === received.linkedFileIndex && linked}</li>)}</ul>}

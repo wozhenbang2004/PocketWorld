@@ -653,11 +653,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         if(!businessReady()||owner==null||originalDeviceSourceRoutes==null)throw new SecurityException("原设备工作区尚未准备。");
         return tasks.reviewOwnerWindowsWorkspaceRead(task,path,owner.nativeOutgoingGrants(),window);
     }
-    public TaskStore.OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspaceDirectory(String task,
+    public TaskStore.OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspaceDirectory(String task,String directory,
             java.util.function.BooleanSupplier window)throws Exception {
         var owner=deviceWorkspaceOwner;
         if(!businessReady()||owner==null||originalDeviceSourceRoutes==null)throw new SecurityException("原设备工作区尚未准备。");
-        return tasks.reviewOwnerWindowsWorkspaceDirectory(task,owner.nativeOutgoingGrants(),window);
+        return tasks.reviewOwnerWindowsWorkspaceDirectory(task,directory,owner.nativeOutgoingGrants(),window);
     }
     public TaskStore.OwnerWindowsListedFileReview reviewOwnerWindowsListedFile(String id,String run,int epoch,String operation,int index,
             java.util.function.BooleanSupplier window)throws Exception {

@@ -1932,9 +1932,9 @@ public final class TaskStore {
             List<PairingCoordinator.OutgoingGrant> grants,java.util.function.BooleanSupplier window)throws Exception {
         return reviewOwnerWindowsWorkspace(id,OwnerWindowsWorkspaceRead.path(path),grants,window,false);
     }
-    public synchronized OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspaceDirectory(String id,
+    public synchronized OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspaceDirectory(String id,String directory,
             List<PairingCoordinator.OutgoingGrant> grants,java.util.function.BooleanSupplier window)throws Exception {
-        return reviewOwnerWindowsWorkspace(id,"",grants,window,true);
+        return reviewOwnerWindowsWorkspace(id,OwnerWindowsWorkspaceRead.directoryPath(directory),grants,window,true);
     }
     private OwnerWindowsWorkspaceReadReview reviewOwnerWindowsWorkspace(String id,String path,
             List<PairingCoordinator.OutgoingGrant> grants,java.util.function.BooleanSupplier window,boolean picker)throws Exception {
@@ -1978,7 +1978,7 @@ public final class TaskStore {
             JSONObject value=new JSONObject().put("format",picker?OwnerWindowsWorkspaceRead.DIRECTORY_REVIEW:OwnerWindowsWorkspaceRead.REVIEW)
                     .put("taskId",taskId).put("workspaceId",checkedRoute().getJSONObject("resourceBinding").getString("environmentId"))
                     .put("expiresAt",expiresAt).put("modelCalls",0).put("executionAuthorized",false);
-            return picker?value.put("relativeDirectory","").put("remoteToolLimit",2):
+            return picker?value.put("relativeDirectory",path).put("remoteToolLimit",2):
                     value.put("exactPath",path).put("maxDisplayBytes",OwnerWindowsWorkspaceRead.MAX_DISPLAY_BYTES);
         }}
         public OwnerWindowsWorkspaceReadRun start()throws Exception {
@@ -1997,7 +1997,7 @@ public final class TaskStore {
                 row.put("checkpoint",new JSONObject().put("steps",0).toString());row.put("grant_json",permission.toString());row.put("created_at",now);row.put("updated_at",now);
                 db.insertOrThrow("runs",null,row);
                 task.put("runId",run).put("coordinatorEpoch",1).put("status","running").put("stepCeiling",calls).put("approvalState","granted")
-                        .put(OwnerWindowsWorkspaceRead.FIELD,true).put("summary",picker?"已登记列出电脑工作区根目录；此步不读取文件，不调用模型。":
+                        .put(OwnerWindowsWorkspaceRead.FIELD,true).put("summary",picker?"已登记列出电脑工作区所选目录；此步不读取文件，不调用模型。":
                                 "已在原工作登记单次只读文件请求；等待原回执，不调用模型。");
                 if(picker)task.put(OwnerWindowsWorkspaceRead.PICKER,windowsPickerState("listing",deadline,""));
                 write(task);appendEvent(task,new JSONObject().put("type",picker?"owner_windows_workspace_directory_started":"owner_windows_workspace_read_started")
@@ -2026,7 +2026,7 @@ public final class TaskStore {
     }
     private record WindowsWorkspaceIntent(String tool,String path,java.util.function.BooleanSupplier window) {}
 
-    /** The same retained original control for either one file, or one root list and an optional owner-chosen file. */
+    /** The same retained original control for either one file, or one reviewed directory list and an optional owner-chosen file. */
     public final class OwnerWindowsWorkspaceReadRun {
         private final OwnerWindowsWorkspaceReadReview review;
         private final String run,route,scopeDigest;
@@ -2111,7 +2111,7 @@ public final class TaskStore {
         private JSONObject exactAccepted(String op,String path,boolean list,JSONObject accepted)throws Exception{
             if(accepted==null)return null;
             String here=review.grant.grant().getString("peerDeviceId");
-            var proof=list?deviceTasks.ownerWindowsRootListEvidence(taskId(),run,1,op,here):deviceTasks.ownerWindowsTextEvidence(taskId(),run,1,op,here);
+            var proof=list?deviceTasks.ownerWindowsDirectoryEvidence(taskId(),run,1,op,here,path):deviceTasks.ownerWindowsTextEvidence(taskId(),run,1,op,here);
             JSONObject receipt=accepted.getJSONObject("verifiedReceipt"),selected=new JSONObject(route);
             return target.equals(proof.target())&&proof.requireCurrentJob().equals(receipt.opt("jobId"))&&
                     path.equals(proof.wire().toolInvocation().arguments().opt("path"))&&
@@ -2126,9 +2126,9 @@ public final class TaskStore {
             if(!"waiting_for_file".equals(state.opt("phase"))||!operationId.equals(state.opt("directoryOperationId"))||
                     grant(run).optInt("remainingOperations")!=1)
                 throw new SecurityException("原工作不在等候选取文件。");
-            JSONObject receipt=exactAccepted(operationId,"",true,retainedNative(operationId).optJSONObject("nativeDeviceAcceptedBinding"));
+            JSONObject receipt=exactAccepted(operationId,review.path,true,retainedNative(operationId).optJSONObject("nativeDeviceAcceptedBinding"));
             if(receipt==null||!directoryDigest.equals(capabilityFingerprint(receipt)))throw new SecurityException("原目录回执已变化。");
-            String path=OwnerWindowsWorkspaceRead.directory(receipt,target,new JSONObject(route),taskId(),run,operationId).choices().get(index);
+            String path=OwnerWindowsWorkspaceRead.directory(receipt,target,new JSONObject(route),taskId(),run,operationId,review.path).choices().get(index);
             if(path==null)throw new SecurityException("这不是原目录中可以选择的普通文本候选。");
             return path;
         }
@@ -2207,7 +2207,7 @@ public final class TaskStore {
                     if(claimed)try{
                         JSONObject receipt=exactAccepted(operation,active.path(),list,nativeFacts.optJSONObject("nativeDeviceAcceptedBinding")),selected=new JSONObject(route);
                         if(list){
-                            snapshot=OwnerWindowsWorkspaceRead.directory(receipt,target,selected,taskId(),run,operation);
+                            snapshot=OwnerWindowsWorkspaceRead.directory(receipt,target,selected,taskId(),run,operation,review.path);
                             if(snapshot.state()==OwnerWindowsWorkspaceRead.Body.COMPLETE)digest=capabilityFingerprint(receipt);
                             body=snapshot.state();
                         }else body=OwnerWindowsWorkspaceRead.body(receipt,target,selected,taskId(),run,operation,active.path());
@@ -2234,7 +2234,7 @@ public final class TaskStore {
                         case TOO_LARGE -> {code="owner_windows_text_display_bound";outcome.put("accepted",true);
                             summary="原文件超出 8 KiB 完整显示范围，没有打开其他文件。";}
                         case REJECTED -> {code=list?"owner_windows_list_rejected":"owner_windows_read_rejected";outcome.put("accepted",true);
-                            summary=list?"原电脑未提供可核对的根目录；没有读取文件。":"原电脑未提供可读的文件。请核对路径与文件格式；没有改读其他文件。";}
+                            summary=list?"原电脑未提供可核对的所选目录；没有读取文件。":"原电脑未提供可读的文件。请核对路径与文件格式；没有改读其他文件。";}
                         case UNVERIFIED -> {code=list?"owner_windows_list_unknown":"owner_windows_read_unknown";state="reconciling";outcome.put("accepted",JSONObject.NULL).put("requiresReconciliation",true);
                             summary=list?"尚未核实原列目录回执；没有读取文件，只保留原操作供核对。":"尚未核对这次原文件的回执。请只查原操作，没有重新读取。";}
                     }
