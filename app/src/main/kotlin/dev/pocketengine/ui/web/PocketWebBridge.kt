@@ -719,7 +719,9 @@ internal class PocketWebBridge(
             controller.modelSelectionRevision
             val exactPicker=currentReplyPicker()
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume) {
-                liveReplyDocument(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly)?.file
+                liveReplyDocument(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true)?.let { original ->
+                    PocketWebState.ReplyDocument(original.file,original.checkFirst)
+                }
             }
             exactPicker?.let {
                 projection?.getJSONObject("state")?.put("originalReplyAttachmentPicker",
@@ -1164,9 +1166,9 @@ internal class PocketWebBridge(
                     check(!source.has("taskId")&&!source.has("window")){"请从当前原答复打开文档"}
                     val message=requiredString(source,"messageId")
                     val revision=requiredLong(source,"sourceRevision")
-                    fun selected(allowOwn:Boolean)=controller.state.messages.singleOrNull{it.id==message&&it.sourceRevision==revision}
-                        ?.let{liveReplyDocument(it,allowOwn)}
-                    val original=selected(false)?.takeIf{
+                    fun selected(allowOwn:Boolean,allowSummary:Boolean)=controller.state.messages.singleOrNull{it.id==message&&it.sourceRevision==revision}
+                        ?.let{liveReplyDocument(it,inOwnReader=allowOwn,allowSummary=allowSummary)}
+                    val original=selected(false,true)?.takeIf{
                         it.target.conversation()==source.getString("conversationId")&&it.file.id==source.getString("id")&&it.file.sha256==source.getString("sha256")
                     }?:error("原答复文档已变化；请回原工作核对")
                     val originalDocument=documentId?:error("原答复页面已关闭")
@@ -1177,7 +1179,8 @@ internal class PocketWebBridge(
                     val composerEpoch=controller.composerViewEpoch
                     fun current()=!closed&&documentId==originalDocument&&ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())&&
                         controller.conversationReaderRevision==reader&&controller.messageAttachmentSourceRevision==sourceRevision&&
-                        controller.composerViewEpoch==composerEpoch&&controller.composerDraft?.key==composerKey&&selected(true)==original
+                        controller.composerViewEpoch==composerEpoch&&controller.composerDraft?.key==composerKey&&
+                        original.matches(selected(true,original.checkFirst))
                     complete(id,attachmentPages.openReplyDocument(original.file,original.target,ticket,::current),null,retainValue=false)
                     publishState();return
                 }
@@ -3947,6 +3950,12 @@ internal class PocketWebBridge(
         check(key=="conversation:${target.conversation()}"){"只能选择到原话题草稿"}
         val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
         val history=controller.conversationReaderRevision;val sourceRevision=controller.messageAttachmentSourceRevision
+        fun pinned(picking:Boolean,allowSummary:Boolean)=controller.state.messages
+            .singleOrNull{it.id==target.message()&&it.sourceRevision==target.revision()}
+            ?.let{liveReplyDocument(it,inOwnReader=!picking,inOwnPicker=picking,allowSummary=allowSummary)}
+            ?.takeIf{it.target==target&&it.file==file}
+        // Only a real verified mounted reader can hand this exact source to the picker.
+        val allowSummary=pinned(false,true)?.checkFirst?:error("原答复文档已变化，未打开附件选择")
         fun sameDraft(picking:Boolean):Boolean {
             val s=controller.state;val draft=controller.composerDraft
             if(closed||documentId!=document||!ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())||
@@ -3954,9 +3963,7 @@ internal class PocketWebBridge(
                 draft==null||draft.key!=key||draft.conversationId!=target.conversation()||controller.composerViewEpoch!=epoch||
                 s.chatAttachmentPickerOpen!=picking||s.chatBusy||s.chatSubmitting||s.phoneSubmitting||
                 controller.composerPending.any{it.draftKey==key})return false
-            val row=s.messages.singleOrNull{it.id==target.message()&&it.sourceRevision==target.revision()}?:return false
-            val pinned=liveReplyDocument(row,inOwnReader=!picking,inOwnPicker=picking)
-            return pinned!=null&&pinned.target==target&&pinned.file==file
+            return pinned(picking,allowSummary)!=null
         }
         val attempt=Any();replyPickerOpening=attempt
         fun beforeClose()=replyPickerOpening===attempt&&controller.composerDraft?.revision==revision&&sameDraft(false)&&original.owns()
@@ -4000,10 +4007,12 @@ internal class PocketWebBridge(
         }
         publishState()
     }
-    private data class LiveReplyDocument(val file:UiChatAttachment,val target:OriginalReplyDocument.Target)
+    private data class LiveReplyDocument(val file:UiChatAttachment,val target:OriginalReplyDocument.Target,val checkFirst:Boolean) {
+        fun matches(other:LiveReplyDocument?)=other!=null&&target==other.target&&file==other.file
+    }
     /** Only the already displayed ordinary private native reply and sole original submission.
      * This projection does not fetch Work/Audit history or verify files in the background. */
-    private fun liveReplyDocument(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false):LiveReplyDocument? {
+    private fun liveReplyDocument(row:UiMessage,inOwnReader:Boolean=false,inOwnPicker:Boolean=false,allowSummary:Boolean=false):LiveReplyDocument? {
         val reply=row.replyContext?:return null
         val file=reply.originalGeneratedDocument?:return null
         val nativeReply=reply.replyId?:return null
@@ -4031,12 +4040,20 @@ internal class PocketWebBridge(
         val task=state.tasks.singleOrNull{it.id==reply.taskId}?:return null
         val audit=task.raw
         if(task.status !in setOf("completed","needs_confirmation")||!OwnerWorkTask.isButlerSource(audit)||
-            !inOwnReader&&!inOwnPicker&&(audit.opt("taskProjection")!="detail_window"||audit.opt("taskCoreReadLimited")!=false)||
             audit.opt("conversationId")!=source.conversation||audit.opt("runId")!=reply.runId||
             OriginalReplyDocument.integer(audit.opt("coordinatorEpoch"))!=reply.epoch.toLong()||
-            audit.optBoolean("cancelRequested")||audit.opt("hasUnresolvedOperations")!=false)return null
+            audit.optBoolean("cancelRequested"))return null
+        val kind=audit.opt("taskProjection");val unresolved=audit.opt("hasUnresolvedOperations")
+        val loadedProof=(inOwnReader||inOwnPicker||kind=="detail_window"&&audit.opt("taskCoreReadLimited")==false)&&unresolved==false
+        // The cold header omits operation settlement. Its exact match is a prompt to
+        // check this one canonical reply, never proof that the original is readable.
+        val checkableSummary=allowSummary&&kind=="summary"&&audit.opt("auditBodyIncluded")==false&&audit.opt("id")==reply.taskId&&
+            (!audit.has("metadataLimited")||audit.opt("metadataLimited")==false)&&
+            (!audit.has("cancelRequested")||audit.opt("cancelRequested")==false)&&
+            (!audit.has("hasUnresolvedOperations")||unresolved==false)
+        if(!loadedProof&&!checkableSummary)return null
         return LiveReplyDocument(file,OriginalReplyDocument.Target(source.conversation,source.generation,source.message,source.version,
-            source.fingerprint,nativeReply,inputId,reply.taskId,reply.runId,reply.epoch,file.id,file.sha256))
+            source.fingerprint,nativeReply,inputId,reply.taskId,reply.runId,reply.epoch,file.id,file.sha256),!loadedProof)
     }
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
         val history = args.has("resultReaderWindow")

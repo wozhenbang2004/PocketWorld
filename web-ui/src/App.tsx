@@ -189,7 +189,7 @@ type Task={id:string;goal:string;status:string;summary?:string;executionMode?:st
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;originalGeneratedDocument?:Json;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
@@ -3675,7 +3675,7 @@ export default function App(){
   const matches=asArray<Message>(owner.messages).filter(row=>row.id===source.messageId);
   const message=matches.length===1?matches[0]:undefined;
   if(kind==='replyDocument'){
-   const fixed=obj(message?.originalGeneratedDocument);
+   const fixed=obj(message?.originalGeneratedDocument??message?.originalGeneratedDocumentCheck);
    return message?.role==='assistant'&&message.sourceRevision===source.sourceRevision&&fixed.id===source.id&&fixed.sha256===source.sha256;
   }
   return message?.role==='user'&&message.sourceRevision===source.sourceRevision&&
@@ -7430,9 +7430,10 @@ export default function App(){
       (m.role==='assistant'||m.role==='user'&&['accepted','consumed'].includes(m.submission?.status||''))&&
       ['messageQuote.document.open','messageQuote.document.retain','messageQuote.document.check','messageQuote.close'].every(action=>can(action));
     const savedAttachmentChoices=messageAttachmentDraft||mayOpenChatMessagePdf?savedOwnerAttachmentChoices(m):[];
-    const generatedDocument=obj(m.originalGeneratedDocument),generatedSource=mayOpenChatMessageOriginal&&m.role==='assistant'&&m.sourceRevision===1&&m.id&&
-      typeof generatedDocument.id==='string'&&typeof generatedDocument.sha256==='string'&&typeof generatedDocument.name==='string'&&
-      generatedDocument.name&&/^[a-f0-9]{64}$/.test(generatedDocument.sha256)?
+    const checkGeneratedDocument=m.originalGeneratedDocument==null&&m.originalGeneratedDocumentCheck!=null;
+    const generatedDocument=obj(m.originalGeneratedDocument??m.originalGeneratedDocumentCheck),generatedSource=mayOpenChatMessageOriginal&&m.role==='assistant'&&m.sourceRevision===1&&m.id&&
+      typeof generatedDocument.id==='string'&&!!generatedDocument.id&&typeof generatedDocument.sha256==='string'&&
+      /^[a-f0-9]{64}$/.test(generatedDocument.sha256)&&(checkGeneratedDocument||typeof generatedDocument.name==='string'&&!!generatedDocument.name)?
         {conversationId:String(state.conversationId||''),messageId:m.id,sourceRevision:m.sourceRevision,id:generatedDocument.id,sha256:generatedDocument.sha256}:null;
     const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
@@ -7455,14 +7456,14 @@ export default function App(){
       onLocalPdf={mayOpenChatMessagePdf&&m.localMessagePdfSourceCurrent===true&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0&&
        savedAttachmentChoices.some(choice=>choice.fileId===file.id&&choice.sha256===file.sha256)?openChatMessageOriginal:undefined}/>)}</div>}
      {generatedSource&&<div className="pw-message-files"><Button variant="secondary" size="small" leadingIcon={IconFile}
-       aria-label={`在本机查看 ${generatedDocument.name}`} title={generatedDocument.name}
+       aria-label={checkGeneratedDocument?'核对原答复文档':`在本机查看 ${generatedDocument.name}`} title={checkGeneratedDocument?undefined:generatedDocument.name}
        onClick={event=>{
         const target=event.currentTarget,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
         void openChatMessageOriginal(generatedSource,target,'replyDocument').catch(error=>{
          if(!document.hidden&&target.isConnected&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation)
           setLocalError(error instanceof Error?error.message:String(error));
         });
-       }}>{generatedDocument.name}</Button></div>}
+       }}>{checkGeneratedDocument?'核对原答复文档':generatedDocument.name}</Button></div>}
      {originalMessageWork&&<Button variant="ghost" size="small" className="pw-message-work-action" leadingIcon={IconClock} trailingIcon={IconChevronRight}
        disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
        aria-label={`查看这件工作：${originalMessageWork.task.goal}`} title={originalMessageWork.task.goal}

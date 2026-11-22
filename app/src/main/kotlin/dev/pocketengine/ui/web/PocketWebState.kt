@@ -104,9 +104,11 @@ internal object PocketWebState {
             raw.optLong("coordinatorEpoch") > 0 && result.optLong("epoch") == raw.optLong("coordinatorEpoch")
     }
 
+    data class ReplyDocument(val file:UiChatAttachment,val checkFirst:Boolean)
+
     fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false },
         editorResumeVisible: (UiTask) -> Boolean = { false },
-        originalReplyDocument: (UiMessage) -> UiChatAttachment? = { null }): JSONObject {
+        originalReplyDocument: (UiMessage) -> ReplyDocument? = { null }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
         // Strip it before serializing, not from the owner's original native state.
@@ -165,7 +167,10 @@ internal object PocketWebState {
                 if (row.attachmentFilesSourceRevision == controller.messageAttachmentSourceRevision &&
                     row.attachments.any { it.mimeType == "application/pdf" })
                     visible.put("localMessagePdfSourceCurrent", true)
-                originalReplyDocument(row)?.let { visible.put("originalGeneratedDocument",attachment(it)) }
+                originalReplyDocument(row)?.let {
+                    if(it.checkFirst) visible.put("originalGeneratedDocumentCheck",JSONObject().put("id",it.file.id).put("sha256",it.file.sha256))
+                    else visible.put("originalGeneratedDocument",attachment(it.file))
+                }
                 out.put(visible)
             } })
             .put("loadingFirstConversationMessages", controller.loadingFirstConversationMessages())

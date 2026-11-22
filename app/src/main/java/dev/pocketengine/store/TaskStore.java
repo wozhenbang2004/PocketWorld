@@ -26,6 +26,8 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.util.AtomicFile;
 import android.util.Base64;
+import android.util.JsonReader;
+import android.util.JsonToken;
 import dev.pocketengine.core.RunControl;
 import dev.pocketengine.features.local.runtime.OwnerPythonRun;
 import dev.pocketengine.features.local.runtime.OwnerPythonOutputText;
@@ -668,13 +670,59 @@ public final class TaskStore {
                     ||!header.optString("status").matches("completed|needs_confirmation")||hasUnresolvedOperations(target.task(),null))return null;
             try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",
                     new String[]{target.task(),target.run(),Integer.toString(target.epoch())})){
-                if(!run.moveToFirst()||!header.getString("status").equals(run.getString(0)))return null;
+                if(!run.moveToFirst())return null;
+                String taskStatus=header.getString("status"),runStatus=run.getString(0);
+                if(!taskStatus.equals(runStatus)&&!("completed".equals(taskStatus)&&"needs_confirmation".equals(runStatus)
+                        &&originalReplyDocumentOwnerConfirmed(target)))return null;
             }
             OriginalReplyDocument pin=conversationRepository.originalReplyDocument(target);
             if(pin==null||!target.file().equals(pin.id())||!target.sha().equals(pin.sha256())||!pin.publication(target.task(),target.run())
                     ||!pin.equals(originalReplyDocumentReceipt(target.task(),target.run(),pin.operationId())))return null;
             db.setTransactionSuccessful();return pin;
         }finally{db.endTransaction();}
+    }
+    /** The native result CAS records this verification and the task confirmation in
+     * one transaction without rewriting the already-ended run's original status. */
+    private boolean originalReplyDocumentOwnerConfirmed(OriginalReplyDocument.Target target)throws Exception {
+        String sql="SELECT event_order,native_seq,completed,CASE WHEN body_bytes BETWEEN 1 AND 32768 "
+                +"AND body_bytes=length(CAST(event_json AS BLOB)) THEN event_json END FROM task_events INDEXED BY task_events_type "
+                +"WHERE task_id=? AND event_type='user_verification' AND NOT EXISTS (SELECT 1 FROM leases WHERE run_id=? AND epoch=?) "
+                +"ORDER BY event_order DESC LIMIT 1";
+        String epoch=Integer.toString(target.epoch());
+        try(Cursor row=db.rawQuery(sql,new String[]{target.task(),target.run(),epoch})){
+            if(!row.moveToFirst()||row.getLong(0)<1||row.isNull(1)||row.getLong(1)!=row.getLong(0)||row.getInt(2)!=1||row.isNull(3))return false;
+            String sequence=Long.toString(row.getLong(0));
+            Set<String> required=Set.of("type","runId","coordinatorEpoch","seq","resultReviewDigest","resultRevision","completed");
+            Set<String> optional=Set.of("taskId","epoch","memorySourceSnapshotForgotten"),seen=new java.util.HashSet<>();
+            // Inspect only the typed verdict scalars of the latest indexed native row.
+            // Do not parse or return the owner's feedback or the memory snapshot.
+            try(JsonReader event=new JsonReader(new java.io.StringReader(row.getString(3)))){
+                event.beginObject();while(event.hasNext()){
+                    String key=event.nextName();
+                    if(!required.contains(key)&&!optional.contains(key)){event.skipValue();continue;}
+                    if(!seen.add(key))return false;
+                    JsonToken kind=event.peek();
+                    boolean exact=switch(key){
+                        case "type" -> kind==JsonToken.STRING&&"user_verification".equals(event.nextString());
+                        case "taskId" -> kind==JsonToken.STRING&&target.task().equals(event.nextString());
+                        case "runId" -> kind==JsonToken.STRING&&target.run().equals(event.nextString());
+                        case "coordinatorEpoch","epoch" -> kind==JsonToken.NUMBER&&epoch.equals(event.nextString());
+                        case "seq" -> kind==JsonToken.NUMBER&&sequence.equals(event.nextString());
+                        case "resultReviewDigest" -> kind==JsonToken.STRING&&event.nextString().matches("[a-f0-9]{64}");
+                        case "resultRevision" -> {
+                            if(kind!=JsonToken.NUMBER)yield false;
+                            String revision=event.nextString();
+                            yield revision.matches("[1-9][0-9]{0,18}")&&Long.parseLong(revision)>0;
+                        }
+                        case "completed" -> kind==JsonToken.BOOLEAN&&event.nextBoolean();
+                        case "memorySourceSnapshotForgotten" -> kind==JsonToken.BOOLEAN&&!event.nextBoolean();
+                        default -> false;
+                    };
+                    if(!exact)return false;
+                }
+                event.endObject();return seen.containsAll(required)&&event.peek()==JsonToken.END_DOCUMENT;
+            }catch(java.io.IOException|IllegalStateException|NumberFormatException unavailable){return false;}
+        }
     }
     private OriginalReplyDocument originalReplyDocumentReceipt(String task,String run,String operation)throws Exception {
         try(Cursor row=db.rawQuery("SELECT state,CASE WHEN length(CAST(receipt AS BLOB))<=32768 THEN receipt END "
