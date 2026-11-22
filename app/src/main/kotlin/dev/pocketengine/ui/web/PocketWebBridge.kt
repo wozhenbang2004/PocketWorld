@@ -1020,9 +1020,22 @@ internal class PocketWebBridge(
                 if (action == "projectLive.open") require(requiredString(args, "taskId") == taskViewId) { "请先打开这份原项目任务" }
                 (projectLivePreview ?: error("原手机项目预览宿主尚未接入")).dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
+            if (action == PocketWebProjectPreview.OPEN_SAVED_STATIC) {
+                val originalDocument = checkNotNull(documentId)
+                fun originalEditor() = !closed && documentId == originalDocument && section == null && taskViewId == null &&
+                    controller.webPrivateOwnerVisible() && controller.state.filePath == null && controller.conversationReader == null &&
+                    !controller.state.chatAttachmentPickerOpen && !controller.attachmentOutcomes.state.open && !phoneComposer.intent
+                check(originalEditor()) { "请在原私人项目编辑器选择已保存页面" }
+                val selected = projectDevelopment.savedStaticPage(args, ::originalEditor)
+                (projectPreview ?: error("原项目预览宿主尚未接入")).openSavedStatic(selected) { result, error ->
+                    complete(id, result, error, retainValue = false); publishState()
+                }
+                return
+            }
             if (action in PocketWebProjectPreview.COMMANDS) {
-                if (action in setOf("projects.preview", "projects.package.preview.open", "projects.preview.return") ||
-                    action == "projects.preview.viewport" && args.optBoolean("visible")) projectWorkPages.clear()
+                val savedStatic = projectPreview?.isSavedStaticSession(args.optString("sessionId")) == true
+                if (action in setOf("projects.preview", "projects.package.preview.open", "projects.preview.return"))
+                    projectWorkPages.clear()
                 val directExport = action == PocketWebProjectPreview.EXPORT_LOCAL_WEB
                 val exportDocument = if (directExport) documentId else null
                 val localTask = if (action == PocketWebProjectPreview.OPEN_LOCAL_WEB || action == PocketWebProjectPreview.PREVIEW_LOCAL_BUILD || directExport)
@@ -1031,8 +1044,8 @@ internal class PocketWebBridge(
                     (!directExport || !closed && exportDocument != null && exportDocument == documentId && controller.state.filePath == null &&
                         controller.conversationReader == null && !controller.attachmentOutcomes.state.open)
                 check(localTask == null || localWorkCurrent()) { "请先打开这份原本机构建" }
-                (projectPreview ?: error("原项目预览宿主尚未接入")).dispatch(action, args, ::localWorkCurrent) { result, error ->
-                    complete(id, result, error, retainValue = localTask == null && result?.opt("localWebWork") != true)
+                (projectPreview ?: error("原项目预览宿主尚未接入")).dispatch(action, args, ::localWorkCurrent, projectWorkPages::clear) { result, error ->
+                    complete(id, result, error, retainValue = !savedStatic && localTask == null && result?.opt("localWebWork") != true)
                     publishState()
                 }
                 return

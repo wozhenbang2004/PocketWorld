@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -22,7 +23,8 @@ internal class PocketWebProjectPreview(
         const val OPEN_LOCAL_WEB = "projects.firstWebOutput.open"
         const val PREVIEW_LOCAL_BUILD = "projects.firstWebOutput.previewBuild"
         const val EXPORT_LOCAL_WEB = "projects.firstWebOutput.export"
-        val COMMANDS = setOf(OPEN_LOCAL_WEB, PREVIEW_LOCAL_BUILD, EXPORT_LOCAL_WEB, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
+        const val OPEN_SAVED_STATIC = "projects.development.files.staticPreview.open"
+        val COMMANDS = setOf(OPEN_LOCAL_WEB, PREVIEW_LOCAL_BUILD, EXPORT_LOCAL_WEB, OPEN_SAVED_STATIC, "projects.preview", "projects.preview.mode", "projects.preview.viewport",
             "projects.preview.reload", "projects.preview.close", "projects.preview.return", "composer.preview.remove",
             "projects.package.preview.inspect", "projects.package.preview.open", "projects.package.export")
         private fun fields(args: JSONObject, names: Set<String>) {
@@ -40,41 +42,135 @@ internal class PocketWebProjectPreview(
             return value.toDouble().also { require(it.isFinite() && kotlin.math.abs(it) <= 10_000_000) { "预览布局超出范围" } }
         }
     }
-    private class Session(val original: PocketWorldController.RegisteredProjectPreview, val document: ProjectPreviewDocument) {
+    private class SavedStaticOwner(val request: PocketWebCheckoutFiles.SavedStaticPage, val window: PocketWebWindowTicket)
+    private class Session(val document: ProjectPreviewDocument,
+        val original: PocketWorldController.RegisteredProjectPreview? = null, val savedStatic: SavedStaticOwner? = null) {
         lateinit var web: ProjectBundleWebView
         val id: String = document.id()
-        var visible = true
+        var visible = savedStatic == null
         var error: String? = null
         var selectionEpoch = 0L
+        // Hiding preserves previously captured Chat references; releasing this document does not.
+        var handedOutSelection = false
         var target: PocketWorldController.PreviewDraftTarget? = null
         var window: PocketWebWindowTicket? = null
         var viewport: JSONObject? = null
-        var selectionAvailable = original.selectionAvailable
-        var selectionUnavailableReason = original.selectionUnavailableReason
+        var selectionAvailable = original?.selectionAvailable == true
+        var selectionUnavailableReason = original?.selectionUnavailableReason
     }
     private var session: Session? = null
-    private var closed = false
-    private var opening = 0L
+    @Volatile private var closed = false
+    @Volatile private var opening = 0L
+    @Volatile private var openingStatic = 0L
+    private data class RegisteredOpening(val sequence: Long, val window: PocketWebWindowTicket)
+    private var registeredOpening: RegisteredOpening? = null
     private data class PendingBuildPreview(val control: dev.pocketengine.core.RunControl, val timeout: Runnable, val reject: (String) -> Unit)
     private var pendingBuildPreview: PendingBuildPreview? = null
-    private var foreground = true
+    private data class PendingStaticPreview(val timeout: Runnable, val reject: (String) -> Unit)
+    private var pendingStaticPreview: PendingStaticPreview? = null
+    @Volatile private var foreground = true
     private val layoutChanged = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> session?.let(::layout) }
     init { container.addOnLayoutChangeListener(layoutChanged) }
 
-    fun snapshot(): JSONObject? = session?.let { selected ->
-        JSONObject().put("kind", "bundle").put("metadata", selected.original.bundle.metadata())
-            .put("taskId", selected.original.taskId).put("conversationId", selected.original.conversationId)
-            .put("localWebWork", selected.original.fromLocalWebWork)
+    private fun savedStaticCurrent(owner: SavedStaticOwner) = !closed && foreground &&
+        acceptsWindow(owner.window) && controller.webPrivateOwnerVisible() && owner.request.current()
+
+    fun isSavedStaticSession(sessionId: String) = session?.let { it.savedStatic != null && it.id == sessionId } == true
+
+    fun snapshot(): JSONObject? {
+        val selected = session ?: return null
+        selected.savedStatic?.let { owner ->
+            if (!savedStaticCurrent(owner)) { release(); return null }
+            val bundle = selected.document.bundle()
+            return JSONObject().put("kind", "saved_static_page").put("sessionId", selected.id)
+                .put("projectId", owner.request.project).put("checkoutId", owner.request.checkout)
+                .put("entryPath", bundle.entryPath).put("entrySha256", owner.request.entrySha256)
+                .put("manifestIdentity", bundle.identity).put("resources", bundle.manifest())
+                .put("ready", selected.document.ready()).put("documentGeneration", selected.document.generation())
+                .put("visible", selected.visible).put("error", selected.error ?: JSONObject.NULL)
+        }
+        val original = checkNotNull(selected.original)
+        return JSONObject().put("kind", "bundle").put("metadata", original.bundle.metadata())
+            .put("taskId", original.taskId).put("conversationId", original.conversationId)
+            .put("localWebWork", original.fromLocalWebWork)
             .put("sessionId", selected.id).put("documentGeneration", selected.document.generation())
             .put("ready", selected.document.ready()).put("selecting", selected.web.isSelectionEnabled)
             .put("visible", selected.visible).put("error", selected.error ?: JSONObject.NULL)
             .put("selectionAvailable", selected.selectionAvailable)
             .put("selectionUnavailableReason", selected.selectionUnavailableReason ?: JSONObject.NULL)
-            .also { if (selected.original.packageOperationId != null) it.put("packageOperationId", selected.original.packageOperationId) }
+            .also { if (original.packageOperationId != null) it.put("packageOperationId", original.packageOperationId) }
     }
 
-    fun dispatch(action: String, args: JSONObject, localWorkCurrent: () -> Boolean = { false }, done: (JSONObject?, String?) -> Unit) {
+    private fun otherRendererOpening() = pendingBuildPreview != null ||
+        registeredOpening?.let { it.sequence == opening && acceptsWindow(it.window) } == true
+
+    private fun requireInactiveRegistered(selected: Session) {
+        check(selected.original != null && !selected.original.fromLocalWebWork && !selected.visible &&
+            selected.web.visibility == View.GONE && !selected.web.isSelectionEnabled && selected.target == null && selected.window == null) {
+            "仍有另一个预览打开。请返回原预览关闭后，再从这里查看已保存页面"
+        }
+        check(!selected.handedOutSelection) {
+            "上一预览保留着可能仍在原对话草稿中的元素引用。请先回到原对话处理引用，再返回该预览关闭它"
+        }
+    }
+
+    /** Only the original editor may issue this typed request. No task or package source is consulted. */
+    fun openSavedStatic(request: PocketWebCheckoutFiles.SavedStaticPage, done: (JSONObject?, String?) -> Unit) {
+        val owner = SavedStaticOwner(request, captureWindow())
+        check(savedStaticCurrent(owner)) { "请从原文件打开已保存页面" }
+        check(pendingStaticPreview == null && !otherRendererOpening()) { "请先等上一预览完成，再从原文件打开页面" }
+        // An ordinary Back/tab switch hides the prior renderer without releasing it. The explicit
+        // current editor visit may replace only that exact inactive display, never its source or Work.
+        val previous = session
+        previous?.let(::requireInactiveRegistered)
+        val token = ++openingStatic
+        val until = SystemClock.elapsedRealtime() + 20_000L
+        fun current() = openingStatic == token && savedStaticCurrent(owner) && SystemClock.elapsedRealtime() < until
+        val timeout = Runnable { if (openingStatic == token) cancelPendingStaticPreview("读取所选网页资源超时，可在原文件重试") }
+        val pending = PendingStaticPreview(timeout) { error -> done(null, error) }
+        pendingStaticPreview = pending
+        container.postDelayed(timeout, 20_000L)
+        try {
+            controller.runPluginCatalogWork(Runnable {
+                val captured = runCatching { request.read(::current) }
+                container.post {
+                    if (pendingStaticPreview !== pending) return@post
+                    pendingStaticPreview = null
+                    container.removeCallbacks(timeout)
+                    if (!current()) done(null, "原文件预览已关闭或超时，没有打开其他页面")
+                    else captured.mapCatching { bundle ->
+                        check(bundle.projectId == request.project && bundle.checkoutId == request.checkout) { "原网页资源未对应所选副本" }
+                        check(session === previous && !otherRendererOpening()) { "另一份预览已变化，没有替换它" }
+                        previous?.let(::requireInactiveRegistered)
+                        mount(Session(ProjectPreviewDocument(bundle), savedStatic = owner))
+                        checkNotNull(snapshot()) { "原文件预览已关闭" }
+                    }.fold({ done(it, null) }, {
+                        if (session?.savedStatic === owner) release()
+                        done(null, it.message ?: "没有打开这份已保存页面")
+                    })
+                    changed()
+                }
+            })
+        } catch (failure: Exception) {
+            pendingStaticPreview = null
+            container.removeCallbacks(timeout)
+            throw failure
+        }
+    }
+
+    fun dispatch(action: String, args: JSONObject, localWorkCurrent: () -> Boolean, registeredVisible: () -> Unit,
+                 done: (JSONObject?, String?) -> Unit) {
         check(!closed && foreground && controller.webPrivateOwnerVisible()) { "原私人预览窗口已关闭" }
+        val static = session?.takeIf { it.savedStatic != null }
+        if (static != null) {
+            require(text(args, "sessionId") == static.id) { "原预览文档已变化，没有操作另一页面" }
+            if (action == "projects.preview.close") {
+                fields(args, setOf("sessionId")); release()
+                done(JSONObject().put("sessionId", static.id).put("closed", true), null); changed(); return
+            }
+            require(action == "projects.preview.viewport") { "已保存页面只允许本机查看或关闭" }
+            check(savedStaticCurrent(checkNotNull(static.savedStatic))) { "原文件窗口已关闭" }
+        }
         if (action == "projects.package.preview.inspect") {
             fields(args, setOf("taskId", "operationId")); val task = text(args, "taskId"); val operation = text(args, "operationId")
             controller.projectPackages.invalidateTaskExportSelection()
@@ -135,12 +231,19 @@ internal class PocketWebProjectPreview(
             controller.projectPackages.invalidateTaskExportSelection()
             val window = captureWindow(); val request = ++opening
             fun current() = !closed && foreground && opening == request && acceptsWindow(window) && (!direct || localWorkCurrent())
-            controller.openRegisteredProjectPackagePreview(task, operation, entry, ::current, done = { selected, error ->
-                if (selected == null || error != null) { done(null, error ?: "原固定包预览未读取"); return@openRegisteredProjectPackagePreview }
-                if (!current() || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPackagePreview }
-                try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原固定包预览未能打开") }
-                changed()
-            }, fromLocalWork = direct)
+            val pending = RegisteredOpening(request, window).also { registeredOpening = it }
+            try {
+                controller.openRegisteredProjectPackagePreview(task, operation, entry, ::current, done = { selected, error ->
+                    if (registeredOpening === pending) registeredOpening = null
+                    if (selected == null || error != null) { done(null, error ?: "原固定包预览未读取"); return@openRegisteredProjectPackagePreview }
+                    if (!current() || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPackagePreview }
+                    try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原固定包预览未能打开") }
+                    changed()
+                }, fromLocalWork = direct)
+            } catch (failure: Exception) {
+                if (registeredOpening === pending) registeredOpening = null
+                throw failure
+            }
             return
         }
         if (action == EXPORT_LOCAL_WEB) {
@@ -183,11 +286,18 @@ internal class PocketWebProjectPreview(
             fields(args, setOf("projectId")); val project = text(args, "projectId")
             controller.projectPackages.invalidateTaskExportSelection()
             val window = captureWindow(); val request = ++opening
-            controller.openRegisteredProjectPreview(project, { !closed && foreground && opening == request && acceptsWindow(window) }) { selected, error ->
-                if (selected == null || error != null) { done(null, error ?: "原项目预览未读取"); return@openRegisteredProjectPreview }
-                if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPreview }
-                try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原预览未能打开") }
-                changed()
+            val pending = RegisteredOpening(request, window).also { registeredOpening = it }
+            try {
+                controller.openRegisteredProjectPreview(project, { !closed && foreground && opening == request && acceptsWindow(window) }) { selected, error ->
+                    if (registeredOpening === pending) registeredOpening = null
+                    if (selected == null || error != null) { done(null, error ?: "原项目预览未读取"); return@openRegisteredProjectPreview }
+                    if (closed || opening != request || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) { done(null, "原预览窗口已变化"); return@openRegisteredProjectPreview }
+                    try { show(selected); done(snapshot(), null) } catch (failure: Exception) { done(null, failure.message ?: "原预览未能打开") }
+                    changed()
+                }
+            } catch (failure: Exception) {
+                if (registeredOpening === pending) registeredOpening = null
+                throw failure
             }
             return
         }
@@ -202,15 +312,16 @@ internal class PocketWebProjectPreview(
         require(text(args, "sessionId") == selected.id) { "原预览文档已变化，未操作新页面" }
         when (action) {
             "projects.preview.mode" -> {
+                val original = checkNotNull(selected.original)
                 fields(args, setOf("sessionId", "enabled")); val enabled = boolean(args, "enabled")
                 disableSelection(selected)
                 if (enabled) {
-                    require(!selected.original.fromLocalWebWork && selected.visible && selected.document.ready()) { "请等待原预览显示完成再选择元素" }
-                    val target = controller.captureProjectPreviewDraft(selected.original.conversationId)
+                    require(!original.fromLocalWebWork && selected.visible && selected.document.ready()) { "请等待原预览显示完成再选择元素" }
+                    val target = controller.captureProjectPreviewDraft(original.conversationId)
                     val window = captureWindow(); val epoch = selected.selectionEpoch; val generation = selected.document.generation()
                     fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch &&
                         selected.visible && selected.document.ready() && selected.document.generation() == generation && acceptsWindow(window)
-                    controller.checkProjectPreviewSelection(selected.original, ::current) { available, reason ->
+                    controller.checkProjectPreviewSelection(original, ::current) { available, reason ->
                         if (!current()) { done(null, "原文档或选择窗口已变化，未启用迟到选择"); return@checkProjectPreviewSelection }
                         selected.selectionAvailable = available; selected.selectionUnavailableReason = reason
                         if (!available) { selected.error = reason; done(snapshot(), reason ?: "原预览来源暂不可核对") }
@@ -232,6 +343,10 @@ internal class PocketWebProjectPreview(
                 require(number(rect, "width") >= 0 && number(rect, "height") >= 0 && number(args, "viewportWidth") > 0 && number(args, "viewportHeight") > 0)
                 selected.viewport = JSONObject(args.toString()); selected.visible = visible
                 if (!visible) disableSelection(selected)
+                else if (selected.original != null) {
+                    cancelPendingStaticPreview("已切回显示中的原预览，没有替换它")
+                    registeredVisible()
+                }
                 layout(selected); done(snapshot(), null)
             }
             "projects.preview.reload" -> {
@@ -239,19 +354,20 @@ internal class PocketWebProjectPreview(
                 refreshSelectionAvailability(selected); done(snapshot(), null)
             }
             "projects.preview.return" -> {
+                val original = checkNotNull(selected.original)
                 fields(args, setOf("sessionId")); hide(selected)
                 controller.projectPackages.invalidateTaskExportSelection()
-                if (selected.original.fromLocalWebWork) {
+                if (original.fromLocalWebWork) {
                     release(); controller.closeProjectPreview()
-                    done(JSONObject().put("sessionId", selected.id).put("taskId", selected.original.taskId).put("returned", true), null)
+                    done(JSONObject().put("sessionId", selected.id).put("taskId", original.taskId).put("returned", true), null)
                 } else {
-                    controller.returnToProjectPreviewConversation(selected.original.conversationId)
-                    done(JSONObject().put("sessionId", selected.id).put("conversationId", selected.original.conversationId).put("returned", true), null)
+                    controller.returnToProjectPreviewConversation(original.conversationId)
+                    done(JSONObject().put("sessionId", selected.id).put("conversationId", original.conversationId).put("returned", true), null)
                 }
             }
             "projects.preview.close" -> {
                 fields(args, setOf("sessionId"))
-                if (selected.original.fromLocalWebWork) releaseExactLocalWork(selected)
+                if (selected.original?.fromLocalWebWork == true) releaseExactLocalWork(selected)
                 else {
                     release(); controller.closeProjectPreview()
                     controller.projectPackages.invalidateTaskExportSelection()
@@ -263,43 +379,64 @@ internal class PocketWebProjectPreview(
         changed()
     }
 
-    private fun show(original: PocketWorldController.RegisteredProjectPreview) {
-        release()
-        val document = ProjectPreviewDocument(original.bundle); val selected = Session(original, document)
-        val web = ProjectBundleWebView(controller.webPresentationActivity(), document, object : ProjectBundleWebView.Events {
+    private fun show(original: PocketWorldController.RegisteredProjectPreview) =
+        mount(Session(ProjectPreviewDocument(original.bundle), original = original))
+
+    private fun mount(selected: Session) {
+        if (selected.savedStatic == null) release()
+        val original = selected.original
+        val web = ProjectBundleWebView(controller.webPresentationActivity(), selected.document, object : ProjectBundleWebView.Events {
             override fun error(message: String) {
                 if (session === selected) { selected.error = message.take(1600); changed() }
-                if (!original.fromLocalWebWork && original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, "RENDER_ERROR", message, original.bundle.entryUrl, 0)
+                if (original != null && !original.fromLocalWebWork && original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, "RENDER_ERROR", message, original.bundle.entryUrl, 0)
             }
             override fun console(level: String, text: String, source: String, line: Int) {
-                if (!original.fromLocalWebWork && original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, level, text, source, line)
+                if (original != null && !original.fromLocalWebWork && original.packageOperationId == null) controller.recordProjectPreviewConsole(original.bundle, original.taskId, level, text, source, line)
             }
         }, object : ProjectBundleWebView.SelectionEvents {
             override fun changed() { if (session === selected) this@PocketWebProjectPreview.changed() }
             override fun selected(selection: ProjectPreviewDocument.Selection) { receiveSelection(selected, selection) }
         })
-        selected.web = web; session = selected; web.visibility = View.GONE
-        container.addView(web, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START))
-        if (original.fromLocalWebWork) {
-            // Neither the temporary nor saved Work dialog keeps an unseen renderer after a lost ACK.
+        selected.web = web; web.visibility = View.GONE
+        val initial = FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.START)
+        if (selected.savedStatic != null) {
+            // Attach invisibly before disposing the old exact inactive window. A failed attach leaves it intact.
+            try {
+                container.addView(web, initial)
+                release()
+            } catch (failure: Exception) {
+                container.removeView(web)
+                web.release()
+                throw failure
+            }
+            session = selected
+        } else {
+            session = selected
+            container.addView(web, initial)
+        }
+        if (original?.fromLocalWebWork == true || selected.savedStatic != null) {
+            // Neither Work nor the original editor keeps an unseen renderer after a lost ACK.
             val previewId = selected.id
             container.postDelayed({
                 session?.takeIf { it.id == previewId && it.viewport == null }?.let { unseen ->
-                    releaseExactLocalWork(unseen); changed()
+                    if (unseen.savedStatic != null) release() else releaseExactLocalWork(unseen)
+                    changed()
                 }
             }, 5_000L)
         }
     }
 
     private fun receiveSelection(selected: Session, selection: ProjectPreviewDocument.Selection) {
+        val original = selected.original ?: return
         val target = selected.target; val window = selected.window; val epoch = selected.selectionEpoch
         fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch &&
             selected.visible && window != null && acceptsWindow(window) && controller.webPrivateOwnerVisible()
         if (target == null || !current()) { selected.web.setSelectionEnabled(false); return }
+        selected.handedOutSelection = true
         // End only the mode. The captured native Selection remains live until document/source changes.
         selected.web.setSelectionEnabled(false); selected.target = null; selected.window = null
         try {
-            controller.stageProjectPreviewSelection(selected.original.taskId, target, selection, ::current, selected.original.packageOperationId) { receipt, error ->
+            controller.stageProjectPreviewSelection(original.taskId, target, selection, ::current, original.packageOperationId) { receipt, error ->
                 if (session === selected && selected.selectionEpoch == epoch) {
                     selected.error = error
                     if (receipt?.opt("selectionAvailable") == false) { selected.selectionAvailable = false; selected.selectionUnavailableReason = error ?: "原选择来源暂不可核对" }
@@ -310,11 +447,12 @@ internal class PocketWebProjectPreview(
     }
 
     private fun refreshSelectionAvailability(selected: Session) {
-        if (selected.original.fromLocalWebWork) return
+        val original = selected.original ?: return
+        if (original.fromLocalWebWork) return
         selected.selectionAvailable = false; selected.selectionUnavailableReason = "正在重新核对原预览来源"
         val window = captureWindow(); val epoch = selected.selectionEpoch
         fun current() = !closed && foreground && session === selected && selected.selectionEpoch == epoch && acceptsWindow(window)
-        try { controller.checkProjectPreviewSelection(selected.original, ::current) { available, reason ->
+        try { controller.checkProjectPreviewSelection(original, ::current) { available, reason ->
             if (current()) { selected.selectionAvailable = available; selected.selectionUnavailableReason = reason; changed() }
         } } catch (failure: Exception) { selected.selectionUnavailableReason = failure.message ?: "原预览来源暂不可核对" }
     }
@@ -324,7 +462,8 @@ internal class PocketWebProjectPreview(
     private fun hide(selected: Session) { disableSelection(selected); selected.visible = false; selected.web.visibility = View.GONE }
     private fun layout(selected: Session) {
         val viewport = selected.viewport
-        if (closed || !foreground || session !== selected || !selected.visible || viewport == null || !controller.webPrivateOwnerVisible()) { selected.web.visibility = View.GONE; return }
+        if (closed || !foreground || session !== selected || !selected.visible || viewport == null || !controller.webPrivateOwnerVisible() ||
+            selected.savedStatic?.let { !savedStaticCurrent(it) } == true) { selected.web.visibility = View.GONE; return }
         val rect = viewport.getJSONObject("rect")
         val cssWidth = viewport.getDouble("viewportWidth"); val cssHeight = viewport.getDouble("viewportHeight")
         val width = (container.width - container.paddingLeft - container.paddingRight).coerceAtLeast(0)
@@ -341,6 +480,10 @@ internal class PocketWebProjectPreview(
     }
     fun foreground(value: Boolean) {
         foreground = value
+        if (!value) {
+            cancelPendingStaticPreview()
+            if (session?.savedStatic != null) release()
+        }
         session?.let { if (value) it.web.onResume() else { hide(it); it.web.onPause() } }
         changed()
     }
@@ -349,6 +492,13 @@ internal class PocketWebProjectPreview(
         pendingBuildPreview = null
         container.removeCallbacks(pending.timeout)
         pending.control.cancel()
+        pending.reject(reason)
+    }
+    private fun cancelPendingStaticPreview(reason: String = "已离开原已保存文件，预览已取消") {
+        val pending = pendingStaticPreview ?: return
+        pendingStaticPreview = null
+        openingStatic++
+        container.removeCallbacks(pending.timeout)
         pending.reject(reason)
     }
     fun retireLocalWork() {
@@ -360,17 +510,20 @@ internal class PocketWebProjectPreview(
     }
     fun invalidatePresentation(documentReplaced: Boolean) {
         cancelPendingBuildPreview()
+        cancelPendingStaticPreview()
         opening++
         if (documentReplaced) { controller.projectPackages.invalidateTaskExportSelection(); release(); controller.closeProjectPreview() }
+        else if (session?.savedStatic != null) release()
         else if (session?.original?.fromLocalWebWork == true) retireLocalWork()
         else session?.let(::hide)
         changed()
     }
     /** Retire an exact renderer, not a newer preview request still verifying this Work. */
     private fun releaseExactLocalWork(selected: Session) {
-        check(session === selected && selected.original.fromLocalWebWork)
+        val original = checkNotNull(selected.original)
+        check(session === selected && original.fromLocalWebWork)
         release()
-        controller.releaseLocalWorkPreviewCache(selected.original)
+        controller.releaseLocalWorkPreviewCache(original)
     }
     private fun release() {
         val selected = session ?: return; session = null
@@ -378,6 +531,6 @@ internal class PocketWebProjectPreview(
     }
     fun close() {
         if (closed) return
-        closed = true; opening++; cancelPendingBuildPreview(); controller.projectPackages.invalidateTaskExportSelection(); release(); container.removeOnLayoutChangeListener(layoutChanged); controller.closeProjectPreview()
+        closed = true; opening++; cancelPendingBuildPreview(); cancelPendingStaticPreview(); controller.projectPackages.invalidateTaskExportSelection(); release(); container.removeOnLayoutChangeListener(layoutChanged); controller.closeProjectPreview()
     }
 }

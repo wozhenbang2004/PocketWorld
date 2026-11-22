@@ -7,6 +7,7 @@ import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectChecko
 import {checkoutPathPage,ProjectCheckoutPathSearch,type CheckoutPathHit,type CheckoutPathPage} from './ProjectCheckoutPathSearch';
 import {checkoutDirectoryPage,ProjectCheckoutDirectory,type DirectoryFile,type DirectorySelection} from './ProjectCheckoutDirectory';
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
+import { canOpenSavedStaticPreview, ProjectSavedStaticPreview, type SavedStaticEditor } from './ProjectSavedStaticPreview';
 import { bridge } from './bridge';
 import { originalPythonRun, ownerPythonFiles, pythonReview, savedPythonPath, type OriginalPythonRun, type PythonReview } from './owner-python-run';
 import { SavedMarkdownBody } from './library/MarkdownBody';
@@ -19,6 +20,7 @@ type SavedEdit = { id: string; filesHandle: string; path: string; beforeHash: st
 type EditorPosition = { start: number; end: number; scrollTop: number; scrollLeft: number };
 type SavedMarkdownFile = { fileHandle: string; path: string; sha256: string; content: string };
 type MarkdownVisit = Omit<SavedMarkdownFile,'content'> & { caret: EditorPosition; drawerScroll: number };
+type StaticPreviewVisit = { editor:SavedStaticEditor; file:Data; generation:number; caret:EditorPosition; drawerScroll:number };
 type FileFind = { fileHandle: string; query: string; result?: { text: string; at: number; line: number; wrapped: boolean } };
 type FolderEditor = { fileHandle: string; resumable: boolean };
 // A UI bookmark, not a reusable native save handle or a copy of the file.
@@ -102,6 +104,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const [markdownVisit,setMarkdownVisit]=useState<MarkdownVisit|null>(null), activeMarkdown=useRef<MarkdownVisit|null>(null);
   const visibleMarkdown=useRef<MarkdownVisit|null>(null);
   const markdownTrigger=useRef<HTMLButtonElement>(null), markdownHeading=useRef<HTMLHeadingElement>(null);
+  const [staticPreview,setStaticPreview]=useState<StaticPreviewVisit|null>(null);
+  const activeStaticPreview=useRef<StaticPreviewVisit|null>(null), staticPreviewReturn=useRef<StaticPreviewVisit|null>(null);
+  const staticPreviewClose=useRef<(()=>void)|null>(null), staticPreviewTrigger=useRef<HTMLButtonElement>(null);
   const [newPath, setNewPath] = useState(''), [busy, setBusy] = useState(false), [editing, setEditing] = useState(false), [error, setError] = useState('');
   const [treeOpen, setTreeOpen] = useState(true), [reviewed, setReviewed] = useState(false);
   const [checkingSavedSource, setCheckingSavedSource] = useState(false);
@@ -213,7 +218,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (next.editSequence === editSequence.current && interfaceDrafts.get(keyFor(next.path)) === currentText.current && next.text === currentText.current) interfaceDrafts.delete(keyFor(next.path));
   };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void) => {
-    if (entered.current || edits.current || document.hidden) return;
+    if (entered.current || edits.current || activeStaticPreview.current || document.hidden) return;
     const heldEditor=['read','readFound','readTextHit'].includes(action)?folderEditorNow.current:null;
     const sequence = generation.current, token = {}; entered.current = token; setBusy(true); setError('');
     try {
@@ -392,7 +397,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const edit = (value: string) => {
     const original = currentFile.current;
-    if (!original || folderEditorNow.current || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || document.hidden) return;
+    if (!original || folderEditorNow.current || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || activeStaticPreview.current || document.hidden) return;
     const key = keyFor(original.path);
     if (finder==='changes') return;
     if (value.length > 262144 || new TextEncoder().encode(value).length > 262144) { setError('编辑上限为 256 KiB，已有文字保留。'); return; }
@@ -420,6 +425,58 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       (!sha||sha===value.baseHash)&&typeof actual.content==='string'&&value.baseContent===actual.content&&value.text===actual.content&&
       currentText.current===value.text&&!interfaceDrafts.has(keyFor(value.path));
   };
+  const staticEligible=!sourceMember&&!hostFile&&finder!=='changes'&&!!file&&file.path==='index.html'&&
+    file.canPreviewSavedStatic===true&&!folderEditorNow.current&&!localFind&&!choice&&!adoption&&!pythonRunReview&&
+    !markdownVisit&&orphan===null&&!blockedEdit.current&&cleanChangeSource(file)&&
+    Number.isSafeInteger(file.editSequence)&&file.editSequence>=0&&file.editSequence===editSequence.current&&canOpenSavedStaticPreview();
+  const sameStaticEditor=(visit:StaticPreviewVisit)=>{
+    const area=editorInput.current, source=visit.file, pin=visit.editor;
+    return live(visit.generation)&&pin.projectId===projectId&&pin.checkoutId===checkoutId&&pin.viewHandle===viewHandle&&
+      bridge.getDocumentEpoch()===pin.documentEpoch&&handle.current===pin.filesHandle&&currentFile.current===source&&
+      source.canPreviewSavedStatic===true&&source.fileHandle===pin.fileHandle&&source.revision===pin.revision&&
+      source.editSequence===pin.editSequence&&editSequence.current===pin.editSequence&&source.path==='index.html'&&
+      !entered.current&&!edits.current&&!blockedEdit.current&&!folderEditorNow.current&&!activeAdoption.current&&
+      cleanChangeSource(source,pin.entrySha256)&&currentText.current===pin.html&&area?.isConnected===true&&area.value===textareaText(pin.html);
+  };
+  const showStaticPreview=()=>{
+    const area=editorInput.current, sequence=generation.current;
+    if(!file||!staticEligible||!area?.isConnected||activeStaticPreview.current||activeMarkdown.current||
+      area.value!==textareaText(currentText.current)||currentFile.current!==file||!live(sequence)||entered.current||edits.current)return;
+    const listedPaths=!listingStale&&listing?.readOnly===true&&listing.filesHandle===handle.current&&
+      listing.projectId===projectId&&listing.checkoutId===checkoutId?rows(listing.files).flatMap(item=>
+        typeof item?.path==='string'&&item.change!=='deleted'&&fileHash(item.sha256)?[item.path]:[]):[];
+    const visit:StaticPreviewVisit={file,generation:sequence,editor:{projectId,checkoutId,viewHandle,filesHandle:handle.current,
+      fileHandle:file.fileHandle,revision:file.revision,editSequence:file.editSequence,entrySha256:file.baseHash,
+      documentEpoch:bridge.getDocumentEpoch(),html:currentText.current,listedPaths},
+      caret:{start:area.selectionStart,end:area.selectionEnd,scrollTop:area.scrollTop,scrollLeft:area.scrollLeft},
+      drawerScroll:area.closest('.pw-settings-dialog-content')?.scrollTop??0};
+    if(!sameStaticEditor(visit))return;
+    activeStaticPreview.current=visit;setStaticPreview(visit);
+  };
+  const leaveStaticPreview=(visit:StaticPreviewVisit)=>{
+    if(activeStaticPreview.current!==visit)return;
+    activeStaticPreview.current=null;staticPreviewClose.current=null;
+    staticPreviewReturn.current=sameStaticEditor(visit)?visit:null;
+    setStaticPreview(null);
+  };
+  const backFromStaticPreview=()=>{
+    const visit=activeStaticPreview.current;
+    if(!visit)return false;
+    if(staticPreviewClose.current)staticPreviewClose.current();else leaveStaticPreview(visit);
+    return true;
+  };
+  const showingStatic=!!staticPreview&&sameStaticEditor(staticPreview);
+  useLayoutEffect(()=>{
+    if(staticPreview){if(!showingStatic)leaveStaticPreview(staticPreview);return;}
+    const visit=staticPreviewReturn.current,area=editorInput.current;
+    staticPreviewReturn.current=null;
+    if(!visit||!area||!sameStaticEditor(visit))return;
+    const target=staticPreviewTrigger.current;
+    (target?.isConnected&&!target.disabled?target:area).focus({preventScroll:true});
+    area.setSelectionRange(visit.caret.start,visit.caret.end);
+    area.scrollTop=visit.caret.scrollTop;area.scrollLeft=visit.caret.scrollLeft;
+    const drawer=area.closest('.pw-settings-dialog-content');if(drawer)drawer.scrollTop=visit.drawerScroll;
+  },[staticPreview,showingStatic]);
   const canEnterChanges = hasChangeReview&&orphan===null&&!blockedEdit.current&&!choice&&!adoption&&!pythonRunReview&&
     !activeMarkdown.current&&(!file||currentFile.current===file&&cleanChangeSource(file));
   const readChangedPage = (start=0,previous?:CheckoutPathPage) => {
@@ -673,6 +730,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   },[finder,!!file]);
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
+    if (backFromStaticPreview()) return;
     if (activeMarkdown.current) closeMarkdown();
     else if (backFromChanges()) return;
     else if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
@@ -694,12 +752,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
-    if (finder==='changes' || browsingFolder || markdownVisit || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
+    if (finder==='changes' || browsingFolder || markdownVisit || staticPreview || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
     const timer = window.setTimeout(() => {
       if (!folderEditorNow.current&&!activeMarkdown.current) void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false));
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [file, busy, editing, orphan, adoption, markdownVisit, browsingFolder, finder]);
+  }, [file, busy, editing, orphan, adoption, markdownVisit, staticPreview, browsingFolder, finder]);
   useEffect(() => {
     setAdoptionExpired(false); if (!adoption) return; adoptionHeading.current?.focus();
     const remaining = Number(adoption.expiresAt) - Date.now();
@@ -788,16 +846,19 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     </div>
   </section>;
   const changesBackLabel=file?'返回改动列表':'返回选文件';
-  return <SettingsDialog isOpen title={readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
-    onClose={() => {if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
-    closeLabel={readingMarkdown?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+  return <SettingsDialog isOpen title={showingStatic?'预览已保存网页':readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
+    onClose={() => {if(backFromStaticPreview())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
+    closeLabel={showingStatic||readingMarkdown?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+    {showingStatic&&staticPreview&&<ProjectSavedStaticPreview editor={staticPreview.editor}
+      current={()=>activeStaticPreview.current===staticPreview&&sameStaticEditor(staticPreview)}
+      onLeave={()=>leaveStaticPreview(staticPreview)} registerBack={closer=>{staticPreviewClose.current=closer}} />}
     {readingMarkdown && <section className="pw-checkout-files">
       <header><h3 ref={markdownHeading} tabIndex={-1} dir="auto">{readingMarkdown.path}</h3>
         <small>已核对保存版本 · <code>{readingMarkdown.sha256.slice(0,8)}</code> · 不加载图片，不打开链接</small></header>
       <SavedMarkdownBody text={readingMarkdown.content} />
       <Button variant="secondary" onClick={closeMarkdown}>返回编辑</Button>
     </section>}
-    <div hidden={markdownVisible}><div className="pw-checkout-files">
+    <div hidden={markdownVisible||showingStatic}><div className="pw-checkout-files">
     {finder!=='changes'&&<><p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small></>}
     {error && <p role="alert">{error}</p>}
@@ -952,6 +1013,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           </Button></> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
+          {staticEligible&&<Button ref={staticPreviewTrigger} variant="secondary" disabled={locked} onClick={showStaticPreview}>预览已保存网页</Button>}
         </div>}
         {pythonRunReview && <section className="pw-checkout-adoption" aria-label="核对本机运行脚本">
           <h3 ref={pythonHeading} tabIndex={-1}>{pythonRunReview.programFiles?'同目录 Python 程序：':'在这部手机运行 '}<bdi>{pythonRunReview.path}</bdi>？</h3>

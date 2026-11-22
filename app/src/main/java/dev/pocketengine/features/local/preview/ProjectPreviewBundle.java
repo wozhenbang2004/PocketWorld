@@ -9,10 +9,15 @@ import dev.pocketengine.features.workspace.VersionedWorkspace;
 import java.io.File;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.BooleanSupplier;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -20,6 +25,10 @@ import org.json.JSONObject;
 public final class ProjectPreviewBundle {
     public static final int MAX_RESOURCES=256,MAX_RESOURCE_BYTES=4*1024*1024,MAX_TOTAL_BYTES=32*1024*1024;
     public static final String ORIGINAL_LOCAL_VITE_BUILD="original_local_vite_build";
+    public static final String SAVED_STATIC_ENTRY="index.html";
+    public static final int MAX_SAVED_STATIC_ASSETS=24;
+    private static final int MAX_SAVED_STATIC_BYTES=4*1024*1024;
+    private static final Set<String> SAVED_STATIC_ASSETS=Set.of("css","js","mjs","png","jpg","jpeg","webp","gif","ico");
     private ProjectPreviewBundle(){}
     public static final class Resource {
         public final String path,mimeType,sha256;private final byte[] bytes;
@@ -121,6 +130,81 @@ public final class ProjectPreviewBundle {
             ViteOutputMount.rootedBase(main.bytes,resources::containsKey):"";
         return new Verified(source.getString("checkoutId"),source.getString("projectId"),source.getString("sourceDigest"),
             entry,root,resources,total,artifactId,artifactSha,rootedBase,localViteBuild);
+    }
+    /** An owner picked these exact page files in the live ordinary editor. Never walks the tree,
+     * adds an unselected dependency, or registers a Work, artifact or reusable preview. */
+    public static Verified captureSavedStaticPage(File activeRoot,String project,String checkout,String entrySha,
+            List<String> selectedAssets,BooleanSupplier ownerCurrent)throws Exception{
+        if(!entrySha.matches("[a-f0-9]{64}")||selectedAssets.size()>MAX_SAVED_STATIC_ASSETS)
+            throw new IllegalArgumentException("请选择原已保存网页和最多24份资源");
+        var paths=new java.util.TreeSet<String>();
+        paths.add(SAVED_STATIC_ENTRY);
+        for(String path:selectedAssets){
+            String name=VersionedWorkspace.path(path);
+            int dot=name.lastIndexOf('.');
+            if(dot<0||!SAVED_STATIC_ASSETS.contains(name.substring(dot+1).toLowerCase(java.util.Locale.ROOT))||
+                    !ProjectSources.sourcePath(name)||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(name))
+                throw new IllegalArgumentException("只预览明确选择的 CSS、JS 和图片资源");
+            String prefix="";
+            String[] parts=name.split("/");
+            for(int i=0;i<parts.length;i++){
+                String part=parts[i];
+                prefix=prefix.isEmpty()?part:prefix+"/"+part;
+                if(part.startsWith(".")||!part.equals(part.strip())||part.chars().anyMatch(Character::isISOControl)||
+                        part.indexOf('?')>=0||part.indexOf('#')>=0||part.indexOf('%')>=0||
+                        ProjectPackageArchive.excluded(prefix,i<parts.length-1,false)!=null)
+                    throw new SecurityException("所选网页资源路径不在原项目可预览范围");
+            }
+            if(!paths.add(name))throw new IllegalArgumentException("请只选择一次同一网页资源");
+        }
+        requireSavedStaticCurrent(ownerCurrent);
+        File root=activeRoot.getAbsoluteFile();
+        Object rootKey=savedStaticRoot(root);
+        Map<String,Resource> resources=new TreeMap<>();
+        int total=0;
+        // Check the exact saved entry before any additional files are read.
+        byte[] entry=savedStaticBytes(root,rootKey,SAVED_STATIC_ENTRY,262144);
+        Resource initial=new Resource(SAVED_STATIC_ENTRY,entry);
+        if(!entrySha.equals(initial.sha256))throw new SecurityException("index.html 的已保存字节已变化，请先重新读取原文件");
+        resources.put(SAVED_STATIC_ENTRY,initial);total+=entry.length;
+        for(String path:paths)if(!SAVED_STATIC_ENTRY.equals(path)){
+            requireSavedStaticCurrent(ownerCurrent);
+            byte[] bytes=savedStaticBytes(root,rootKey,path,Math.min(ProjectSources.MAX_FILE_BYTES,MAX_SAVED_STATIC_BYTES-total));
+            resources.put(path,new Resource(path,bytes));total+=bytes.length;
+        }
+        JSONArray selected=new JSONArray();
+        for(Resource resource:resources.values()){
+            requireSavedStaticCurrent(ownerCurrent);
+            byte[] rechecked=savedStaticBytes(root,rootKey,resource.path,resource.bytes.length);
+            if(rechecked.length!=resource.bytes.length||!resource.sha256.equals(ProjectSources.sha256(rechecked)))
+                throw new SecurityException("所选网页资源在读取期间已变化，请重新核对原页面");
+            selected.put(new JSONArray().put(resource.path).put(resource.sha256).put(resource.bytes.length));
+        }
+        requireSavedStaticCurrent(ownerCurrent);
+        String selectedDigest=ProjectSources.digest(new JSONObject().put("kind","saved_static_page").put("resources",selected));
+        return new Verified(checkout,project,selectedDigest,SAVED_STATIC_ENTRY,"",resources,total);
+    }
+    private static void requireSavedStaticCurrent(BooleanSupplier ownerCurrent)throws InterruptedException{
+        if(Thread.currentThread().isInterrupted()||!ownerCurrent.getAsBoolean())
+            throw new InterruptedException("原文件预览已关闭，没有打开页面");
+    }
+    private static Object savedStaticRoot(File root)throws Exception{
+        var attributes=Files.readAttributes(root.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!attributes.isDirectory()||attributes.isSymbolicLink()||attributes.fileKey()==null||!root.equals(root.getCanonicalFile()))
+            throw new SecurityException("原私人副本目录已变化，没有打开页面");
+        return attributes.fileKey();
+    }
+    private static byte[] savedStaticBytes(File root,Object rootKey,String path,int limit)throws Exception{
+        if(!rootKey.equals(savedStaticRoot(root)))throw new SecurityException("原私人副本目录已变化");
+        File file=NativeCommandExecutor.within(root,path);
+        var attrs=Files.readAttributes(file.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!attrs.isRegularFile()||attrs.isSymbolicLink()||attrs.fileKey()==null||
+                !(Files.getAttribute(file.toPath(),"unix:nlink",LinkOption.NOFOLLOW_LINKS) instanceof Number links)||
+                links.longValue()!=1)throw new SecurityException("预览只读取所选普通文件，不跟随链接");
+        byte[] observed=ProjectFileBytes.read(file.toPath(),attrs,limit);
+        NativeCommandExecutor.within(root,path);
+        if(!rootKey.equals(savedStaticRoot(root)))throw new SecurityException("原私人副本目录已变化");
+        return observed;
     }
     /** Capture the entry's resource directory, excluding dependency/cache trees. No HTTP listener is opened. */
     public static Verified capture(File activeRoot,String checkout,String project,String source,String entryPath)throws Exception {

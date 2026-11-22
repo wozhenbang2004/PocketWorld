@@ -228,6 +228,18 @@ internal class PocketWebProjectDevelopment(
         original.shownSeal!=null&&(selected==checkout||allowSole&&selected.isEmpty()&&original.shownSoleCheckout==checkout)&&
             saved?.optJSONObject("submission")?.optString("status") !in setOf("pending","unknown","unconfirmed")
     }
+    /** No file request is constructed until the original owner editor explicitly opens this page. */
+    fun savedStaticPage(args: JSONObject, ownerEditorVisible: () -> Boolean): PocketWebCheckoutFiles.SavedStaticPage {
+        val original = selected(args)
+        check(!busy && review == null && directReview == null && dependencyReview == null && dependencyCopyReview == null) {
+            "请先完成原项目的其他审阅"
+        }
+        return files.savedStaticPage(args) { checkout ->
+            current(original) && ownerEditorVisible() && restoreFailure == null &&
+                review == null && directReview == null && dependencyReview == null && dependencyCopyReview == null &&
+                shownCheckout(original, checkout, allowSole = true)
+        }
+    }
     private fun observeRetainedLink(original:Page,checkout:String,allowSole:Boolean):Boolean {
         fun eligible()=restoreFailure==null&&current(original)&&controller.state.filePath==null&&shownCheckout(original,checkout,allowSole)
         if(!eligible())return false

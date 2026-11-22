@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import dev.pocketengine.core.RunControl
 import dev.pocketengine.features.local.LocalModule
+import dev.pocketengine.features.local.preview.ProjectPreviewBundle
 import dev.pocketengine.features.local.project.CheckoutTextMatches
 import dev.pocketengine.features.local.project.CheckoutPathMatches
 import dev.pocketengine.features.local.project.ProjectFileDraft
@@ -27,6 +28,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var textPage: CheckoutTextMatches? = null
         @Volatile var textUntil: Long = 0
         @Volatile var savedEdit: SavedEdit? = null
+        @Volatile var savedStaticPageEligible = false
         var priorSavedFile: ListedSave? = null // Main-thread selection from this exact list response.
         val git = PocketWebCheckoutGit(project, checkout)
         @Volatile var opened: Opened? = null
@@ -46,7 +48,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             !value.creating && !value.dirty() && !value.conflict()
     }
     private class Opened(val handle: String, @Volatile var draft: ProjectFileDraft, val pythonRead: PythonSavedRead? = null) {
-        var sequence = 0L
+        @Volatile var sequence = 0L
         @Volatile var saveUnknown = false
         @Volatile var formal: ProjectAdoptedFormalFile? = null
     }
@@ -91,6 +93,46 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             receipt
         }
     }
+    /** Held only by the original editor and its taskless renderer, never returned over the bridge. */
+    class SavedStaticPage(val project: String, val checkout: String, val entrySha256: String,
+        val current: () -> Boolean, val read: (() -> Boolean) -> ProjectPreviewBundle.Verified)
+
+    fun savedStaticPage(args: JSONObject, selectedCheckout: (String) -> Boolean): SavedStaticPage {
+        require(args.keys().asSequence().toSet() ==
+            setOf("viewHandle", "filesHandle", "fileHandle", "revision", "editSequence", "resourcePaths")) {
+            "请从原已保存编辑器选择这次网页资源"
+        }
+        val original = selected(args)
+        val file = opened(original, args)
+        check(original.sourcePath == null && original.savedStaticPageEligible && !busy &&
+            original.adoption == null && original.python == null && selectedCheckout(original.checkout)) {
+            "只在原手机文件夹副本的已保存编辑器打开页面"
+        }
+        val sequence = number(args,"editSequence")
+        val held = synchronized(store) {
+            requireDraft(file)
+            val draft=file.draft
+            check(!file.saveUnknown && file.formal == null && file.sequence == sequence &&
+                draft.revision == number(args,"revision") && LocalModule.savedStaticEditorEntry(draft)) {
+                "请先保存或重新核对原 index.html，没有打开其他页面"
+            }
+            draft
+        }
+        val selected = args.getJSONArray("resourcePaths")
+        require(selected.length() <= ProjectPreviewBundle.MAX_SAVED_STATIC_ASSETS) { "最多选择24份网页资源" }
+        val paths = (0 until selected.length()).map { index ->
+            (selected.opt(index) as? String)?.takeIf { it.isNotEmpty() && it.length <= 240 }
+                ?: error("仅支持明确选择的原副本相对文件")
+        }
+        fun sameFile() = current(original) && selectedCheckout(original.checkout) && original.opened === file &&
+            file.draft === held && file.sequence == sequence && !file.saveUnknown && file.formal == null
+        check(sameFile()) { "原文件已变化，请关闭重开预览" }
+        return SavedStaticPage(original.project, original.checkout, held.baseHash, ::sameFile) { keepReading ->
+            check(sameFile() && keepReading()) { "原文件预览窗口已关闭" }
+            val local=controller.nativeButlerHost().features.module("local") as? LocalModule ?: error("原本机项目不可读取")
+            local.readSavedStaticPageForOwner(held,paths) { sameFile() && keepReading() }
+        }
+    }
     private fun textPage(original: Page,args: JSONObject): CheckoutTextMatches {
         check(original.sourcePath==null && SystemClock.elapsedRealtime()<original.textUntil){"原副本搜索已结束，请重新查找"}
         val value=original.textPage
@@ -112,6 +154,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             .put("draftDurable", store.durable(value)).put("draftError", store.persistenceError(value) ?: "")
             .put("projectVersionWritten", false).put("executionAuthorized", false)
         file.formal?.let { result.put("formalFile", it.position()) }
+        if (original.savedStaticPageEligible && file.formal == null && !file.saveUnknown && LocalModule.savedStaticEditorEntry(value))
+            result.put("canPreviewSavedStatic", true)
         if (!file.saveUnknown && file.pythonRead?.matches(value) == true) result.put("pythonReadRevision", value.revision)
         if (body) result.put("text", value.text).put("baseContent", value.baseContent).put("latest", value.latestReview() ?: JSONObject.NULL)
         return result
@@ -206,6 +250,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private fun listing(original: Page, after: String, expected: String, refreshDirectory: String? = null): JSONObject {
         check(original.sourcePath == null) { "原单文件入口不能读取副本文件列表" }
         val source = controller.projectDevelopmentForWeb().ordinaryEditorFilesForOwner(original.project, original.checkout)
+        original.savedStaticPageEligible = source.opt("ownerSavedStaticPage") == true
         val digest = source.getString("sourceDigest")
         check(after.isBlank() || expected == digest) { "副本文件在翻页期间变化，请重新读取列表，不拼接不同版本" }
         val all = sortedMapOf<String, JSONObject>(); val files = source.getJSONArray("files")
