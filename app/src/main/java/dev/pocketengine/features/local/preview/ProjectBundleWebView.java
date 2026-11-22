@@ -2,11 +2,14 @@ package dev.pocketengine.features.local.preview;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.net.http.SslError;
+import android.os.Looper;
 import android.os.Message;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.View;
 import android.view.ViewConfiguration;
 import android.webkit.*;
 import java.io.ByteArrayInputStream;
@@ -65,9 +68,34 @@ public final class ProjectBundleWebView extends WebView {
         setDownloadListener((url,agent,disposition,mime,length)->events.error("预览中的下载需返回原项目另行处理"));document.loading();loadUrl(bundle.entryUrl);
     }
     public void setSelectionEnabled(boolean enabled){
-        if(enabled){if(released||!document.ready()||selectionScript==null||pageGesture||!isShown()||!hasWindowFocus())throw new SecurityException("请在当前已显示的原预览中启用元素选择");selectionTicket=document.beginSelection();selecting=true;}
+        if(enabled){if(released||document.bundle().keptStaticPage()||!document.ready()||selectionScript==null||pageGesture||!isShown()||!hasWindowFocus())throw new SecurityException("请在当前已显示的原预览中启用元素选择");selectionTicket=document.beginSelection();selecting=true;}
         else {selecting=false;document.endSelection();}
         changed();
+    }
+    /** Main-thread witness to the same real loaded view; Web supplies no file bytes, URL or DOM. */
+    public VisibleSavedStaticPage keepReview(long generation,String manifestIdentity){
+        var review=new VisibleSavedStaticPage(this,generation,manifestIdentity);
+        review.requireCurrent();
+        return review;
+    }
+    public static final class VisibleSavedStaticPage {
+        private final ProjectBundleWebView web;
+        private final long generation;
+        private final String identity;
+        private VisibleSavedStaticPage(ProjectBundleWebView web,long generation,String identity){
+            this.web=web;this.generation=generation;this.identity=identity;
+        }
+        ProjectPreviewBundle.Verified bundle(){return web.document.bundle();}
+        public void requireCurrent(){
+            if(Looper.myLooper()!=Looper.getMainLooper())throw new IllegalStateException("请在原网页窗口核对保留");
+            String url=web.getUrl();Rect shown=new Rect();
+            if(web.released||!bundle().originalSavedStaticPage()||!bundle().identity.equals(identity)||
+                    generation<=0||!web.document.ready()||web.document.generation()!=generation||
+                    url==null||!ProjectPreviewBundle.SAVED_STATIC_ENTRY.equals(bundle().resourcePath(url))||
+                    !web.isAttachedToWindow()||web.getVisibility()!=View.VISIBLE||web.getWindowVisibility()!=View.VISIBLE||
+                    !web.isShown()||!web.hasWindowFocus()||!web.getGlobalVisibleRect(shown)||shown.isEmpty())
+                throw new SecurityException("请先完整显示这一份原已保存网页");
+        }
     }
     public boolean isSelectionEnabled(){return selecting&&!released&&document.ready();}
     private void changed(){try{selectionEvents.changed();}catch(RuntimeException ignored){}}

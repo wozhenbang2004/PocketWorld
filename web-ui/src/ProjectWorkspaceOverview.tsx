@@ -34,13 +34,14 @@ export type ProjectWorkspaceOverviewProps = {
   localCopyFirst?: boolean;
   startContent?: ReactNode;
   savedWebContent?: ReactNode;
+  keptStaticContent?: ReactNode;
 };
 
 export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
-export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onOpenPairedDevices, onAskButler, editLocalFiles, localCopyFirst = false, startContent, savedWebContent }: ProjectWorkspaceOverviewProps) {
+export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onOpenPairedDevices, onAskButler, editLocalFiles, localCopyFirst = false, startContent, savedWebContent, keptStaticContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
   const savedWebLink = useRef<FindSavedBuildWeb|null>(null);
   const hasFilters = Boolean(view.query.trim()) || view.filter !== 'all';
@@ -109,6 +110,7 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
           {sections}
           {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}
         </ProjectSavedWebLink.Provider>
+        {keptStaticContent && <section className="pw-project-saved-web" aria-label="保留的本机网页">{keptStaticContent}</section>}
         {recent.length > 0 && <section className="pw-project-work-group" aria-label="已结束的项目工作"><h3>{hasFilters ? '已结束' : '最近结束'}</h3><ol className="pw-project-work-list pw-depth-tasks">{(hasFilters ? recent : recent.slice(0, 3)).map(renderTask)}</ol>
           {!hasFilters && recent.length > 3 && <Accordion key={project.id} className="pw-project-work-history" expandedKeys={view.expanded ? ['earlier-project-results'] : []}
             onExpandedChange={keys => onViewChange({ expanded: keys.has('earlier-project-results') })}><AccordionItem id="earlier-project-results" title="更早记录" description={`本次已读取的其余 ${recent.length - 3} 项`}><ol className="pw-project-work-list pw-depth-tasks">{recent.slice(3).map(renderTask)}</ol></AccordionItem></Accordion>}

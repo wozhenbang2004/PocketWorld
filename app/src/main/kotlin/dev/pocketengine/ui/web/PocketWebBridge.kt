@@ -441,6 +441,9 @@ internal class PocketWebBridge(
         controller.webPrivateOwnerVisible() && controller.state.projectId==project && controller.state.filePath==null },::captureWindow,::acceptsWindow)
     private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() },
         ::captureWindow, ::acceptsWindow, ::captureRetainedDraftOriginal, ::captureSuppliedViteLockRoute)
+    private val keptStaticPages=lazy {
+        PocketWebKeptStaticPages(controller,{projectPreview},{documentId},::keptStaticProjectVisible,::captureWindow,::acceptsWindow)
+    }
     private val knowledge = PocketWebKnowledge(controller, projectDevelopment::conventionDraft)
     private val butlerPreparations = PocketWebButlerPreparations(controller, { !closed && documentId != null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
     private val localPages = PocketWebLocal(controller) { taskViewId }
@@ -497,7 +500,10 @@ internal class PocketWebBridge(
             "models.accounts.open", "models.accounts.review", "models.accounts.close",
             "models.groups.snapshot", "models.conversation.snapshot", "models.conversation.close"
         )
-        val commands: Set<String> = PocketWebOwnerQuestions.coldCommands + PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS  + PocketWebNodeCompilerOutput.COMMANDS + PocketWebPythonOutput.COMMANDS + linkedSetOf(
+        // Activate only with the reviewed Web shelf's explicit native close before soft route changes.
+        private const val KEPT_STATIC_PAGES_ENABLED=true
+        val commands: Set<String> = (if(KEPT_STATIC_PAGES_ENABLED)PocketWebKeptStaticPages.COMMANDS else emptySet()) +
+            PocketWebOwnerQuestions.coldCommands + PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS  + PocketWebNodeCompilerOutput.COMMANDS + PocketWebPythonOutput.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
@@ -546,16 +552,17 @@ internal class PocketWebBridge(
 
     fun attachProjectPreview(container: android.widget.FrameLayout) {
         check(projectPreview == null && !closed)
-        projectPreview = PocketWebProjectPreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
+        projectPreview = PocketWebProjectPreview(controller, container, ::captureWindow, ::acceptsWindow, keptPagesEnabled=KEPT_STATIC_PAGES_ENABLED) { publishState() }
         projectLivePreview = PocketWebProjectLivePreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
         remoteTasks.attachPreview(container)
     }
-    fun foreground(value: Boolean) { if (!value) { retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { if (!value) { retireKeptStaticPages();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
         if (closed) return
         closed = true
+        retireKeptStaticPages()
         retireReplyPicker()
         controller.closeOwnerWorkRequestHistory()
         controller.closeOriginalReminderHistory()
@@ -595,6 +602,22 @@ internal class PocketWebBridge(
     internal fun captureWindow(): PocketWebWindowTicket = PocketWebWindowTicket(commandFence.ticket(), controller.webWindowTicket())
     internal fun acceptsWindow(ticket: PocketWebWindowTicket): Boolean =
         ticket.accepts(commandFence.ticket(), controller.webWindowTicket())
+
+    /** Host facts only. The explicit shelf visit owns JS-only Project subnavigation;
+     * generic section=null or a caller-supplied project id alone never owns a review. */
+    private fun keptStaticProjectVisible(project:String):Boolean {
+        if(!KEPT_STATIC_PAGES_ENABLED || closed || documentId==null || section!=null || taskViewId!=null || taskReturnSection!=null ||
+            !controller.webPrivateOwnerVisible() || !controller.webPresentationActivity().hasWindowFocus() || controller.hasChannelPhoneOrigin ||
+            phoneComposer.intent || controller.conversationReader!=null || controller.queuedInputsPage!=null ||
+            attachmentPages.hasOpenWorkspace || controller.attachmentOutcomes.state.open || !projectDevelopment.keptStaticShelfAvailable())return false
+        val state=controller.state
+        return state.projectId==project && state.projects.count{it.id==project}==1 && state.filePath==null &&
+            !state.fileLoading && !state.fileSaving && !state.chatAttachmentPickerOpen && !state.attachmentImporting &&
+            localSourceIntake.snapshot()?.isNull("window")!=false && projectGitImport.snapshot()?.optBoolean("open")!=true &&
+            projectLivePreview?.snapshot()?.optBoolean("mounted")!=true
+    }
+
+    private fun retireKeptStaticPages(){if(keptStaticPages.isInitialized())keptStaticPages.value.clear()}
 
     private fun ordinaryDetachedHistoryEpoch(conversation:String):Int? {
         if(closed||documentId==null||section!=null||taskViewId!=null||!controller.webPrivateOwnerVisible()||
@@ -652,6 +675,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        retireKeptStaticPages()
         retireReplyPicker()
         savedLocalReturn = null
         openedRetainedDraftCopy = null
@@ -745,6 +769,9 @@ internal class PocketWebBridge(
                     .put("connectionRevision", it.connectionRevision))
             }
             retainedDraftCopyOpenForWeb()?.let { projection?.getJSONObject("state")?.put("openedRetainedDraftCopy", it) }
+            if(keptStaticPages.isInitialized())keptStaticPages.value.retireLostOwner()
+            if(KEPT_STATIC_PAGES_ENABLED)projection?.getJSONObject("state")?.put("keptStaticPageShelf",
+                keptStaticPages.takeIf{it.isInitialized()}?.value?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("directVitePackageExport", controller.projectPackages.directViteExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
@@ -852,6 +879,15 @@ internal class PocketWebBridge(
             }
             if (action in PocketWebRemovedProjectFiles.COMMANDS){
                 removedProjectFiles.dispatch(action,args){r,e->complete(id,r,e,retainValue=false)};return
+            }
+            if (KEPT_STATIC_PAGES_ENABLED && action in PocketWebKeptStaticPages.COMMANDS) {
+                val effect=PocketWebKeptStaticPages.mayMutate(action)
+                keptStaticPages.value.dispatch(action,args){result,error->
+                    complete(id,result,error,errorCode=if(effect)"outcome_unknown" else "not_accepted",
+                        retainValue=false,replayHint="请回同一项目核对原记录；没有重新操作")
+                    publishState()
+                }
+                return
             }
             if (action == "projects.historyComparison") {
                 checkedPayload(args, setOf("projectId","path","version","versions"));requireFile(args)
@@ -1037,7 +1073,9 @@ internal class PocketWebBridge(
                 return
             }
             if (action in PocketWebProjectPreview.COMMANDS) {
-                val savedStatic = projectPreview?.isSavedStaticSession(args.optString("sessionId")) == true
+                val taskless = projectPreview?.isTasklessSession(args.optString("sessionId")) == true
+                if(projectPreview?.hasKeptRenderer()==true)
+                    require(taskless && action in setOf("projects.preview.viewport","projects.preview.close")) { "保留网页只允许本机查看或关闭" }
                 if (action in setOf("projects.preview", "projects.package.preview.open", "projects.preview.return"))
                     projectWorkPages.clear()
                 val directExport = action == PocketWebProjectPreview.EXPORT_LOCAL_WEB
@@ -1049,7 +1087,7 @@ internal class PocketWebBridge(
                         controller.conversationReader == null && !controller.attachmentOutcomes.state.open)
                 check(localTask == null || localWorkCurrent()) { "请先打开这份原本机构建" }
                 (projectPreview ?: error("原项目预览宿主尚未接入")).dispatch(action, args, ::localWorkCurrent, projectWorkPages::clear) { result, error ->
-                    complete(id, result, error, retainValue = !savedStatic && localTask == null && result?.opt("localWebWork") != true)
+                    complete(id, result, error, retainValue = !taskless && localTask == null && result?.opt("localWebWork") != true)
                     publishState()
                 }
                 return
@@ -3415,12 +3453,13 @@ internal class PocketWebBridge(
                 require(canUseTaskControls(task) && PocketWebTaskActions.canStopDirectly(task) && (!(PocketWebTaskActions.runtimeSetupTask(task)||task.raw.has("ownerDirectNodeBuild")) || controller.webPrivateOwnerVisible())) { "请回这项任务的原能力审核窗口操作" }
                 controller.stopReviewedTask(task)
             }
-            "projects.refresh" -> { controller.state.projectId?.let(controller::selectProject) ?: controller.refresh() }
+            "projects.refresh" -> { retireKeptStaticPages(); controller.state.projectId?.let(controller::selectProject) ?: controller.refresh() }
             "projects.select" -> { leaveTask(); leaveConnection(); reviews.clear(); controller.selectProject(requiredString(args, "id")) }
             "projects.create" -> controller.createProject(requiredString(args, "name"))
             "projects.open", "projects.newFile" -> {
                 require(controller.state.projectId == requiredString(args, "projectId")) { "原项目已变化" }
                 val path = checkedPath(args)
+                retireKeptStaticPages()
                 projectWorkPages.clear()
                 if (action == "projects.open") controller.openFile(path) else controller.newFile(path)
             }
@@ -4482,8 +4521,9 @@ internal class PocketWebBridge(
     }
 
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
-    private fun leaveTask() { controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
+    private fun leaveTask() { retireKeptStaticPages(); controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
+        retireKeptStaticPages()
         controller.closeOriginalReminderHistory()
         openedRetainedDraftCopy = null
         controller.projectFileImports.retireSuppliedLock()

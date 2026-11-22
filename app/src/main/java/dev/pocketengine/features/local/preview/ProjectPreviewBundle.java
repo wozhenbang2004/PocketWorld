@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.function.BooleanSupplier;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -29,8 +30,9 @@ public final class ProjectPreviewBundle {
     public static final String ORIGINAL_LOCAL_VITE_BUILD="original_local_vite_build";
     public static final String SAVED_STATIC_ENTRY="index.html";
     public static final int MAX_SAVED_STATIC_ASSETS=24;
-    private static final int MAX_SAVED_STATIC_BYTES=4*1024*1024;
+    static final int MAX_SAVED_STATIC_BYTES=4*1024*1024,MAX_SAVED_STATIC_ENTRY_BYTES=256*1024;
     private static final Set<String> SAVED_STATIC_ASSETS=Set.of("css","js","mjs","png","jpg","jpeg","webp","gif","ico");
+    private enum StaticPage { EDITOR, KEPT }
     private ProjectPreviewBundle(){}
     /** A non-render outcome: only paths already requested by this exact owner visit. */
     public static final class SavedStaticMissingAssets extends Exception {
@@ -43,7 +45,7 @@ public final class ProjectPreviewBundle {
     }
     public static final class Resource {
         public final String path,mimeType,sha256;private final byte[] bytes;
-        private Resource(String path,byte[] bytes)throws Exception {this.path=path;this.bytes=bytes.clone();mimeType=mime(path);sha256=ProjectSources.sha256(bytes);}
+        Resource(String path,byte[] bytes)throws Exception {this.path=path;this.bytes=bytes.clone();mimeType=mime(path);sha256=ProjectSources.sha256(this.bytes);}
         public byte[] bytes(){return bytes.clone();}
     }
     // Renderer-only provenance. No package/saved artifact id or recipient is minted.
@@ -61,21 +63,27 @@ public final class ProjectPreviewBundle {
         private final Map<String,Resource> resources;
         private final String rootedBase;
         private final LocalViteBuild localViteBuild;
+        private final StaticPage staticPage;
         private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total)throws Exception {
-            this(checkout,project,source,entry,root,resources,total,null,null,"",null);
+            this(checkout,project,source,entry,root,resources,total,null,null,"",null,null);
         }
         private Verified(String checkout,String project,String source,String entry,String root,Map<String,Resource> resources,int total,
-                String artifactId,String artifactSha,String rootedBase,LocalViteBuild localViteBuild)throws Exception {
+                String artifactId,String artifactSha,String rootedBase,LocalViteBuild localViteBuild,StaticPage staticPage)throws Exception {
             checkoutId=checkout;projectId=project;sourceDigest=source;entryPath=entry;previewRoot=root;capturedAt=System.currentTimeMillis();totalBytes=total;this.resources=Collections.unmodifiableMap(new LinkedHashMap<>(resources));
-            this.artifactId=artifactId;artifactSha256=artifactSha;this.rootedBase=rootedBase;this.localViteBuild=localViteBuild;
-            JSONObject core=new JSONObject().put("checkoutId",checkout).put("projectId",project).put("sourceDigest",source).put("entryPath",entry).put("previewRoot",root).put("resources",manifest());if(artifactId!=null)core.put("artifactId",artifactId).put("artifactSha256",artifactSha);
+            this.artifactId=artifactId;artifactSha256=artifactSha;this.rootedBase=rootedBase;this.localViteBuild=localViteBuild;this.staticPage=staticPage;
+            JSONObject core=identityFields(checkout,project,source,entry,root,manifest());if(artifactId!=null)core.put("artifactId",artifactId).put("artifactSha256",artifactSha);
             if(!rootedBase.isEmpty())core.put("rootedBase",rootedBase);
             if(localViteBuild!=null)core.put(ORIGINAL_LOCAL_VITE_BUILD,localViteBuild.metadata());
-            identity=ProjectSources.digest(core);origin="https://pw-project-"+identity.substring(0,40)+".invalid/";
+            identity=ProjectSources.digest(core);
+            origin=staticPage==StaticPage.KEPT?"https://pw-kept-page-"+UUID.randomUUID()+".invalid/":"https://pw-project-"+identity.substring(0,40)+".invalid/";
             entryUrl=origin+(rootedBase.isEmpty()?"":rootedBase.substring(1))+encoded(entry.substring(root.isEmpty()?0:root.length()+1));
         }
         public boolean originalLocalViteBuild(){return localViteBuild!=null;}
+        boolean originalSavedStaticPage(){return staticPage==StaticPage.EDITOR;}
+        public boolean keptStaticPage(){return staticPage==StaticPage.KEPT;}
+        Resource exactSavedStaticResource(String path){return staticPage==StaticPage.EDITOR?resources.get(path):null;}
         public JSONObject metadata()throws Exception{
+            if(keptStaticPage())throw new SecurityException("保留网页只使用同一项目的私人版本回执");
             JSONObject result=new JSONObject().put("previewId",identity).put("checkoutId",checkoutId).put("projectId",projectId)
                 .put("sourceDigest",sourceDigest).put("entryPath",entryPath).put("previewRoot",previewRoot).put("resources",manifest())
                 .put("resourceCount",resources.size()).put("bytes",totalBytes).put("capturedAt",capturedAt);
@@ -140,7 +148,38 @@ public final class ProjectPreviewBundle {
         String rootedBase="web_output".equals(manifest.opt("mode"))&&"dist/index.html".equals(entry)&&manifest.getJSONArray("omitted").length()==0?
             ViteOutputMount.rootedBase(main.bytes,resources::containsKey):"";
         return new Verified(source.getString("checkoutId"),source.getString("projectId"),source.getString("sourceDigest"),
-            entry,root,resources,total,artifactId,artifactSha,rootedBase,localViteBuild);
+            entry,root,resources,total,artifactId,artifactSha,rootedBase,localViteBuild,null);
+    }
+    private static JSONObject identityFields(String checkout,String project,String source,String entry,String root,JSONArray resources)throws Exception{
+        return new JSONObject().put("checkoutId",checkout).put("projectId",project).put("sourceDigest",source)
+                .put("entryPath",entry).put("previewRoot",root).put("resources",resources);
+    }
+    static String savedStaticSourceDigest(JSONArray selected)throws Exception{
+        return ProjectSources.digest(new JSONObject().put("kind","saved_static_page").put("resources",selected));
+    }
+    static String savedStaticIdentity(String project,String checkout,String source,JSONArray manifest)throws Exception{
+        return ProjectSources.digest(identityFields(checkout,project,source,SAVED_STATIC_ENTRY,"",manifest));
+    }
+    static Verified reopenKeptStaticPage(String project,String checkout,String source,Map<String,Resource> resources,int bytes)throws Exception{
+        return new Verified(checkout,project,source,SAVED_STATIC_ENTRY,"",resources,bytes,null,null,"",null,StaticPage.KEPT);
+    }
+    static String savedStaticAssetPath(String path){
+        String name=VersionedWorkspace.path(path);
+        int dot=name.lastIndexOf('.');
+        if(dot<0||!SAVED_STATIC_ASSETS.contains(name.substring(dot+1).toLowerCase(java.util.Locale.ROOT))||
+                !ProjectSources.sourcePath(name)||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(name))
+            throw new IllegalArgumentException("只预览明确选择的 CSS、JS 和图片资源");
+        String prefix="";
+        String[] parts=name.split("/");
+        for(int i=0;i<parts.length;i++){
+            String part=parts[i];
+            prefix=prefix.isEmpty()?part:prefix+"/"+part;
+            if(part.startsWith(".")||!part.equals(part.strip())||part.chars().anyMatch(Character::isISOControl)||
+                    part.indexOf('?')>=0||part.indexOf('#')>=0||part.indexOf('%')>=0||
+                    ProjectPackageArchive.excluded(prefix,i<parts.length-1,false)!=null)
+                throw new SecurityException("所选网页资源路径不在原项目可预览范围");
+        }
+        return name;
     }
     /** An owner picked these exact page files in the live ordinary editor. Never walks the tree,
      * adds an unselected dependency, or registers a Work, artifact or reusable preview. */
@@ -151,21 +190,7 @@ public final class ProjectPreviewBundle {
         var paths=new java.util.TreeSet<String>();
         paths.add(SAVED_STATIC_ENTRY);
         for(String path:selectedAssets){
-            String name=VersionedWorkspace.path(path);
-            int dot=name.lastIndexOf('.');
-            if(dot<0||!SAVED_STATIC_ASSETS.contains(name.substring(dot+1).toLowerCase(java.util.Locale.ROOT))||
-                    !ProjectSources.sourcePath(name)||!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(name))
-                throw new IllegalArgumentException("只预览明确选择的 CSS、JS 和图片资源");
-            String prefix="";
-            String[] parts=name.split("/");
-            for(int i=0;i<parts.length;i++){
-                String part=parts[i];
-                prefix=prefix.isEmpty()?part:prefix+"/"+part;
-                if(part.startsWith(".")||!part.equals(part.strip())||part.chars().anyMatch(Character::isISOControl)||
-                        part.indexOf('?')>=0||part.indexOf('#')>=0||part.indexOf('%')>=0||
-                        ProjectPackageArchive.excluded(prefix,i<parts.length-1,false)!=null)
-                    throw new SecurityException("所选网页资源路径不在原项目可预览范围");
-            }
+            String name=savedStaticAssetPath(path);
             if(!paths.add(name))throw new IllegalArgumentException("请只选择一次同一网页资源");
         }
         requireSavedStaticCurrent(ownerCurrent);
@@ -174,7 +199,7 @@ public final class ProjectPreviewBundle {
         Map<String,Resource> resources=new TreeMap<>();
         int total=0;
         // Check the exact saved entry before any additional files are read.
-        byte[] entry=savedStaticBytes(root,rootKey,SAVED_STATIC_ENTRY,262144);
+        byte[] entry=savedStaticBytes(root,rootKey,SAVED_STATIC_ENTRY,MAX_SAVED_STATIC_ENTRY_BYTES);
         Resource initial=new Resource(SAVED_STATIC_ENTRY,entry);
         if(!entrySha.equals(initial.sha256))throw new SecurityException("index.html 的已保存字节已变化，请先重新读取原文件");
         resources.put(SAVED_STATIC_ENTRY,initial);total+=entry.length;
@@ -211,8 +236,7 @@ public final class ProjectPreviewBundle {
             selected.put(new JSONArray().put(resource.path).put(resource.sha256).put(resource.bytes.length));
         }
         requireSavedStaticCurrent(ownerCurrent);
-        String selectedDigest=ProjectSources.digest(new JSONObject().put("kind","saved_static_page").put("resources",selected));
-        return new Verified(checkout,project,selectedDigest,SAVED_STATIC_ENTRY,"",resources,total);
+        return new Verified(checkout,project,savedStaticSourceDigest(selected),SAVED_STATIC_ENTRY,"",resources,total,null,null,"",null,StaticPage.EDITOR);
     }
     private static void requireSavedStaticCurrent(BooleanSupplier ownerCurrent)throws InterruptedException{
         if(Thread.currentThread().isInterrupted()||!ownerCurrent.getAsBoolean())

@@ -106,6 +106,9 @@ internal class PocketWebProjectDevelopment(
         dependencyCopyReview = null
     }
     fun clear() { generation++; page = null; review = null; clearDirectReview(); busy = false; files.clear() }
+    /** Presentation only; a private kept-page shelf cannot cover an editor or a live approval. */
+    fun keptStaticShelfAvailable() = files.closedForOriginalDraftRead() && !busy &&
+        review == null && directReview == null && dependencyReview == null && dependencyCopyReview == null
     private fun public(value: JSONObject) = PocketWebState.publicValue(value) as JSONObject
     private fun fields(value: JSONObject, vararg allowed: String) = require(value.keys().asSequence().all { it in allowed }) { "项目操作包含未声明字段" }
     private fun text(value: JSONObject, key: String, maximum: Int = 80, blank: Boolean = false): String {

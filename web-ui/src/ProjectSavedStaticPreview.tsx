@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, CheckboxField } from './forms-library';
 import { useProjectPreviewViewport } from './ProjectPreviewPane';
+import { keepStaticPage, keptStaticPage, supportsKeptStaticPages } from './ProjectKeptStaticPages';
 
 const openPreview='projects.development.files.staticPreview.open';
 const closePreview='projects.preview.close';
@@ -9,6 +10,7 @@ const available=(command:string)=>bridge.getState().capabilities.commands.includ
 export const canOpenSavedStaticPreview=()=>[openPreview,closePreview,'projects.preview.viewport'].every(available);
 const maximumResources=24, maximumAssetBytes=2*1024*1024, maximumPreviewBytes=4*1024*1024;
 const publicationWaitMs=4_000; // The native host reaps a preview without a viewport after five seconds.
+const keepUnconfirmed='本次保留未确认。可到同项目的「保留的网页」核对，没有重新保留。';
 const hash=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const row=(value:unknown):Record<string,unknown>=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
 const mimeTypes:Readonly<Record<string,string>>={css:'text/css',js:'text/javascript',mjs:'text/javascript',png:'image/png',
@@ -67,8 +69,8 @@ function directAssets(html:string):string[] {
 type SavedStaticCompanion={path:string;sha256:string;savedEditId:string;reviewedPaths:readonly string[]};
 export type SavedStaticEditor={projectId:string;checkoutId:string;viewHandle:string;filesHandle:string;fileHandle:string;
   revision:number;editSequence:number;entrySha256:string;documentEpoch:number;html:string;listedPaths:readonly string[];companion?:SavedStaticCompanion};
-type Snapshot={sessionId:string;manifestIdentity:string;resourceIdentity:string;ready:boolean;visible:boolean;generation:number;error:string|null};
-type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;published:boolean;verifiedRoot?:true;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
+type Snapshot={sessionId:string;manifestIdentity:string;resourceIdentity:string;ready:boolean;visible:boolean;generation:number;error:string|null;canKeep:boolean};
+type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;keep?:{sessionId:string;generation:number;manifest:string};published:boolean;verifiedRoot?:true;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
 function missingResourceReview(value:unknown,editor:SavedStaticEditor,paths:readonly string[]):string[]|null {
   const review=row(value), sent=review.resourcePaths, missing=review.missingPaths;
   if(review.kind!=='saved_static_resource_review'||review.opened!==false||Object.hasOwn(review,'sessionId')||
@@ -107,7 +109,7 @@ function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly st
     identities.push(JSON.stringify([path,resource.sha256,resource.bytes,resource.mimeType]));
   }
   return entry&&remaining.size===0&&bytes<=maximumPreviewBytes?{sessionId:view.sessionId,manifestIdentity:view.manifestIdentity,
-    resourceIdentity:JSON.stringify(identities.sort()),ready:view.ready,visible:view.visible,generation:Number(view.documentGeneration),error:view.error}:null;
+    resourceIdentity:JSON.stringify(identities.sort()),ready:view.ready,visible:view.visible,generation:Number(view.documentGeneration),error:view.error,canKeep:view.canKeep===true}:null;
 }
 
 /** Same editor and BoardUI surface. The viewport is only a slot for the native session. */
@@ -122,6 +124,7 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
   const hasRequiredAsset=!companion||selected.includes(companion.path);
   const [stage,setStage]=useState<'review'|'opening'|'preview'|'closing'|'error'>('review');
   const [shown,setShown]=useState<Snapshot|null>(null), [error,setError]=useState('');
+  const [keepStatus,setKeepStatus]=useState('');
   const visit=useRef<Visit|null>(null), mounted=useRef(false), heading=useRef<HTMLHeadingElement>(null);
   const callbacks=useRef({current,onLeave,onVerifiedRoot});callbacks.current={current,onLeave,onVerifiedRoot};
   const viewport=useProjectPreviewViewport(stage==='preview',shown?.sessionId||'',!shown||!!shown.error,available,
@@ -155,6 +158,41 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
         }
       }
     }else if(original.published){original.closed=true;leave(original);}
+  };
+  const keep=()=>{
+    const original=visit.current;
+    if(!original?.ack||!original.published||!live(original)||document.hidden||original.returning||original.keep||
+      !supportsKeptStaticPages(available))return;
+    const view=nativeSnapshot(bridge.getState().state.projectPreview,editor,original.paths);
+    if(!view?.canKeep||!view.ready||!view.visible||view.error||view.sessionId!==original.ack.sessionId||
+      view.resourceIdentity!==original.ack.resourceIdentity||view.manifestIdentity!==original.ack.manifestIdentity||
+      view.generation!==shown?.generation||view.sessionId!==shown?.sessionId)return;
+    const keep={sessionId:view.sessionId,generation:view.generation,manifest:view.manifestIdentity};
+    original.keep=keep;setKeepStatus('正在核对本次保留…');
+    const stillHere=()=>{
+      if(!live(original)||document.hidden||original.returning||original.keep!==keep)return false;
+      const state=nativeSnapshot(bridge.getState().state.projectPreview,editor,original.paths);
+      return state?.sessionId===keep.sessionId&&state.generation===keep.generation&&state.manifestIdentity===keep.manifest;
+    };
+    const stale=()=>{
+      if(live(original)&&!document.hidden&&!original.returning&&original.keep===keep)setKeepStatus(keepUnconfirmed);
+    };
+    void bridge.command(keepStaticPage,{sessionId:keep.sessionId,documentGeneration:keep.generation,manifestIdentity:keep.manifest}).then(value=>{
+      if(!stillHere()){stale();return;}
+      const receipt=row(value),page=keptStaticPage(receipt.page,editor.projectId);
+      if(receipt.kind!=='owner_saved_static_page_keep'){setKeepStatus(keepUnconfirmed);return;}
+      if((receipt.status==='saved'||receipt.status==='already_kept')&&page?.manifestIdentity===keep.manifest&&
+        page.checkoutId===editor.checkoutId&&page.entrySha256===editor.entrySha256&&page.resourceCount===original.paths.length+1){
+        setKeepStatus(receipt.status==='saved'?'此版本已保留。可在项目的「工作 → 保留的网页」找回。':
+          '此版本已在项目的「保留的网页」中，没有另存一份。');
+      }else if(receipt.status==='quota'&&receipt.page===null)setKeepStatus(
+        '保留这版会超出项目上限，本次未保留。已有版本仍在项目的「工作 → 保留的网页」，可以继续编辑或预览。');
+      else setKeepStatus(keepUnconfirmed);
+    }).catch((failure:unknown)=>{
+      if(!stillHere()){stale();return;}
+      setKeepStatus(failure instanceof Error&&'code' in failure&&(failure.code==='not_sent'||failure.code==='not_accepted')?
+        '本次预览未能受理保留。没有再次提交。':keepUnconfirmed);
+    });
   };
   const dismiss=()=>{
     const original=visit.current;
@@ -198,7 +236,7 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
   const show=()=>{
     if(!owns()||stage!=='review'||visit.current||!canOpenSavedStaticPreview()||hasSelectedMissing||!hasRequiredAsset||selected.length>maximumResources)return;
     const original:Visit={paths:[...selected],published:false,returning:false,closing:false,dismissed:false,closed:false};
-    visit.current=original;setStage('opening');setError('');
+    visit.current=original;setStage('opening');setError('');setKeepStatus('');
     const {viewHandle,filesHandle,fileHandle,revision,editSequence}=editor;
     void bridge.command(openPreview,{viewHandle,filesHandle,fileHandle,revision,editSequence,resourcePaths:original.paths,
       ...(companion?{companion:{entrySha256:editor.entrySha256,savedEditId:companion.savedEditId}}:{})}).then(value=>{
@@ -251,6 +289,9 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
       <Button disabled={hasSelectedMissing||!hasRequiredAsset} onClick={show}>打开本机预览</Button></div>
   </section>:<section className="pw-preview-pane pw-original-local-web" aria-label="已保存网页的本机预览" aria-busy={stage==='opening'||stage==='closing'||stage==='preview'&&!shown?.ready&&!shown?.error}>
     <p className="pw-reading-note">index.html · 此次已保存版本</p>
+    {stage==='preview'&&shown?.canKeep&&shown.ready&&shown.visible&&!shown.error&&!visit.current?.keep&&supportsKeptStaticPages(available)&&
+      <div className="pw-form-actions"><Button variant="ghost" size="small" onClick={keep}>保留此网页</Button></div>}
+    {stage==='preview'&&keepStatus&&<p className="pw-reading-note" role="status">{keepStatus}</p>}
     {stage!=='error'&&<div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={shown?.sessionId}>
       {(!shown?.ready||!shown.visible)&&<p className="pw-preview-placeholder" role="status">{shown?.error?'本机网页画面暂不可读。':stage==='closing'?'正在返回编辑…':'正在打开本机网页…'}</p>}
     </div>}

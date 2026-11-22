@@ -110,6 +110,7 @@ import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWork
 import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
+import {ProjectKeptStaticPages,supportsKeptStaticPages,type KeptStaticShelfNavigation} from './ProjectKeptStaticPages';
 import {canOpenSavedStaticPreview} from './ProjectSavedStaticPreview';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
@@ -973,6 +974,8 @@ export default function App(){
  const [projectWorkReviewOpen,setProjectWorkReviewOpen]=useState(false);
  const projectWorkBack=useRef<(()=>boolean)|null>(null);
  const registerProjectWorkBack=useCallback((handler:(()=>boolean)|null)=>{projectWorkBack.current=handler},[]);
+ const keptStaticShelf=useRef<KeptStaticShelfNavigation|null>(null),keptStaticLeaveRequest=useRef(0);
+ const registerKeptStaticShelf=useCallback((control:KeptStaticShelfNavigation|null)=>{keptStaticShelf.current=control},[]);
  const [preparationTarget,setPreparationTarget]=useState<ButlerPreparationTarget|null>(null),[preparationRevision,setPreparationRevision]=useState(0);
  const [homeHasPreparations,setHomeHasPreparations]=useState(false);
  const preparationBack=useRef<(()=>boolean)|null>(null);
@@ -1794,6 +1797,12 @@ export default function App(){
   const next=requested==='memory'?'profile':requested==='advanced-memory'?'memory':requested;
   const commit=async()=>{
    if(options?.stillCurrent&&!options.stillCurrent())return false;
+   const shelfClosing=keptStaticShelf.current?.leave();
+   if(shelfClosing){
+    const request=++keptStaticLeaveRequest.current,navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch();
+    if(!await shelfClosing||keptStaticLeaveRequest.current!==request||navigationWindow.current!==navigation||
+       bridge.getDocumentEpoch()!==epoch||document.hidden||options?.stillCurrent&&!options.stillCurrent())return false;
+   }
    if(preparationBeforeLeave.current&&!await leaveInlinePreparation())return false;
    let taskClosed=!!options?.taskClosed;
    if(next==='butler'){
@@ -4054,7 +4063,7 @@ export default function App(){
  },[state.requestedConnectionRevision,state.requestedConnectionSection,state.requestedReminderNotice?.connectionRevision,navigate,ready,personalDocumentEpoch,route,secondaryPage,taskOpen]);
  const reminderNotice=route==='automation'&&reminderNoticeVisit.current?.navigation===navigationRevision&&
   reminderNoticeVisit.current.documentEpoch===personalDocumentEpoch?reminderNoticeVisit.current:undefined;
- useEffect(()=>{bridge.setBackHandler(()=>{if((workReportPage||searchHistoryPage)&&historyWindowBack.current?.())return true;if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
+ useEffect(()=>{bridge.setBackHandler(()=>{if(route==='projects'&&keptStaticShelf.current?.back())return true;if((workReportPage||searchHistoryPage)&&historyWindowBack.current?.())return true;if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
   if(deliveredFileRef.current){
    const origin=resultFileReturnFocus.current,frame=bridge.getState().state.attachmentWorkspace;
    const reply=deliveredFileReader&&'reply' in deliveredFileReader?deliveredFileReader:null;
@@ -9244,11 +9253,20 @@ export default function App(){
   start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={openDirectoryWork}
   registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
  const showProjectSection=(section:'work'|'files'|'preview')=>{
-  if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
-  const visit=viteResultLookupNow.current;
-  if(visit?.kind==='phone-source')visit.finish();
-  else if(visit)retireViteResultLookup(visit);
-  projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}))
+  const commit=()=>{
+   if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
+   const visit=viteResultLookupNow.current;
+   if(visit?.kind==='phone-source')visit.finish();
+   else if(visit)retireViteResultLookup(visit);
+   projectPreview.hide();setProjectSections(previous=>({...previous,[String(state.projectId||'')]:section}));
+  };
+  const shelfClosing=keptStaticShelf.current?.leave();
+  if(!shelfClosing){commit();return;}
+  const request=++keptStaticLeaveRequest.current,navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch(),projectId=state.projectId;
+  void shelfClosing.then(closed=>{
+   if(closed&&keptStaticLeaveRequest.current===request&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&
+      !document.hidden&&bridge.getState().state.projectId===projectId)commit();
+  });
  };
  const canReadCurrentWeb=['projects.development.read','projects.development.inspect','tasks.open','projects.firstWebOutput.read',
   'projects.firstWebOutput.review','projects.firstWebOutput.save','projects.firstWebOutput.previewBuild','projects.firstWebOutput.open',
@@ -9571,6 +9589,10 @@ export default function App(){
          firstLocalFilesWorkProject?{onOpen:()=>openLocalProjectFiles('work'),label:'编辑本机文件'}:
          preparedLocalFilesWork?{onOpen:()=>openLocalProjectFiles('work',preparedLocalFilesWork),label:'打开本机源码'}:undefined}
         localCopyFirst={importedSourceFirst||retainedCopyFirst}
+        keptStaticContent={supportsKeptStaticPages(can)&&<ProjectKeptStaticPages key={currentProject.id} project={currentProject}
+          active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked&&!taskOpening&&
+            !packageOpening&&!choosingSavedStaticFile&&!projectStartDraft?.expanded}
+          registerNavigation={registerKeptStaticShelf}/>}
         savedWebContent={!choosingSavedStaticFile&&can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
