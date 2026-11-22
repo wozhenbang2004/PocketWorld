@@ -19,7 +19,7 @@ internal object PocketWebState {
         // Only the separately verified boolean is public; private reviewer-route fingerprints stay native.
         "teamreviewerroutecapture", "revisionrecipient", "projectmemoryread", "nativeprojectconventionreceipt", "nativeprojectconventiondraftseal",
         "ownerdirectviteeditorresume", "ownerpythonoutputtextpublication", "nativeoriginalmemorydraft",
-        "nativeoriginalreplydocument", "originalgenerateddocument"
+        "nativeoriginalreplydocument", "originalgenerateddocument", "originalgenerateddocuments", "originalgenerateddocumentscheck"
     )
     private val contractFields = setOf("deliverycontract","deliverycontractdigest")
     private val imageFields = setOf("imagedataurl", "screenshotdataurl", "screenshotbase64")
