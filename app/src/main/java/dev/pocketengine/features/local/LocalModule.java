@@ -9,6 +9,8 @@ import dev.pocketengine.features.local.project.OwnerDraftCopyShelf;
 import dev.pocketengine.features.local.project.OwnerDraftNodeDependencies;
 import dev.pocketengine.features.local.project.OwnerDirectNodeBuild;
 import dev.pocketengine.features.local.project.OwnerDirectNodeDependencies;
+import dev.pocketengine.features.local.project.OwnerSuppliedViteLock;
+import dev.pocketengine.features.local.project.ProjectDocumentImport;
 import dev.pocketengine.features.local.preview.ProjectPreviewBundle;
 import dev.pocketengine.features.EngineModule;
 import dev.pocketengine.features.FeatureContext;
@@ -1362,6 +1364,63 @@ public final class LocalModule implements EngineModule {
         RuntimeWorkspace active=runtimeWorkspace(checkout);
         OwnerDraftNodeDependencies.workspace(active);
         return Files.notExists(active.resolve("node_modules",false).toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS);
+    }
+    /** Body-free native link to the same checkout and project originally registered by the phone source publisher. */
+    public static boolean matchesOriginalPhoneLockSource(JSONObject copy,JSONObject origin){
+        if(!ordinaryDirectNodeCheckout(copy)||copy.has("ownerDevelopmentRequestId")||origin==null||
+            !"new_project".equals(origin.opt("mode"))||!Boolean.FALSE.equals(origin.opt("executionAuthorityRestored"))||
+            !OwnerDirectNodeBuild.digest(origin.opt("packageSha256"))||!OwnerDirectNodeBuild.digest(origin.opt("manifestIdentity"))||
+            !OwnerDirectNodeBuild.digest(origin.opt("sourceEvidenceSha256"))||
+            !(origin.opt("clientId") instanceof String client)||!importIdentity(client))return false;
+        return importedProjectId(client).equals(copy.opt("projectId"))&&
+            UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString().equals(copy.opt("id"));
+    }
+    /** The existing source inspect already has the snapshot. Confirm claim of physical absence without another source read. */
+    public synchronized boolean canChooseSuppliedViteLockForOwner(String project,String checkout,JSONObject snapshot)throws Exception{
+        if(!OwnerSuppliedViteLock.candidate(snapshot))return false;
+        validateDirectNodeCheckout(project,checkout);
+        File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),checkout,false);
+        OwnerSuppliedViteLock.requireMissingAt(new File(home,"files").toPath());
+        return true;
+    }
+    /** System-picker lock repair is bound to one ordinary already imported missing-lock copy. */
+    public synchronized OwnerSuppliedViteLock.Origin captureSuppliedViteLockForOwner(String project,String checkout,
+            String source,java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean())throw new SecurityException("原项目页面已关闭");
+        validateDirectNodeCheckout(project,checkout);
+        File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),checkout,false),files=new File(home,"files");
+        var origin=OwnerSuppliedViteLock.captureForHost(this,project,checkout,source,files.toPath(),exportDirectory(files,checkout(checkout)));
+        if(!current.getAsBoolean())throw new SecurityException("原项目页面已变化，没有打开系统选择");
+        return origin;
+    }
+    /** Pure currentness check before opening the original picked document, plus the full native contract at review. */
+    public synchronized void requireSuppliedViteLockForOwner(OwnerSuppliedViteLock.Origin origin,
+            java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean())throw new SecurityException("原锁文件选择已变化");
+        validateDirectNodeCheckout(origin.project(),origin.checkout());
+        origin.requireSource(this,export(origin.checkout()));
+        if(!current.getAsBoolean())throw new SecurityException("原锁文件选择已变化");
+    }
+    public synchronized OwnerSuppliedViteLock.Review reviewSuppliedViteLockForOwner(OwnerSuppliedViteLock.Origin origin,
+            ProjectDocumentImport.Source actual,RunControl control,java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean())throw new SecurityException("原锁文件核对已离开");
+        ownerDocumentCurrent(control).check();validateDirectNodeCheckout(origin.project(),origin.checkout());
+        var reviewed=OwnerSuppliedViteLock.reviewForHost(this,origin,export(origin.checkout()),actual,control);
+        if(!current.getAsBoolean()){reviewed.close();throw new SecurityException("原锁文件核对已离开");}
+        return reviewed;
+    }
+    public synchronized JSONObject confirmSuppliedViteLockForOwner(OwnerSuppliedViteLock.Review reviewed,
+            RunControl control,java.util.function.BooleanSupplier current)throws Exception{
+        var origin=reviewed.origin();
+        var owner=ownerDocumentCurrent(control);
+        owner.check();requireSuppliedViteLockForOwner(origin,current);
+        requireCheckoutWritable(origin.checkout()); // This is the separately confirmed file write, not review.
+        return OwnerSuppliedViteLock.publishForHost(this,reviewed,()->{
+            owner.check();requireSuppliedViteLockForOwner(origin,current);
+        },()->{
+            owner.check();
+            if(!current.getAsBoolean())throw new SecurityException("原锁文件确认页面已关闭");
+        },()->ProjectSources.describe(export(origin.checkout())).getString("sourceDigest"));
     }
     /** The exact native source review. History can suggest a separate copy, never deny a build. */
     public record DependencyCheckoutOffer(JSONObject view,OwnerNodeDependencyCheckout review,boolean historicalLock){}

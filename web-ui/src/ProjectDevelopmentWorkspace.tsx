@@ -132,6 +132,9 @@ function checkedRetainedOriginal(value:Data,visit:RetainedOriginalVisit):Retaine
 }
 const nodeScripts=['prebuild','build','postbuild'] as const;
 const reviewDirectBuild='projects.development.localBuild.review', confirmDirectBuild='projects.development.localBuild.confirm';
+const pickSuppliedLock='projects.development.suppliedViteLock.pick', reviewSuppliedLock='projects.development.suppliedViteLock.review',
+  confirmSuppliedLock='projects.development.suppliedViteLock.confirm', dismissSuppliedLock='projects.development.suppliedViteLock.dismiss';
+const suppliedLockActions=[pickSuppliedLock,reviewSuppliedLock,confirmSuppliedLock,dismissSuppliedLock];
 const confirmDirectDependencies='projects.development.localDependencies.confirm';
 const confirmDependencyCopy='projects.development.localDependencies.confirmCopy';
 const officialNpm='https://registry.npmjs.org/';
@@ -393,6 +396,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
     pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor}|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
+  // A UI correlation so a new mount cannot adopt a system picker choice. This never grants a file read or write.
+  const [lockVisit,setLockVisit]=useState<string|null>(null);
+  useEffect(()=>{if(!active)setLockVisit(null);},[active,projectId]);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
   const buildReturnAnchor=useRef<HTMLElement>(null), buildStepSection=useRef<HTMLElement>(null), buildNextAction=useRef<HTMLButtonElement>(null), focusingBeforeDeparture=useRef(false);
@@ -456,7 +462,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const current = () => alive.current && latest.current.active && entered.current === token && generation.current === sequence && ownerWindow() === window && ownsProject() && !document.hidden;
     try {
       // Keep scoped native feedback on its original page; a late failure cannot speak for another visit.
-      const scoped=action===confirmDirectDependencies||action===confirmDependencyCopy||action==='projects.development.inspect'&&args.readOriginalDraft===true;
+      const scoped=action===confirmDirectDependencies||action===confirmDependencyCopy||suppliedLockActions.includes(action)||
+        action==='projects.development.inspect'&&args.readOriginalDraft===true;
       const runHere=scoped?bridge.command:latest.current.run;
       const value = await runHere(action, args);
       if (current()) { accept?.(value); return value as Data; }
@@ -1073,6 +1080,38 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const checkedSave = savedFileHere && savedSource?.path===savedFileHere.path && savedSource.savedHash===savedFileHere.savedHash &&
     savedSource.sourceDigest===source?.sourceDigest && sourceHash(source?.sourceDigest) && typeof savedSource.matches==='boolean' ? savedSource : null;
   const sourceVersion = source?.projectId===projectId && source.checkoutId===checkout && sourceHash(source.sourceDigest) ? source.sourceDigest : '';
+  const suppliedLock=bridge.getState().state.suppliedViteLock;
+  const heldLock=active&&lockVisit&&suppliedLock?.visit===lockVisit&&suppliedLock.projectId===projectId&&
+    suppliedLock.checkoutId===checkout&&sourceHash(suppliedLock.sourceDigest)?suppliedLock:null;
+  const checkedLock=heldLock?.state==='review'&&heldLock.saved===false&&heldLock.executionAuthorized===false&&
+    heldLock.path==='package-lock.json'&&sourceHash(heldLock.sha256)&&sourceHash(heldLock.manifestSha256)&&
+    sourceHash(heldLock.nextSourceDigest)&&heldLock.nextSourceDigest!==heldLock.sourceDigest&&
+    Number.isSafeInteger(heldLock.bytes)&&heldLock.bytes>0&&heldLock.bytes<=524288?heldLock:null;
+  const canSupplyLock=source?.canChooseSuppliedViteLock===true&&missingRequiredLock==='package-lock.json'&&
+    !!sourceVersion&&selectedCopy?.draftWorkingCopy===false&&view?.draftRecoveryRequired===false&&suppliedLockActions.every(can);
+  const staleLock=!!sourceVersion&&!!heldLock&&heldLock.sourceDigest!==sourceVersion&&['selected','review'].includes(heldLock.state);
+  const supplyLock=(action:string)=>{
+    if(entered.current||!handle.current||handle.current!==view?.viewHandle||document.hidden||
+       !checkout||checkout!==draft.current.checkoutId||!can(action))return;
+    if(action===dismissSuppliedLock){if(!heldLock||!['selected','review'].includes(heldLock.state))return;}
+    else if(!canSupplyLock||action!==pickSuppliedLock&&heldLock?.sourceDigest!==sourceVersion||
+       action===reviewSuppliedLock&&heldLock?.state!=='selected'||action===confirmSuppliedLock&&!checkedLock)return;
+    const visit=action===pickSuppliedLock?crypto.randomUUID():lockVisit;
+    if(!visit)return;
+    if(action===pickSuppliedLock)setLockVisit(visit);
+    void invoke(action,{viewHandle:handle.current,checkoutId:checkout,visit,...(action===pickSuppliedLock?{sourceDigest:sourceVersion}:{})},value=>{
+      if(action===dismissSuppliedLock&&value.dismissed===true){setLockVisit(null);return;}
+      if(action!==confirmSuppliedLock)return;
+      if(value.projectId!==projectId||value.checkoutId!==checkout||value.sourceDigest!==sourceVersion||
+         value.visit!==visit||value.path!=='package-lock.json'||value.executionAuthorized!==false||
+         value.sha256!==checkedLock?.sha256||value.bytes!==checkedLock?.bytes||value.nextSourceDigest!==checkedLock?.nextSourceDigest)
+        throw Error('未核对到这一份原锁文件的写入回执，请先重读原副本，不要重复写入。');
+      if(value.state==='saved'&&value.saved===true){
+        // Reuse the ordinary selected-source read. No dependency action is invoked.
+        sourceAttempt.current='';setSource(null);setView(previous=>previous?{...previous}:previous);
+      }
+    });
+  };
   const acceptedBuild = selectedCopy && !differentBuildCopy && submission?.status==='accepted' && submission.independentNodeBuild===true && submission.projectId===projectId &&
     submission.checkoutId===checkout && sourceHash(submission.versionedBuildSourceDigest) &&
     typeof submission.taskId==='string' && /^[A-Za-z0-9_-]{1,80}$/.test(submission.taskId) &&
@@ -1431,6 +1470,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {importEditorNotice && <p className="pw-local-inline-notice" role="status">{importEditorNotice}</p>}
     {buildCopyMissing&&<p className="pw-local-inline-notice" role="status">原构建所用的私人副本暂不可用，没有打开替代副本。</p>}
+    {heldLock?.state==='saved'&&heldLock.saved===true&&<p className="pw-field-hint" role="status">已补入并回读这份锁文件。准备依赖和构建仍要分别确认。</p>}
+    {heldLock&&['unknown','not_written'].includes(heldLock.state)&&<div className="pw-root-lock-intake">
+      <p className="pw-field-hint" role="status">{heldLock.state==='unknown'?'未确认这次锁文件写入，不会重复提交。':'原位置已存在文件，没有覆盖。'}</p>
+      <Button variant="secondary" disabled={disabled} onClick={()=>void read()}>重新读取这份副本</Button>
+    </div>}
+    {staleLock&&<div className="pw-root-lock-intake">
+      <p className="pw-field-hint" role="status">原源码版本已变化，未补入所选锁文件。</p>
+      <Button variant="secondary" disabled={disabled} onClick={()=>supplyLock(dismissSuppliedLock)}>放弃这次选择</Button>
+    </div>}
     {(exactBuildNext||checkedSave&&buildStepVisible)&&<section ref={buildStepSection} aria-label="这份私人副本的构建下一步">
       <p className="pw-field-hint">本机副本 <bdi>{selectedCopy?.name||name}</bdi> · <code>{checkout.slice(0,8)}</code>。
         {sourceVersion?<> 已保存源码版本 <code>{sourceVersion.slice(0,10)}</code>。</>:
@@ -1447,8 +1495,25 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onClick={()=>versionWorkAtTop?openVersionBuild('work'):acceptedBuild&&onOpenTask(acceptedBuild.taskId,acceptedBuild.checkoutId)}>打开原构建工作</Button></div>
       </>:showMissingLock?<>
         <p className="pw-field-hint" role="status">这份源码声明了要用的依赖，但副本根目录没有 <bdi>{missingRequiredLock}</bdi>。先补齐同版本的锁文件，再核对构建；不会自动生成锁或安装依赖。</p>
-        {can('projects.development.files.open')&&<div className="pw-form-actions"><Button ref={buildNextAction} disabled={disabled}
-          onClick={openSelectedCopyFiles}>打开这份副本的文件</Button></div>}
+        {canSupplyLock&&heldLock?.sourceDigest===sourceVersion&&<div className="pw-root-lock-intake">
+          {heldLock.state==='picking'||heldLock.state==='reading'||heldLock.state==='writing'?
+            <p role="status" className="pw-field-hint">{heldLock.state==='picking'?'等待系统文件选择…':heldLock.state==='reading'?'正在核对这份锁文件…':'正在写入并回读原锁文件…'}</p>:
+            heldLock.state==='cancelled'?<p role="status" className="pw-field-hint">已取消，未读取或写入文件。</p>:
+            heldLock.state==='unavailable'?<p role="status" className="pw-field-hint">没有核对到匹配的锁，未写入文件。可重新选择原件。</p>:null}
+          {checkedLock&&<p className="pw-field-hint"><bdi>{checkedLock.path}</bdi> · {checkedLock.bytes} 字节 · <code>{checkedLock.sha256.slice(0,12)}</code>。已核对与当前 <bdi>package.json</bdi> 匹配，只写入缺少的锁，不安装依赖。</p>}
+        </div>}
+        <div className="pw-form-actions">
+          {canSupplyLock&&(!heldLock||['cancelled','unavailable'].includes(heldLock.state))&&<Button ref={buildNextAction} disabled={disabled}
+            onClick={()=>supplyLock(pickSuppliedLock)}>选择已有的 npm 锁文件</Button>}
+          {canSupplyLock&&heldLock?.sourceDigest===sourceVersion&&heldLock.state==='selected'&&<Button ref={buildNextAction} disabled={disabled}
+            onClick={()=>supplyLock(reviewSuppliedLock)}>核对所选锁文件</Button>}
+          {canSupplyLock&&checkedLock?.sourceDigest===sourceVersion&&<Button ref={buildNextAction} disabled={disabled}
+            onClick={()=>supplyLock(confirmSuppliedLock)}>确认补入这份锁</Button>}
+          {canSupplyLock&&heldLock?.sourceDigest===sourceVersion&&['selected','review'].includes(heldLock.state)&&
+            <Button variant="ghost" disabled={disabled} onClick={()=>supplyLock(dismissSuppliedLock)}>取消选择</Button>}
+          {can('projects.development.files.open')&&<Button ref={canSupplyLock?undefined:buildNextAction} variant={canSupplyLock?'secondary':'primary'} disabled={disabled}
+            onClick={openSelectedCopyFiles}>打开这份副本的文件</Button>}
+        </div>
       </>:showReactLock?<p className="pw-field-hint" role="status">
         这份锁使用 TypeScript <bdi>{reactLock.lockedVersion}</bdi>。此处的本机网页构建目前只支持锁定到 TypeScript <bdi>{reactLock.verifiedVersion}</bdi> 的标准 React TypeScript 项目。
         你仍可编辑这份副本。没有改锁、准备依赖或构建。

@@ -85,7 +85,11 @@ public final class ProjectOwnerWorkflows {
                 var state=OwnerDraftFirstBuild.existingBuildState(snapshot);
                 if("available".equals(state.state())){
                     source.put("existingNodeBuild",true);
-                    if(!state.missingLock().isEmpty())source.put("existingNodeBuildMissingLock",state.missingLock());
+                    if(!state.missingLock().isEmpty()){
+                        source.put("existingNodeBuildMissingLock",state.missingLock());
+                        try{if(local.canChooseSuppliedViteLockForOwner(project,checkout,snapshot))source.put("canChooseSuppliedViteLock",true);}
+                        catch(Exception unavailable){/* An optional file intake is not general source eligibility. */}
+                    }
                     try{source.putOpt("existingNodeBuildTask",tasks.existingNodeBuildForOwner(project,checkout,source.getString("sourceDigest")));}
                     catch(Exception unavailable){source.put("existingNodeBuildUnavailable",true);}
                     try{source.putOpt("directNodeBuildWork",tasks.directNodeWorkForSource(project,checkout,source.getString("sourceDigest")));}

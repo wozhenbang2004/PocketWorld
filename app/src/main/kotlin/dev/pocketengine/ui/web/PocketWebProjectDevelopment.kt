@@ -9,6 +9,7 @@ import dev.pocketengine.features.local.project.OwnerDraftFirstBuild
 import dev.pocketengine.features.local.project.OwnerDirectNodeBuild
 import dev.pocketengine.features.local.project.OwnerDirectNodeDependencies
 import dev.pocketengine.features.local.project.OwnerRevisionSource
+import dev.pocketengine.features.local.project.OwnerSuppliedViteLock
 import dev.pocketengine.features.local.project.ProjectOwnerWorkflows
 import dev.pocketengine.features.local.project.ProjectSources
 import dev.pocketengine.ui.PocketWorldController
@@ -35,7 +36,8 @@ internal class PocketWebProjectDevelopment(
     private val ownerCurrent: () -> Boolean,
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
-    private val captureOriginalDraft: (String, String) -> RetainedDraftOriginalRead?
+    private val captureOriginalDraft: (String, String) -> RetainedDraftOriginalRead?,
+    private val captureSuppliedLockRoute: (String) -> (() -> Boolean)
 ) {
     private data class ReturnToDraft(val handle:String,val project:String,val checkout:String,val draftDigest:String,val until:Long)
     private data class RetainedCopyLink(val checkout:String,val sealedIdentity:String)
@@ -76,11 +78,16 @@ internal class PocketWebProjectDevelopment(
         private const val LOCAL_BUILD_CONFIRM = "projects.development.localBuild.confirm"
         private const val LOCAL_DEPENDENCIES_CONFIRM = "projects.development.localDependencies.confirm"
         private const val LOCAL_DEPENDENCY_COPY = "projects.development.localDependencies.confirmCopy"
+        private const val LOCK_PICK = "projects.development.suppliedViteLock.pick"
+        private const val LOCK_REVIEW = "projects.development.suppliedViteLock.review"
+        private const val LOCK_CONFIRM = "projects.development.suppliedViteLock.confirm"
+        private const val LOCK_DISMISS = "projects.development.suppliedViteLock.dismiss"
+        val LOCK_COMMANDS = setOf(LOCK_PICK,LOCK_REVIEW,LOCK_CONFIRM,LOCK_DISMISS)
         val COMMANDS = setOf(LOCAL_BUILD_REVIEW, LOCAL_BUILD_CONFIRM, LOCAL_DEPENDENCIES_CONFIRM, LOCAL_DEPENDENCY_COPY, "projects.development.read", "projects.development.draft", "projects.development.inspect",
             "projects.development.taskPackageSource", "projects.development.resolveTaskPackageSource",
             "projects.development.hostSource", "projects.development.resolveHostSource", "projects.development.compareHostSource", "projects.development.readHostDiff",
             "projects.development.prepare", "projects.development.queryCopy", "projects.development.reviewDraftBuild", "projects.development.review",
-            "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS
+            "projects.development.start", "projects.development.query", "projects.development.dismiss", "projects.development.close") + PocketWebCheckoutFiles.COMMANDS + LOCK_COMMANDS
     }
     // Only a transient comparison guard for the already-authorized ordinary project reader. No Book, body or grant.
     @Volatile private var stagedReturn: ReturnToDraft? = null
@@ -306,7 +313,10 @@ internal class PocketWebProjectDevelopment(
         require(action in COMMANDS && (comparison == null || action == LOCAL_BUILD_REVIEW))
         if (action == "projects.development.close") {
             fields(args, "viewHandle")
-            if (page?.handle == args.optString("viewHandle")) clear()
+            page?.takeIf { it.handle == args.optString("viewHandle") }?.let {
+                if (current(it)) controller.projectFileImports.closeSuppliedLockReview(it.project)
+                clear()
+            }
             done(JSONObject().put("viewClosed", true).put("taskStopped", false), null); return
         }
         if (action == "projects.development.read") {
@@ -318,6 +328,48 @@ internal class PocketWebProjectDevelopment(
             working(original, done) { metadata(original) }; return
         }
         val original = selected(args)
+        if(action in LOCK_COMMANDS){
+            val expected=setOf("viewHandle","checkoutId","visit")+(if(action==LOCK_PICK)setOf("sourceDigest")else emptySet())
+            check(args.keys().asSequence().toSet()==expected&&!busy)
+            val checkout=text(args,"checkoutId");val visit=text(args,"visit",36)
+            check(visit.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")))
+            fun sameSelected()=current(original)&&restoreFailure==null&&controller.state.filePath==null&&
+                files.closedForOriginalDraftRead()&&review==null&&directReview==null&&dependencyReview==null&&dependencyCopyReview==null&&
+                shownCheckout(original,checkout,allowSole=true)
+            check(sameSelected()) { "请选择原普通私人副本，先退出其他审阅和编辑" }
+            val imports=controller.projectFileImports
+            when(action){
+                LOCK_PICK -> {
+                    val source=text(args,"sourceDigest",64)
+                    val route=captureSuppliedLockRoute(original.project)
+                    var origin:OwnerSuppliedViteLock.Origin?=null
+                    working(original,{ _, error ->
+                        val selected=origin
+                        if(error!=null||selected==null||!sameSelected()||!route())done(null,error?:"原项目窗口已变化")
+                        else runCatching { imports.chooseSuppliedLock(selected,visit,route) }
+                            .fold({done(it,null)},{done(null,"当前没有打开原系统文档选择")})
+                    },extraCurrent=::sameSelected){
+                        val local=controller.nativeButlerHost().features.module("local") as? LocalModule ?: error("原项目宿主不可用")
+                        origin=local.captureSuppliedViteLockForOwner(original.project,checkout,source,::sameSelected)
+                        JSONObject().put("checked",true)
+                    }
+                }
+                LOCK_DISMISS -> done(imports.dismissSuppliedLock(original.project,checkout,visit),null)
+                else -> {
+                    busy=true
+                    val completed = { value:JSONObject?, error:String? ->
+                        if(page===original)busy=false
+                        if(sameSelected())done(value,error)
+                        else done(null,"原项目窗口已变化，仅可核对原文件，不重复写入")
+                    }
+                    try {
+                        if(action==LOCK_REVIEW)imports.reviewSuppliedLock(original.project,checkout,visit,::sameSelected,completed)
+                        else imports.confirmSuppliedLock(original.project,checkout,visit,::sameSelected,completed)
+                    }catch(failure:Exception){busy=false;throw failure}
+                }
+            }
+            return
+        }
         if (action in PocketWebCheckoutFiles.COMMANDS) {
             check(review == null && !busy) { "请先完成或关闭原项目审阅" }
             files.dispatch(action, args, original.project, { current(original) }, done); return

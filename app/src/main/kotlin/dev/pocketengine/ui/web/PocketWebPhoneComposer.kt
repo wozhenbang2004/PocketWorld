@@ -47,9 +47,13 @@ internal class PocketWebPhoneComposer(
             PhoneDraftMessagePin.from(last.ownerOriginalLocator) == pin
     }
     /** Same native picked original goal only; no model, seal, body, or preparation is returned. */
-    fun originalMainModelInputCurrent(phoneEpoch: Int, phoneRevision: Long, editTicket: Long): Boolean {
+    fun originalMainModelInputCurrent(phoneEpoch: Int, phoneRevision: Long, editTicket: Long): Boolean =
+        originalModelInputCurrent("main_screen", phoneEpoch, phoneRevision, editTicket)
+    fun originalBackgroundModelInputCurrent(phoneEpoch: Int, phoneRevision: Long, editTicket: Long): Boolean =
+        originalModelInputCurrent("background", phoneEpoch, phoneRevision, editTicket)
+    private fun originalModelInputCurrent(mode: String, phoneEpoch: Int, phoneRevision: Long, editTicket: Long): Boolean {
         val pin = picked ?: return false
-        return !isClosed() && !pinLost && !textElsewhere() && phoneIntent && phoneExecutionMode == "main_screen" &&
+        return !isClosed() && !pinLost && !textElsewhere() && phoneIntent && phoneExecutionMode == mode &&
             presentationEpoch == phoneEpoch && phoneDraftRevision == phoneRevision && sourceEditTicket == editTicket &&
             phoneStartReceipt == null && savingFirstOriginal == null && phoneDraft.isNotBlank() && phoneDraft.length <= 4_000 &&
             pickedCurrent(pin)

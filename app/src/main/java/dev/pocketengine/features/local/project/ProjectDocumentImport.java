@@ -25,13 +25,27 @@ public final class ProjectDocumentImport {
         public String sha256(){return sha;}
         public void requireOriginal(RunControl control)throws Exception{if(original!=control)throw new SecurityException("不能更换原系统选择的控制");control.check();if(control.isPaused())throw new SecurityException("原文件选择已暂停");}
         private synchronized byte[] copy(){require();return bytes.clone();}
+        synchronized byte[] copySuppliedViteLock(RunControl control)throws Exception{
+            requireOriginal(control);require();
+            if(!OwnerSuppliedViteLock.PATH.equals(name)||bytes.length<1||bytes.length>OwnerSuppliedViteLock.MAX_BYTES)
+                throw new SecurityException("只核对所选的完整 package-lock.json");
+            return bytes.clone();
+        }
         @Override public synchronized void close(){if(bytes!=null){Arrays.fill(bytes,(byte)0);bytes=null;}}
     }
     private static String label(String raw,int limit){if(raw==null)return "未命名文件";String clean=(raw.length()>limit?raw.substring(0,limit):raw).replaceAll("[\\p{Cntrl}]"," ");return clean.isBlank()?"未命名文件":clean;}
     public static Source read(Document document,RunControl original)throws Exception{
+        return read(document,original,ProjectSources.MAX_FILE_BYTES,null);
+    }
+    /** Same original native selected stream, but this mode will not open other documents. */
+    public static Source readSuppliedViteLock(Document document,RunControl original)throws Exception{
+        return read(document,original,OwnerSuppliedViteLock.MAX_BYTES,OwnerSuppliedViteLock.PATH);
+    }
+    private static Source read(Document document,RunControl original,int maximum,String requiredName)throws Exception{
         java.util.Objects.requireNonNull(document);
-        try(Document selected=document){java.util.Objects.requireNonNull(original);if(original.hasHostRun())throw new SecurityException("主人文件选择不能借模型任务控制");original.check();Metadata metadata=selected.metadata();if(metadata==null||metadata.directory||metadata.virtual||metadata.partial||metadata.declaredBytes!=null&&(metadata.declaredBytes<0||metadata.declaredBytes>ProjectSources.MAX_FILE_BYTES))throw new IllegalArgumentException("请选择完整普通文件（非目录/虚拟/未下载项），最多2MiB");if(metadata.name!=null&&ProjectPackageArchive.excluded(metadata.name,false,false)!=null)throw new IllegalArgumentException("已知私有配置/依赖文件不由此源码导入入口读取；未导入");
-            try(InputStream stream=selected.open();ByteArrayOutputStream bytes=new ByteArrayOutputStream()){if(stream==null)throw new IOException("所选文件没有可读字节流");Runnable stop=()->{try{stream.close();}catch(Exception ignored){}};original.onCancel(stop);try{byte[] buffer=new byte[8192];while(true){original.check();if(Thread.currentThread().isInterrupted())throw new InterruptedIOException("原文件选择读取已取消");int read=stream.read(buffer);if(read<0)break;if(read==0)continue;if(bytes.size()>ProjectSources.MAX_FILE_BYTES-read)throw new IllegalArgumentException("所选文件超过2MiB，未导入部分字节");bytes.write(buffer,0,read);}original.check();if(metadata.declaredBytes!=null&&metadata.declaredBytes!=bytes.size())throw new SecurityException("实际读取大小与所选文件声明不同，未确认不完整来源");return new Source(metadata,bytes.toByteArray(),original);}finally{original.removeCancelAction(stop);}}
+        String limit=requiredName==null?"2MiB":"512 KiB";
+        try(Document selected=document){java.util.Objects.requireNonNull(original);if(original.hasHostRun())throw new SecurityException("主人文件选择不能借模型任务控制");original.check();Metadata metadata=selected.metadata();if(metadata==null||metadata.directory||metadata.virtual||metadata.partial||metadata.declaredBytes!=null&&(metadata.declaredBytes<0||metadata.declaredBytes>maximum))throw new IllegalArgumentException("请选择完整普通文件（非目录/虚拟/未下载项），最多"+limit);if(requiredName!=null&&!requiredName.equals(metadata.name))throw new IllegalArgumentException("请选择一份名为 package-lock.json 的原锁文件");if(metadata.name!=null&&ProjectPackageArchive.excluded(metadata.name,false,false)!=null)throw new IllegalArgumentException("已知私有配置/依赖文件不由此源码导入入口读取；未导入");
+            try(InputStream stream=selected.open();ByteArrayOutputStream bytes=new ByteArrayOutputStream()){if(stream==null)throw new IOException("所选文件没有可读字节流");Runnable stop=()->{try{stream.close();}catch(Exception ignored){}};original.onCancel(stop);try{byte[] buffer=new byte[8192];int emptyReads=0;while(true){original.check();if(Thread.currentThread().isInterrupted())throw new InterruptedIOException("原文件选择读取已取消");int read=requiredName==null?stream.read(buffer):stream.read(buffer,0,Math.min(buffer.length,maximum-bytes.size()+1));if(read<0)break;if(read==0){if(requiredName!=null&&++emptyReads>8)throw new IOException("原锁文件流没有持续返回字节");continue;}emptyReads=0;if(bytes.size()>maximum-read)throw new IllegalArgumentException("所选文件超过"+limit+"，未导入部分字节");bytes.write(buffer,0,read);}original.check();if(metadata.declaredBytes!=null&&metadata.declaredBytes!=bytes.size())throw new SecurityException("实际读取大小与所选文件声明不同，未确认不完整来源");return new Source(metadata,bytes.toByteArray(),original);}finally{original.removeCancelAction(stop);}}
         }
     }
     public static final class Review {

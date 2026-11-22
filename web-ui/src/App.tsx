@@ -222,13 +222,15 @@ type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparation
 type TerminalSavedFileOrigin={position:CheckoutSavedPosition;navigation:number;current:(section:'local'|null)=>boolean};
 type PythonSetupSource={position:CheckoutSavedPosition;navigation:number;ownerCurrent:(section:'setup'|null)=>boolean};
 type ViteToolsSource={position:ProjectViteToolsPosition;navigation:number;ownerCurrent:(section:'setup'|null)=>boolean};
-type OriginalPhoneModelInput={conversationId:string;key:string;epoch:number;revision:number;phoneEpoch:number;phoneRevision:number;sourceEditTicket:number;resumeRevision:number;preferenceRevision:number};
-type OriginalPhoneModelVisit={input:OriginalPhoneModelInput;navigation:number;selectionRevision:number};
+type OriginalPhoneModelInput={conversationId:string;key:string;epoch:number;revision:number;phoneEpoch:number;phoneRevision:number;sourceEditTicket:number;resumeRevision:number;preferenceRevision:number;mode:'main_screen'|'background'};
+type OriginalPhoneModelVisit={input:OriginalPhoneModelInput;navigation:number;selectionRevision:number;originDocument:number};
 type WorkspaceOrigin={route:string;label:string;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type BackgroundPhoneDraftVisit={origin:WorkspaceOrigin;pin:PhonePlaceReturn;navigation:number;document:number;afterRevision:number;
  first:{generation:number;setupRevision:number}|null;seenAuthentication:boolean;retired:boolean};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
 type LiveResultAttachment={result:TaskResult;mimeType:string;size:number;kind:string};
+type HomePhoneSetupInput={place:PhonePlaceReturn;composerRevision:number;sourceEditTicket:number;resumeRevision:number};
+type SetupWorkspaceOrigin=WorkspaceOrigin&{homePhoneSetup?:HomePhoneSetupInput&{navigation:number}};
 type SavedAttachmentMessage={id:string;revision:number;resume:number;taskRequest:number;liveResult?:LiveResultAttachment;
  historyResult?:LiveResultAttachment&{sourceGeneration:number}};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage;ordinaryNewDraftVisit?:{route:string;resume:number}};
@@ -672,7 +674,7 @@ export default function App(){
  const personalAvatar=typeof personalProfile.avatarDataUrl==='string'&&/^data:image\/(?:jpeg|png|webp);base64,/.test(personalProfile.avatarDataUrl)&&personalProfile.avatarDataUrl.length<=300000?personalProfile.avatarDataUrl:'';
  const [setupMode,setSetupMode]=useState<'onboarding'|'center'>('center'),[setupCapability,setSetupCapability]=useState<SetupCapability|undefined>(),[setupRuntimeTask,setSetupRuntimeTask]=useState<string|undefined>();
  const [setupView,setSetupView]=useState<SetupView>('overview');
- const setupOrigin=useRef<WorkspaceOrigin>({route:'butler',label:'返回管家'}),setupReturnPending=useRef(false);
+ const setupOrigin=useRef<SetupWorkspaceOrigin>({route:'butler',label:'返回管家'}),setupReturnPending=useRef(false);
  const backgroundPhoneDraftVisit=useRef<BackgroundPhoneDraftVisit|null>(null);
  const openingModelSetup=useRef(false);
  const [modelSetupOpening,setModelSetupOpening]=useState(false);
@@ -1729,7 +1731,7 @@ export default function App(){
   });
   afterReturn?.();return true;
  };
- const openSetup=async(capability?:SetupCapability,runtimeTaskId?:string,modelMode?:'onboarding'|'center',settingsDirectory?:SettingsDirectoryOrigin,phonePlace?:PhonePlaceReturn,capturedOrigin?:WorkspaceOrigin)=>{
+ const openSetup=async(capability?:SetupCapability,runtimeTaskId?:string,modelMode?:'onboarding'|'center',settingsDirectory?:SettingsDirectoryOrigin,phonePlace?:PhonePlaceReturn,capturedOrigin?:SetupWorkspaceOrigin)=>{
   if(guardTaskLeave(()=>{void openSetup(capability,runtimeTaskId,modelMode,settingsDirectory,phonePlace,capturedOrigin)}))return;
   const origin=capturedOrigin||captureWorkspaceOrigin(),navigation=navigationWindow.current,closingTask=taskOpen;
   if(closingTask&&!await closeTask())return;
@@ -1745,7 +1747,45 @@ export default function App(){
   await navigate('setup',undefined,{keepOrigin:true,taskClosed:closingTask,...(proposal?{stillCurrent:()=>!document.hidden&&phonePreparationOwner()===proposal.owner}:modelInput?{stillCurrent:()=>sameModelSetupInput(modelInput,bridge.getState(),bridge.getDocumentEpoch())}:
     projectTools?{stillCurrent:()=>navigationWindow.current===navigation&&projectTools.ownerCurrent(null)}:{})});
  };
- const navigateFromSetup=(destination:SetupDestination)=>{const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];void navigate(target,undefined,{keepOrigin:true});setupReturnPending.current=true;};
+ // Keep just the current input location in the existing Setup origin, never an old pairing/prepare handle.
+ const homePhoneSetupInput=(section:null|'setup'):HomePhoneSetupInput|null=>{
+  const live=bridge.getState(),owner=live.state,view=obj(live.view),phone=obj(live.phoneDraft),draft=live.composer;
+  const place=currentPhonePlaceInput(),display=obj(obj(owner.features).display),adb=obj(display.adb);
+  const connection=backgroundConnection(display,owner.activeTaskId,asArray<string>(owner.moduleBusy));
+  if(live.host?.ready!==true||view.taskId!==null||view.section!==section||openedTaskId.current!==null||
+     owner.backgroundSetupOpen!==false||owner.filePath!==null||owner.fileLoading||owner.fileSaving||owner.queuedInputsPage||
+     owner.chatAttachmentPickerOpen||owner.attachmentImporting||owner.attachmentWorkspace?.open||
+     !place||place.mode!=='background'||!place.conversation||draft?.key!=='conversation:'+place.conversation||
+     phone.sourceState!=='current'||phone.startReceipt!=null||typeof phone.text!=='string'||!phone.text.trim()||
+     phone.text.length>4000||phone.text!==phoneText.currentValue()||!Number.isSafeInteger(draft.revision)||draft.revision<1||
+     !Number.isSafeInteger(phone.sourceEditTicket)||phone.sourceEditTicket<1||
+     !Number.isSafeInteger(view.resumeRevision)||view.resumeRevision<0||
+     !connection.canPair||connection.backend!=='wireless_adb'||display.taskOwned!==false||display.configured!==false||
+     display.helperConnected!==false||adb.phase!=='idle'||adb.identityPresent!==false||adb.helperAuthenticated!==false)return null;
+  return {place,composerRevision:draft.revision,sourceEditTicket:phone.sourceEditTicket,resumeRevision:view.resumeRevision};
+ };
+ const navigateFromSetup=(destination:SetupDestination)=>{
+  const target={connections:'model-settings',background:'background',appearance:'phone:appearance',local:'local'}[destination];
+  const origin=setupOrigin.current,source=origin.homePhoneSetup;
+  if(destination==='background'&&route==='setup'&&setupView==='phone'&&!setupCapability&&origin.route==='butler'&&source){
+   const current=()=>{
+    if(setupOrigin.current!==origin||navigationWindow.current!==source.navigation)return null;
+    const live=homePhoneSetupInput('setup');
+    return live&&live.composerRevision===source.composerRevision&&live.sourceEditTicket===source.sourceEditTicket&&
+     live.resumeRevision===source.resumeRevision?returnToPreparedPhoneDraft(source.place):null;
+   };
+   const place=current();
+   if(place){
+    void navigate(target,()=>{
+     setupOrigin.current={...origin,label:'返回原手机目标',focus:null,focusKey:'phone-place',phonePlace:place,
+      drawerChat:{id:place.conversation,draftKey:place.composer,documentEpoch:place.documentEpoch}};
+     setupReturnPending.current=true;
+    },{keepOrigin:true,stillCurrent:()=>current()?.documentEpoch===place.documentEpoch});
+    return;
+   }
+  }
+  void navigate(target,undefined,{keepOrigin:true});setupReturnPending.current=true;
+ };
  const openPythonTools=(position:CheckoutSavedPosition)=>{
   const start=bridge.getState(),view=obj(start.view),doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
   const {projectId,checkoutId,path,savedHash}=position, revision=start.state.requestedProjectRevision,resume=view.resumeRevision;
@@ -1936,6 +1976,9 @@ export default function App(){
      !setupReturnPending.current||navigationWindow.current!==visit.navigation||document.hidden||
      bridge.getDocumentEpoch()!==visit.document||typeof live.revision!=='number'||live.revision<=visit.afterRevision||
      view.taskId!==null||view.section!==null||!ownerWindowAvailable(owner)||!returnToPreparedPhoneDraft(visit.pin))return null;
+  const home=setupOrigin.current.homePhoneSetup,phone=obj(live.phoneDraft);
+  if(home&&(live.composer?.revision!==home.composerRevision||view.resumeRevision!==home.resumeRevision||
+     phone.sourceEditTicket!==home.sourceEditTicket||phone.sourceState!=='current'||phone.startReceipt!=null||phone.text!==phoneText.currentValue()))return null;
   const display=obj(obj(owner.features).display),adb=obj(display.adb),generation=adb.generation,setupRevision=display.setupRevision;
   const connection=backgroundConnection(display,owner.activeTaskId,asArray<string>(owner.moduleBusy));
   if(!connection.supported||connection.backend!=='wireless_adb'||display.taskOwned!==false||connection.busy||
@@ -1950,7 +1993,8 @@ export default function App(){
   observation.setupRevision===visit.first.setupRevision+1;
  useLayoutEffect(()=>{
   const origin=setupOrigin.current,pin=origin.phonePlace,initial=bridge.getState().revision;
-  if(route!=='background'||setupCapability!=='phone'||!setupReturnPending.current||pin?.mode!=='background'||
+  const exactHome=origin.route==='butler'&&origin.homePhoneSetup?.navigation===navigationRevision-1;
+  if(route!=='background'||(setupCapability!=='phone'&&!exactHome)||!setupReturnPending.current||pin?.mode!=='background'||
      origin.task||origin.projectId||(origin.route!=='chat'&&origin.route!=='butler')||typeof initial!=='number'||!Number.isSafeInteger(initial))return;
   const visit:BackgroundPhoneDraftVisit={origin,pin,navigation:navigationRevision,document:bridge.getDocumentEpoch(),afterRevision:initial,
    first:null,seenAuthentication:false,retired:false};
@@ -2003,18 +2047,18 @@ export default function App(){
  };
  const originalPhoneModelInput=(live:ReturnType<typeof bridge.getState>):OriginalPhoneModelInput|null=>{
   const owner=live.state,draft=live.composer,phone=obj(live.phoneDraft),view=obj(live.view),preference=obj(owner.conversationModel);
-  const conversationId=owner.conversationId;
+  const conversationId=owner.conversationId,mode=phone.mode;
   if(typeof conversationId!=='string'||!conversationId||conversationId.length>240||draft?.key!=='conversation:'+conversationId||
      draft.ready!==true||draft.conversationId!==conversationId||view.taskId!==null||openedTaskId.current!==null||
      owner.conversationReader||owner.queuedInputsPage||owner.attachmentWorkspace?.open||owner.chatAttachmentPickerOpen||
      owner.attachmentImporting||owner.filePath!==null||owner.fileLoading||owner.fileSaving||owner.chatSubmitting||owner.phoneSubmitting||
-     phone.phone!==true||phone.mode!=='main_screen'||phone.channelOrigin!==false||phone.sourceState!=='current'||
+     phone.phone!==true||(mode!=='main_screen'&&mode!=='background')||phone.channelOrigin!==false||phone.sourceState!=='current'||
      phone.startReceipt!=null||typeof phone.text!=='string'||!phone.text.trim()||phone.text.length>4000||phone.text!==phoneText.currentValue()||
      preference.scopeKey!=='conversation:'+conversationId||preference.inherited!==true||preference.target!==null||
      ![draft.epoch,draft.revision,phone.epoch,phone.revision,phone.sourceEditTicket,view.resumeRevision,preference.revision]
        .every(value=>Number.isSafeInteger(value)&&value>=0)||draft.revision<1||phone.revision<1||phone.sourceEditTicket<1)return null;
   return {conversationId,key:draft.key,epoch:draft.epoch,revision:draft.revision,phoneEpoch:phone.epoch,phoneRevision:phone.revision,
-    sourceEditTicket:phone.sourceEditTicket,resumeRevision:view.resumeRevision,preferenceRevision:preference.revision};
+    sourceEditTicket:phone.sourceEditTicket,resumeRevision:view.resumeRevision,preferenceRevision:preference.revision,mode};
  };
  const sameOriginalPhoneModelInput=(expected:OriginalPhoneModelInput,live:ReturnType<typeof bridge.getState>)=>{
   const now=originalPhoneModelInput(live);
@@ -2025,7 +2069,7 @@ export default function App(){
   if(openOriginalChatModelSettings())return;
   const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch(),conversation=state.conversationId;
   const original=bridge.getState(),selection=original.state;
-  const phoneInput=route==='chat'&&intent==='main_screen'&&!taskOpen&&!taskOpening&&!phoneAction.current&&!phoneReviewLive.current&&
+  const phoneInput=route==='chat'&&intent!=='chat'&&!taskOpen&&!taskOpening&&!phoneAction.current&&!phoneReviewLive.current&&
    obj(original.view).section===null&&can('models.snapshot')&&can('connections.leave')?originalPhoneModelInput(original):null;
   const input=isChatSurface&&intent==='chat'&&!taskOpen?modelSetupInput(original,documentEpoch):null;
   const captured=captureWorkspaceOrigin();
@@ -2042,8 +2086,8 @@ export default function App(){
     selection.modelSelectionRevision>=0&&selection.modelSelectionRevision===live.state.modelSelectionRevision;
    const unconfigured=current?.model.availability==='unconfigured'&&!current.model.configured&&!current.model.testing&&stableSelection&&
     !conversationModelName(live.state)&&live.capabilities.commands.includes('connections.enter');
-   if(unconfigured&&phoneInput&&sameOriginalPhoneModelInput(phoneInput,live)){
-    const visit={input:phoneInput,navigation:navigation+1,selectionRevision:Number(selection.modelSelectionRevision)};
+   if(unconfigured&&phoneInput&&phoneInput.mode===intent&&sameOriginalPhoneModelInput(phoneInput,live)){
+    const visit={input:phoneInput,navigation:navigation+1,selectionRevision:Number(selection.modelSelectionRevision),originDocument:documentEpoch};
     const scoped={...origin,phoneModelInput:visit};
     const stillCurrent=()=>{
      const now=bridge.getState();
@@ -2068,6 +2112,7 @@ export default function App(){
  const phoneModelVisit=firstModelOrigin?.phoneModelInput;
  const originalPhoneModelCurrent=(origin:WorkspaceOrigin,visit:OriginalPhoneModelVisit,selectionRevision:number,live:ReturnType<typeof bridge.getState>)=>
   !document.hidden&&!setupReturnPending.current&&relatedOrigin.current===origin&&navigationWindow.current===visit.navigation&&
+  (visit.input.mode==='main_screen'||bridge.getDocumentEpoch()===visit.originDocument)&&
   obj(live.view).section==='models'&&live.state.modelSelectionBusy===false&&live.state.modelSelectionRevision===selectionRevision&&
   !phoneAction.current&&!phoneReviewLive.current&&sameOriginalPhoneModelInput(visit.input,live);
  const phoneModelRevision=state.modelSelectionRevision;
@@ -2081,7 +2126,8 @@ export default function App(){
    if(!current())return false;
    openingModelSetup.current=true;
    try{
-    const expected={...visit.input,selectionRevision};
+    const {mode,...original}=visit.input;
+    const expected={...original,selectionRevision,...(mode==='background'?{mode}:{})};
     // One local settings proof combines the unchanged original editor and the actual saved model binding.
     const proof=obj(await bridge.command('models.snapshot',{originalPhoneInput:expected}).catch(()=>null));
     if(!current()||proof.originalPhoneInputMatched!==true||Object.entries(expected).some(([field,value])=>proof[field]!==value)||
@@ -2091,6 +2137,7 @@ export default function App(){
      const arrived=()=>{
       const now=bridge.getState(),section=obj(now.view).section;
       return !document.hidden&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===visit.navigation+1&&
+       (mode==='main_screen'||now.state.modelSelectionBusy===false&&now.state.modelSelectionRevision===selectionRevision)&&
        (section==='models'||section===null)&&sameOriginalPhoneModelInput(visit.input,now);
      };
      const ready=()=>obj(bridge.getState().view).section===null?true:undefined;
@@ -4998,9 +5045,15 @@ export default function App(){
    void openRelatedWorkspace('tasks',captureNavigationOrigin());
   }else if(key==='remoteInbox'){
    void openNotifications(()=>{notificationMemory.current.attentionRequest=(notificationMemory.current.attentionRequest||0)+1});
-  }else if(key==='setup')openSetup();
+  }else if(key==='setup'){
+   const input=route==='butler'&&intent==='background'&&!taskOpen&&!taskOpening&&!preparationTarget&&
+    !phoneAction.current&&!phoneReviewLive.current&&!draftSwitchPending()?homePhoneSetupInput(null):null;
+   if(input)void openSetup(undefined,undefined,undefined,undefined,undefined,
+    {...captureWorkspaceOrigin(),homePhoneSetup:{...input,navigation:navigationWindow.current+1}});
+   else void openSetup();
+  }
   else navigate(key);
- },[can,run,route,pickTeamForCurrentDraft,desktopNavigation,captureNavigationOrigin,openRelatedWorkspace,openNotifications,openSetup,navigate]);
+ },[can,run,route,intent,taskOpen,taskOpening,preparationTarget,pickTeamForCurrentDraft,desktopNavigation,captureWorkspaceOrigin,captureNavigationOrigin,openRelatedWorkspace,openNotifications,openSetup,homePhoneSetupInput,navigate]);
  const homeFilesOpening=useRef(false);
  const privateHomeFiles=(native:ReturnType<typeof bridge.getState>)=>{
   const owner=native.state,view=obj(native.view),draft=native.composer,phone=obj(native.phoneDraft),available=native.capabilities.commands;

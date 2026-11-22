@@ -438,7 +438,7 @@ internal class PocketWebBridge(
     private val removedProjectFiles=PocketWebRemovedProjectFiles(controller,{ project -> !closed && documentId!=null && section==null && taskViewId==null &&
         controller.webPrivateOwnerVisible() && controller.state.projectId==project && controller.state.filePath==null },::captureWindow,::acceptsWindow)
     private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() },
-        ::captureWindow, ::acceptsWindow, ::captureRetainedDraftOriginal)
+        ::captureWindow, ::acceptsWindow, ::captureRetainedDraftOriginal, ::captureSuppliedViteLockRoute)
     private val knowledge = PocketWebKnowledge(controller, projectDevelopment::conventionDraft)
     private val butlerPreparations = PocketWebButlerPreparations(controller, { !closed && documentId != null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
     private val localPages = PocketWebLocal(controller) { taskViewId }
@@ -561,7 +561,7 @@ internal class PocketWebBridge(
         cancelStatePublication()
         presentation.close()
         projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear()
-        localSourceIntake.close()
+        localSourceIntake.close();controller.projectFileImports.retireSuppliedLock()
         projectGitImport.close()
         background.clear()
         remoteInbox.close()
@@ -615,6 +615,19 @@ internal class PocketWebBridge(
         }.getOrDefault(false)
     }
 
+    /** Keep only picker intent across the expected OS pause, never the old Web window or review. */
+    private fun captureSuppliedViteLockRoute(project:String): () -> Boolean {
+        val document=requireNotNull(documentId)
+        val navigation=controller.projectWorkbench.navigationRevision()
+        val state=controller.state
+        val original=Triple(state.requestedProjectRevision,state.requestedTaskRevision,state.requestedConnectionRevision)
+        return {
+            val now=controller.state
+            !closed&&documentId==document&&section==null&&taskViewId==null&&now.filePath==null&&now.projectId==project&&
+                navigation==controller.projectWorkbench.navigationRevision()&&
+                original==Triple(now.requestedProjectRevision,now.requestedTaskRevision,now.requestedConnectionRevision)
+        }
+    }
     private fun freshLibraryEntry(): (() -> Boolean)? {
         val document = documentId ?: return null
         val ticket = captureWindow()
@@ -644,7 +657,7 @@ internal class PocketWebBridge(
         cancelStatePublication()
         projectGoal=null; pythonOutput.clear(); commandFence.invalidate()
         if (documentReplaced) controller.forgetShownPhoneActivity()
-        if (documentReplaced) localSourceIntake.close() else localSourceIntake.pause()
+        if (documentReplaced) {localSourceIntake.close();controller.projectFileImports.retireSuppliedLock()} else localSourceIntake.pause()
         projectGitImport.close()
         phoneViewer.clear()
         receivedTextResult.clear(); sentPhoneResult.clear()
@@ -729,6 +742,7 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("directVitePackageExport", controller.projectPackages.directViteExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
+            projection?.getJSONObject("state")?.put("suppliedViteLock", controller.projectFileImports.suppliedLockSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectGitImport", projectGitImport.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("projectLivePreview", projectLivePreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("appearance", presentation.snapshot())
@@ -982,7 +996,7 @@ internal class PocketWebBridge(
             if (action in PocketWebProjectDevelopment.COMMANDS) {
                 val previous=if (action=="projects.development.localBuild.review" && args.has("dependencyComparisonHandle"))
                     takeNodeDependencyComparison(args) else null
-                projectDevelopment.dispatch(action, args, previous) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
+                projectDevelopment.dispatch(action, args, previous) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in PocketWebProjectDevelopment.LOCK_COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
                 butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown", retainValue=action !in setOf("butler.preparation.project.savedRevisions","butler.preparation.project.followup") && !(action=="butler.preparation.project.review" && args.has("ownerRevision"))); publishState() }; return
@@ -2928,6 +2942,7 @@ internal class PocketWebBridge(
                 if (nextDocument != documentId) {
                     retireReplyPicker()
                     controller.projectPackages.retireDirectViteExport()
+                    controller.projectFileImports.retireSuppliedLock()
                     documentId = nextDocument; background.clear(); remoteInbox.clear(); phoneViewer.clear(); phoneComposer.documentChanged(); taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
                     controller.voiceInputTypeChanged(phoneComposer.intent)
                 }
@@ -3430,7 +3445,10 @@ internal class PocketWebBridge(
     private fun readOriginalPhoneModelInput(id: String, args: JSONObject) {
         checkedPayload(args, setOf("originalPhoneInput"))
         val expected = checkedPayload(args.getJSONObject("originalPhoneInput"), setOf("conversationId", "key", "epoch", "revision",
-            "phoneEpoch", "phoneRevision", "sourceEditTicket", "resumeRevision", "preferenceRevision", "selectionRevision"))
+            "phoneEpoch", "phoneRevision", "sourceEditTicket", "resumeRevision", "preferenceRevision", "selectionRevision", "mode"))
+        // An absent mode stays the old main-screen proof. Only the independent-screen opt-in is accepted.
+        val background = expected.has("mode")
+        require(!background || expected.opt("mode") == "background") { "请回到原独立屏目标核对" }
         val conversation = requiredString(expected, "conversationId")
         val key = requiredString(expected, "key")
         val epoch = requiredInt(expected, "epoch")
@@ -3447,6 +3465,8 @@ internal class PocketWebBridge(
         val window = captureWindow()
         val document = documentId
         val generation = domainGeneration
+        fun originalPhoneModeCurrent() = if (background) phoneComposer.originalBackgroundModelInputCurrent(phoneEpoch, phoneRevision, sourceEditTicket)
+            else phoneComposer.originalMainModelInputCurrent(phoneEpoch, phoneRevision, sourceEditTicket)
         fun current(): Boolean {
             val state = controller.state
             val draft = controller.composerDraft
@@ -3457,7 +3477,7 @@ internal class PocketWebBridge(
                 state.attachmentImporting || state.filePath != null || state.fileLoading || state.fileSaving ||
                 state.chatSubmitting || state.phoneSubmitting || state.conversationId != conversation || draft == null ||
                 draft.key != key || draft.conversationId != conversation || draft.revision != revision ||
-                controller.composerViewEpoch != epoch || !phoneComposer.originalMainModelInputCurrent(phoneEpoch, phoneRevision, sourceEditTicket)) return false
+                controller.composerViewEpoch != epoch || !originalPhoneModeCurrent()) return false
             val own = controller.conversationModelPreference()
             val model = controller.nativeModelSelection().status()
             return !model.pending() && model.revision() == selection && own.opt("scopeKey") == "conversation:$conversation" &&
@@ -4086,6 +4106,7 @@ internal class PocketWebBridge(
     private fun leaveTask() { controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
         openedRetainedDraftCopy = null
+        controller.projectFileImports.retireSuppliedLock()
         if(section=="remote")connectionPages.hostGoalOrigins.closeSaved(); localSourceIntake.close(); projectGitImport.close(); phoneViewer.clear(); controller.webChannels.clear(); controller.webSkills.clear(); commandFence.invalidate(); ++domainGeneration; modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(preserveModelPlace=true); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear(); deviceWindow?.close(); deviceWindow = null; section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }; section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close); section = null
     }
     /**
