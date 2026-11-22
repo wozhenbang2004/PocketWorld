@@ -60,7 +60,7 @@ type ReturnedReportProps={
   report:VerifiedHomeReport|null; task:ButlerHomeTask; active:boolean;
   onCopy:(text:string)=>Promise<unknown>; onOriginal:()=>void; onConversation?:()=>void;
   onIndependentFollowUp?:(handle:string)=>Promise<boolean>;
-  onLocateReport?:(report:VerifiedHomeReport)=>Promise<void>;
+  onLocateReport?:(report:VerifiedHomeReport,target:HTMLButtonElement)=>Promise<void>;
   onFiles?:(report:VerifiedHomeReport,target:HTMLButtonElement)=>Promise<void>;
 };
 export function ButlerReturnedReport({report,task,active,onCopy,onOriginal,onIndependentFollowUp,onConversation,onLocateReport,onFiles}:ReturnedReportProps){

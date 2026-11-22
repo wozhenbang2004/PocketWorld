@@ -53,14 +53,16 @@ export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversatio
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
 type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
  onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void;
- onSearchReturn?:(windowId:number)=>void};
+ onSearchReturn?:(windowId:number)=>void;workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn,workReportWindow,onWorkReportReturn}:Props){
  const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
- const requestOnly=!!shown.workRequest,searchOnly=!!shown.searchAnchor,backLabel=requestOnly?'返回原工作':searchOnly?'返回命中的原文':'返回原输入';
- const can=(action:string)=>available(action)&&(!requestOnly||action==='conversation.reader.close')&&
+ const workReportOnly=workReportWindow!==undefined&&workReportWindow===shown.window&&typeof shown.originalReportMessageId==='string';
+ const requestOnly=!!shown.workRequest,searchOnly=!!shown.searchAnchor,workOverlay=requestOnly||workReportOnly;
+ const backLabel=workOverlay?'返回原工作':searchOnly?'返回命中的原文':'返回原输入';
+ const can=(action:string)=>available(action)&&(!workOverlay||action==='conversation.reader.close')&&
   (!searchOnly||action==='conversation.reader.close'||action==='conversation.reader.earlier');
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef(''),position=useRef<Position>({index:0,offset:0,anchor:''});
@@ -272,13 +274,13 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   catch{/* The original place can still be used locally, never substitute a different row. */}
  };
  const saveReading=()=>{
-  if(indexScroll.current)return;
+  if(workReportOnly||indexScroll.current)return;
   const prior=programScroll.current;programScroll.current=null;
   if(sending.current||prior?.scope===scope&&Math.abs((scroll.current?.scrollTop??0)-prior.top)<1)return;
   remember(true);if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>void persist(),180);
  };
  const invoke=async(action:string,extra:Json={})=>{
-  const original=live.current;if(!original||sending.current||document.hidden||original.workRequest&&action!=='conversation.reader.close')return;
+  const original=live.current;if(!original||sending.current||document.hidden||(original.workRequest||workReportOnly)&&action!=='conversation.reader.close')return;
   if(action!=='conversation.reader.close')closingFromReader.current='';
   sending.current=true;setPending(true);setError('');remember();
   try{
@@ -286,7 +288,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
     if(timer.current){clearTimeout(timer.current);timer.current=null}
     const actual=bridge.getState().state.conversationReader,place=actual&&exactDetachedPlace(actual);
     if(place)extra={...extra,detachedPosition:place};
-   }else{
+   }else if(!workReportOnly){
     const saved=persist();
     if(action==='conversation.reader.earlier'||action==='conversation.reader.refresh')await saved;
    }
@@ -355,6 +357,22 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  const focusOpenedRow=()=>{
   if(focusOriginalInput())return true;
   const shownPage=live.current,search=shownPage?.searchAnchor;
+  if(workReportOnly){
+   const node=scroll.current,native=bridge.getState().state.conversationReader;
+   if(document.hidden||!node?.isConnected||!readyPage(shownPage)||!readyPage(native)||
+      readerScope(shownPage)!==scope||readerScope(native)!==scope||native.originalReportMessageId!==shownPage.originalReportMessageId)return false;
+   const id=shownPage.originalReportMessageId,message=exactRow(shownPage,id),revision=message?.sourceRevision;
+   if(message?.role!=='assistant'||!Number.isSafeInteger(revision)||revision<1||exactRow(native,id,revision)?.role!=='assistant')return false;
+   const row=shownRow(id,revision);
+   if(!row?.isConnected||!row.getClientRects().length)return false;
+   // The real portal autofocus can run after this reader's first layout effect.
+   if(restored.current!==scope){
+    node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top;
+    programScroll.current={scope,top:node.scrollTop};restored.current=scope;
+    position.current={index:Number(row.dataset.readerIndex),offset:0,anchor:id,revision};
+   }
+   row.focus({preventScroll:true});return true;
+  }
   if(search){
    const node=scroll.current,native=bridge.getState().state.conversationReader;
    if(document.hidden||!node?.isConnected||!readyPage(shownPage)||!readyPage(native)||readerScope(native)!==scope||
@@ -426,7 +444,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const node=scroll.current;
   if(!readyPage(page)||!node||!page)return;
   const first=restored.current!==scope;
-  if(first&&(page.searchAnchor||page.detachedHistoryResumeRevision)){focusOpenedRow();return;}
+  if(first&&(workReportOnly||page.searchAnchor||page.detachedHistoryResumeRevision)){focusOpenedRow();return;}
   const saved:Position=first?{index:Number(page.index||0),offset:Number(page.offset||0),anchor:String(page.anchor||'')}:position.current;
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
   // A native bookmark identifies a saved message. Its former index is no
@@ -444,17 +462,18 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   }
   if(!saved.anchor)remember();
   if(first)focusOpenedRow();
- },[scope,page?.window,page?.loading,page?.error,page?.limited,marker,positionNote?.scope]);
+ },[scope,page?.window,page?.loading,page?.error,page?.limited,marker,positionNote?.scope,workReportOnly]);
  useEffect(()=>{setError('');setPhoneOriginal(null)},[page?.window]);
- return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay" data-work-request={requestOnly||undefined}/><Drawer.Content className="pw-drawer pw-conversation-history-window" data-work-request={requestOnly||undefined} aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOpenedRow())event.preventDefault()}} onCloseAutoFocus={event=>{
+ return <Drawer.Root open={!!page} onOpenChange={open=>{if(!open)back()}} dismissible={!pending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay" data-work-request={workOverlay||undefined}/><Drawer.Content className="pw-drawer pw-conversation-history-window" data-work-request={workOverlay||undefined} aria-describedby="pw-history-window-description" inert={!page} onOpenAutoFocus={event=>{if(focusOpenedRow())event.preventDefault()}} onCloseAutoFocus={event=>{
   exit.onCloseAutoFocus(event);
   const origin=closingFromReader.current;closingFromReader.current='';
-  if(requestOnly&&!live.current&&!document.hidden)onWorkRequestReturn?.(shown.window);
+  if(workReportOnly){if(!live.current&&!bridge.getState().state.conversationReader)onWorkReportReturn?.(shown.window);}
+  else if(requestOnly&&!live.current&&!document.hidden)onWorkRequestReturn?.(shown.window);
   else if(searchOnly&&!live.current&&!bridge.getState().state.conversationReader)onSearchReturn?.(shown.window);
   else if(origin&&!document.hidden&&!bridge.getState().state.conversationReader)onReturnToChat?.();
  }}>
-  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">{requestOnly?'只读查看这件工作的原话，不会切换原输入。':searchOnly?'从命中的原消息开始，查看它在对话中的前后文。原输入没有切换。':'只读查看，原输入和发送回执仍留在原对话。'}{!requestOnly&&canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}
-   {workRequestNotice&&<span className="pw-field-hint">{workRequestNotice}</span>}</Drawer.Description></div>{!requestOnly&&!searchOnly&&<IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/>}<IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':backLabel} disabled={!page||pending} onClick={back}/></header>
+  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">{workReportOnly?'只读查看原对话里的汇报，关闭后回到这件工作。':requestOnly?'只读查看这件工作的原话，不会切换原输入。':searchOnly?'从命中的原消息开始，查看它在对话中的前后文。原输入没有切换。':'只读查看，原输入和发送回执仍留在原对话。'}{!workOverlay&&canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}
+   {workRequestNotice&&<span className="pw-field-hint">{workRequestNotice}</span>}</Drawer.Description></div>{!workOverlay&&!searchOnly&&<IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/>}<IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':backLabel} disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
    {!requestOnly&&shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
@@ -487,10 +506,10 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
      </>}
     </AccordionItem>
    </Accordion>}
-   {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
+   {!workReportOnly&&shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
-   {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
-    const result=messageTaskResult(message),fileResult=!searchOnly&&onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
+   {rows.map((message,index)=>{const phone=!workReportOnly&&message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
+    const result=messageTaskResult(message),fileResult=!workReportOnly&&!searchOnly&&onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
     const canSelectQuote=canQuoteNew&&!pending&&!!newQuoteTarget(message);
     const readingFiles=!resultNotice?.index&&resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
     return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
@@ -500,22 +519,22 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
       onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
       <AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>
      </PhoneMessageReturn>:message.originalHostFinal?<p className="pw-user-text">{message.content}</p>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
-    {!requestOnly&&!searchOnly&&Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><MessageAttachment
+    {!workOverlay&&!searchOnly&&Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><MessageAttachment
      key={`${file.id}:${file.sha256}`} file={file} history view={`history:${shown.window}`}
      origin={{conversationId:shown.conversation,messageId:message.id,sourceRevision:message.sourceRevision,window:shown.window}}
      enabled={!!page&&page.window===shown.window&&!pending&&can('conversation.reader.attachment')} canLocate={can('attachmentWorkspace.open')}
      beforeOpen={()=>{remember();persist()}}/>)}</div>}
-    {!requestOnly&&page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
-    {!requestOnly&&!searchOnly&&page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} hasEarlier={shown.hasMore===true} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
+    {!workOverlay&&page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
+    {!workOverlay&&!searchOnly&&page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} hasEarlier={shown.hasMore===true} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
      const h=live.current;if(!h||!scroll.current?.contains(from)||h.window!==shown.window||h.conversation!==shown.conversation)return;
      const visit={...range,scope,returnInset:from.getBoundingClientRect().top-scroll.current.getBoundingClientRect().top,window:h.window,conversation:h.conversation,request:message.id,requestRevision:message.sourceRevision,target};
      if(moveToQuoteRow(visit,false)){setQuoteNote('');setQuoteVisit(visit)}else setQuoteNote('当前窗口还没有核对到引用的原消息，没有跳到其他位置。');
     }}/>}
-    {!requestOnly&&visibleVisit?.target===message.id&&<div className="pw-action-row">
+    {!workOverlay&&visibleVisit?.target===message.id&&<div className="pw-action-row">
      {canReuse&&activeDraft&&<Button variant="secondary" size="small" disabled={pending} onClick={()=>setReuse({messageId:visibleVisit.target,sourceRevision:visibleVisit.revision,key:activeDraft.key,epoch:activeDraft.epoch,prior:{reader:visibleVisit.window,request:visibleVisit.request,revision:visibleVisit.requestRevision,offset:visibleVisit.offset,chars:visibleVisit.chars}})}>本次再引用这段…</Button>}
      <Button variant="ghost" size="small" disabled={pending} onClick={returnFromQuote}>返回引用它的请求</Button>
     </div>}
-    {!requestOnly&&<div className="pw-action-row">
+    {!workOverlay&&<div className="pw-action-row">
      {!!message.content&&<MessageActions onCopy={()=>copy(message.content)}/>}
      {canSelectQuote&&<Button variant="ghost" size="small" leadingIcon={IconQuote} onClick={()=>{
       const target=newQuoteTarget(message);
@@ -548,8 +567,8 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">当前窗口未读到可显示的消息。</p>}
   </div>
-  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':backLabel}</Button>{!requestOnly&&!searchOnly&&<Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button>}</footer>
-  {!requestOnly&&reviewing&&<MessageQuote key={`${scope}:${reviewing.messageId}:${reviewing.prior?.request||''}`} target={reviewing}
+  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':backLabel}</Button>{!workOverlay&&!searchOnly&&<Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button>}</footer>
+  {!workOverlay&&reviewing&&<MessageQuote key={`${scope}:${reviewing.messageId}:${reviewing.prior?.request||''}`} target={reviewing}
    onClose={()=>{setReuse(null);setFirstQuote(null)}} onStaged={()=>{if(readerScope(live.current)===scope)void invoke('conversation.reader.close')}}/>}
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}
   {shownSource&&<AnswerSources key={`${shownSource.target.readerWindow}:${shownSource.target.messageId}:${shownSource.target.readerSourceRevision}`}
