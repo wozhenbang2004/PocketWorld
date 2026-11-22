@@ -2,13 +2,23 @@ import {useEffect,useRef,useState} from 'react';
 import {Button,TextField} from './forms-library';
 
 type Data=Record<string,any>;
-type Hit={hit:number;path:string;sha256:string;bytes:number;binary:boolean;change:string};
-type Page={searchHandle:string;sourceDigest:string;query:string;filter:string;fileCount:number;total:number;start:number;next:number;files:Hit[]};
+export type CheckoutPathHit={hit:number;path:string;sha256:string;bytes:number;binary:boolean;change:string};
+export type CheckoutPathPage={searchHandle:string;sourceDigest:string;query:string;filter:string;fileCount:number;total:number;start:number;next:number;files:CheckoutPathHit[]};
 type Props={project:string;checkout:string;filesHandle:string;busy:boolean;visible:(value:boolean)=>void;
-  invoke:(action:string,args:Data,accept:(v:Data)=>void)=>Promise<void>;open:(handle:string,hit:Hit)=>void};
+  invoke:(action:string,args:Data,accept:(v:Data)=>void)=>Promise<void>;open:(handle:string,hit:CheckoutPathHit)=>void};
 const sha=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+export function checkoutPathPage(r:Data,project:string,checkout:string,filesHandle:string,q:string,mode:'all'|'changed',start=0,last?:CheckoutPathPage|null):CheckoutPathPage{
+  if(r.projectId!==project||r.checkoutId!==checkout||r.filesHandle!==filesHandle||typeof r.searchHandle!=='string'||!r.searchHandle||
+    !sha(r.sourceDigest)||r.query!==q||r.filter!==mode||!Number.isInteger(r.total)||r.total<0||!Number.isInteger(r.fileCount)||r.fileCount<r.total||r.fileCount>2000||
+    r.start!==start||last&&(r.searchHandle!==last.searchHandle||r.sourceDigest!==last.sourceDigest||r.total!==last.total)||
+    !Array.isArray(r.files)||r.files.length!==Math.min(40,r.total-r.start)||r.next!==(r.start+r.files.length<r.total?r.start+r.files.length:-1)||
+    !r.files.every((v:Data,i:number)=>v.hit===r.start+i&&typeof v.path==='string'&&v.path.length>0&&v.path.length<=240&&sha(v.sha256)&&
+      Number.isSafeInteger(v.bytes)&&v.bytes>=0&&typeof v.binary==='boolean'&&['added','modified','unchanged'].includes(v.change)))
+    throw Error('这页命中不属于原副本的同一次查询，请重新查找。');
+  return r as CheckoutPathPage;
+}
 export function ProjectCheckoutPathSearch({project,checkout,filesHandle,busy,invoke,visible,open}:Props){
-  const [query,type]=useState(''),[changed,filter]=useState(false),[page,show]=useState<Page|null>(null),alive=useRef(true);
+  const [query,type]=useState(''),[changed,filter]=useState(false),[page,show]=useState<CheckoutPathPage|null>(null),alive=useRef(true);
   useEffect(()=>{alive.current=true;visible(false);return()=>{alive.current=false}},[filesHandle,visible]);
   function clear(){show(null);visible(false)}
   function find(start?:number){
@@ -17,14 +27,7 @@ export function ProjectCheckoutPathSearch({project,checkout,filesHandle,busy,inv
     const args=more?{searchHandle:last!.searchHandle,start}:{query:q,filter:mode};
     void invoke(more?'findNext':'find',args,r=>{
       if(!alive.current)return;
-      if(r.projectId!==project||r.checkoutId!==checkout||r.filesHandle!==filesHandle||typeof r.searchHandle!=='string'||!r.searchHandle||
-        !sha(r.sourceDigest)||r.query!==q||r.filter!==mode||!Number.isInteger(r.total)||r.total<0||!Number.isInteger(r.fileCount)||r.fileCount<r.total||r.fileCount>2000||
-        r.start!==(more?start:0)||more&&(r.searchHandle!==last!.searchHandle||r.sourceDigest!==last!.sourceDigest||r.total!==last!.total)||
-        !Array.isArray(r.files)||r.files.length!==Math.min(40,r.total-r.start)||r.next!==(r.start+r.files.length<r.total?r.start+r.files.length:-1)||
-        !r.files.every((v:Data,i:number)=>v.hit===r.start+i&&typeof v.path==='string'&&v.path.length>0&&v.path.length<=240&&sha(v.sha256)&&
-          Number.isSafeInteger(v.bytes)&&v.bytes>=0&&typeof v.binary==='boolean'&&['added','modified','unchanged'].includes(v.change)))
-        throw Error('这页命中不属于原副本的同一次查询，请重新查找。');
-      show(r as Page);visible(true);
+      show(checkoutPathPage(r,project,checkout,filesHandle,q,mode,start??0,more?last:undefined));visible(true);
     });
   }
   return <section aria-label="在整个副本找文件"><TextField label="找文件" placeholder="输入文件名或路径的一部分" value={query} isDisabled={busy}

@@ -74,6 +74,19 @@ function matchesPinnedPhonePreparation(state: Data, focus: SentPhoneGoalFocus | 
 }
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
 const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
+/** The Windows chooser's signed “仅目录和文本” scope, not inferred from platform or missing desktop metadata. */
+function recordedWorkspaceOnlyGrant(peer: Data, local: Data, now: number) {
+  const grants = peer.receivedGrantScopes;
+  if (!Array.isArray(grants) || grants.length !== 1 || !deviceHasRecordedWorkspaceRead(peer, local, now)) return false;
+  const scope = grants[0];
+  const exact = (values: unknown, expected: string[]) => Array.isArray(values) && values.length === expected.length && expected.every((s, i) => s === values[i]);
+  return typeof scope.grantId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(scope.grantId) &&
+    Number.isSafeInteger(scope.authorizationEpoch) && scope.authorizationEpoch > 0 &&
+    exact(scope.capabilities, ['tool.invoke', 'operation.get']) && exact(scope.toolNames, ['workspace.list', 'workspace.read']) &&
+    Array.isArray(scope.resources) && scope.resources.length === 1 && exact(scope.allowedOrigins, [local.deviceId]) &&
+    scope.allowDelegation === false && scope.maxDelegationDepth === 0 && scope.modelBudget === 0 && !('forwardingScope' in scope) &&
+    (!('historyRead' in scope) || exact(scope.historyRead?.methods, ['operation.get']));
+}
 type LastWindowsRead = { windowKey: string; receivedAt: number; metadata: Data };
 const originalHistoryKey = (review: Data) => JSON.stringify([review.viewHandle, review.view?.taskId, review.view?.operationId,
   review.view?.targetDeviceId, review.view?.instanceId, review.view?.argumentsDigest]);
@@ -553,6 +566,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   // must not be hidden behind an older identity-only description.
   const identityOnlyHere = lastIdentityOnly && !rows(peer?.receivedGrantScopes).some(row => row.receivedScope === true &&
     Number.isSafeInteger(row.expiresAt) && row.expiresAt > now && strings(row.capabilities).some(method => method === 'task.submitGoal' || method === 'tool.invoke'));
+  const recordedWindowsReadOnly = (at: number) => !sourceFocus && !!peer && windowsPeer && !identityOnlyHere &&
+    state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && localReadCurrent &&
+    !!peerPlace.current && peerId === selectedPeer.current && sameDeviceReadingPlace(peerPlace.current, local, peer) &&
+    Number.isSafeInteger(peer.authorizationEpoch) && peer.authorizationEpoch > 0 &&
+    snapshot?.hasMoreOutgoingGrants === false && peer.hasMoreReceivedGrantScopes === false &&
+    disclosure?.metadata?.grantReceiptsTruncated !== true && !viewingScopes.length && recordedWorkspaceOnlyGrant(peer, local, at);
+  const windowsReadOnlyHere = recordedWindowsReadOnly(now);
   const openDirectedPhone = (destination:'work'|'manual') => {
     if (!peer || selectedPeer.current !== peer.deviceId || retired(peer)) return;
     if (!phonePeer || desktopPeer || identityOnlyHere || !/^pw1_[a-f0-9]{64}$/.test(peer.deviceId) ||
@@ -575,11 +595,21 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer), kind: 'windows-workspace' });
     setForm('work');
   };
+  const prepareRecordedWindowsRead = () => {
+    const current = bridge.getState(), view = current.view as Data | undefined;
+    if (busy || document.hidden || view?.section !== 'devices' || view.taskId) return;
+    if (current.state.deviceWorkspaceRevision !== localRead?.revision || !recordedWindowsReadOnly(Date.now())) {
+      setError('原电脑或授权记录已变化。请重读本机记录，没有保存目标或联系电脑。'); return;
+    }
+    prepareWindowsWorkspace(true);
+  };
   const openDesktopPreparation = () => { rememberReadingPosition('detail'); setError(''); setNotice(''); setDesktopOpen(true); };
   // See the next available step without making old work a prerequisite for new work.
   const peerEntry = !peer || retired(peer) ? null
     : phonePeer && !desktopPeer && !identityOnlyHere && phoneWork.labels.size>0 && supported('deviceTaskScope.prepare')
       ? { kind: 'goal', label: '准备给这部手机', icon: IconAdd, open: prepareDeviceGoal }
+    : windowsReadOnlyHere && supported('deviceTaskScope.prepare')
+      ? { kind: 'workspace', label: '准备只读任务', icon: IconFolder, open: prepareRecordedWindowsRead }
     : !deviceChannelWasConnected(peer) && available(peer.actions?.connect) && supported('devices.reviewAction')
       ? { kind: 'connect', label: '核对并连接', icon: IconDevices, open: () => reviewPeerConnection(peer) }
     : identityOnlyHere ? (deviceChannelWasConnected(peer) && supported('devices.snapshot')
@@ -590,6 +620,8 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     : !desktopPeer && deviceChannelWasConnected(peer) && supported('devices.snapshot')
       ? { kind: 'capabilities', label: '核对可用能力', icon: IconLayers, open: () => readPeerCapabilities() }
       : null;
+  const connectForReadOnly = windowsReadOnlyHere && peerEntry?.kind === 'workspace' && !!peer &&
+    !deviceChannelWasConnected(peer) && available(peer.actions?.connect) && supported('devices.reviewAction');
   const groupWindowsGrantRead = !!peer && windowsPeer && deviceChannelWasConnected(peer);
   const peerCapabilityRead = peer && !retired(peer) && !phoneAccess && peerEntry?.kind !== 'capabilities' &&
     <Button variant="secondary" disabled={busy || !supported('devices.snapshot')} onClick={readPeerCapabilities}>
@@ -1543,11 +1575,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               : !deviceChannelWasConnected(peer) ? <p>{connectionRecoveryLine(peer)}</p>
               : <p>当时通道已接通；画面、输入和本次执行范围另行核对。</p>}
             {mayRepairAddress && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={openMissingAddressForm}>更新这台设备的地址</Button></div>}
+            {connectForReadOnly && <div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={() => reviewPeerConnection(peer)}>核对并连接</Button></div>}
             {!retired(peer) && windowsObservation && <p className="pw-field-hint">{windowsObservation}</p>}
             {!retired(peer) && <><dl className="pw-device-scope-directions">
-              <div><dt>对方授予本机</dt><dd>{received?.text}</dd></div>
+              <div><dt>对方授予本机</dt><dd>{windowsReadOnlyHere ? '可列目录、读小文本；这份授权不含桌面' : received?.text}</dd></div>
               <div><dt>本机授予对方</dt><dd>{given?.text}</dd></div>
-            </dl><p>这是本机留存的授权，不是此刻可执行或已接单的证明。详细范围见「能力与两端权限」。</p></>}
+            </dl><p>{windowsReadOnlyHere ? '可先在手机保存只读目标，不联系电脑。实际读取时另行核对连接和范围。' : '这是本机留存的授权，不是此刻可执行或已接单的证明。详细范围见「能力与两端权限」。'}</p></>}
           </section>
           {showPeerArchive && <section className="pw-device-section pw-device-peer-archive" aria-label="这台设备的本机往来记录">
             <header className="pw-device-section-heading"><div><h3>本机往来记录</h3>
@@ -1570,7 +1603,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 </> : <p>没有核对到对方给本机的新工作范围。配对或连接成功不等于可以交办。</p>}
               </div>}
               <div className="pw-form-actions">
-              {desktopPeer && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button variant="secondary" disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对桌面观看范围</Button>}
+              {desktopPeer && !windowsReadOnlyHere && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button variant="secondary" disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对桌面观看范围</Button>}
               {phonePeer && !desktopPeer && !identityOnlyHere && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => openDirectedPhone('manual')}>手动查看这部手机的屏幕范围</Button>}
               {windowsPeer && !identityOnlyHere && peerEntry?.kind !== 'workspace' && supported('deviceTaskScope.prepare') &&
                 <Button variant="secondary" disabled={busy} onClick={() => prepareWindowsWorkspace()}>准备读取这台电脑的工作区</Button>}
@@ -1578,7 +1611,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                 ? '对方上次只公开身份。这里不创建交办任务，也不会改用其他设备。'
                 : '尚未核对到能锁定这台伙伴的工作方式。如果不指定设备，可从设备总览另行准备目标。'}</p>}
               </div>
-              {desktopPeer && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
+              {desktopPeer && !windowsReadOnlyHere && <p className="pw-field-hint">准备页只核对电脑与观看范围，不打开画面，不申请控制。</p>}
               {phonePeer && <div><p>写目标后，选择主屏或独立后台屏及准确应用范围，再审阅开始。“完成目标”由模型操作；“手动控制”由你刷新静态画面后逐次点击、滑动或输入，不是实时视频镜像。</p>
             {phoneCapabilities.filter(cap => cap.id === 'agent.goal').map(cap => <p key={cap.id}>交给对端模型处理目标：{capabilityCaveat || (cap.ready === true ? '上次报告可接受目标，具体范围另审' : cap.canSubmitForLocalReview === true ? '可交给对方审阅，尚未开始' : '对端未报告可接受目标')}</p>)}</div>}
             </AccordionItem>}
@@ -1589,7 +1622,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
               {desktopPeer && <div><dt>桌面画面</dt><dd>需在桌面页单独连接，控制通道在线不代表能看到画面。</dd></div>}
             </dl>
               <div className="pw-form-actions">
-              {!retired(peer) && available(peer.actions?.connect) && supported('devices.reviewAction') && <Button disabled={busy} onClick={() => reviewPeerConnection(peer)}>核对并连接</Button>}
+              {!connectForReadOnly && !retired(peer) && available(peer.actions?.connect) && supported('devices.reviewAction') && <Button disabled={busy} onClick={() => reviewPeerConnection(peer)}>核对并连接</Button>}
               {available(peer.actions?.disconnect) && <Button variant="ghost" disabled={busy} onClick={() => actionReview('peer.disconnect', { deviceId: peer.deviceId })}>停止主动连接</Button>}
               </div>
               <p>同一局域网：对端保持接收服务开启，使用它当前显示的数字地址与短期邀请。换网不创建新身份；用原设备的邀请更新地址后重新连接。</p>

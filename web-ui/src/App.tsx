@@ -88,7 +88,6 @@ import {RemoteTaskWorkspace,RemoteManagedSessionsWorkspace} from './RemoteTaskWo
 import {AnswerSources,type AnswerSourceTarget} from './AnswerSources';
 import {ProjectConventionProvided} from './ProjectConventionProvided';
 import {ProvidedMemories} from './ProvidedMemories';
-import {originalAnswerMemoryMessage} from './memory-history';
 import {MessageQuote,type MessageQuoteTarget,type OpenedMessageDocumentDraft} from './MessageQuote';
 import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReader';
 import {PhoneReturnedReport,type PhoneReportTarget} from './PhoneReturnedReport';
@@ -7862,7 +7861,6 @@ export default function App(){
       typeof generatedDocument.id==='string'&&!!generatedDocument.id&&typeof generatedDocument.sha256==='string'&&
       /^[a-f0-9]{64}$/.test(generatedDocument.sha256)&&(checkGeneratedDocument||typeof generatedDocument.name==='string'&&!!generatedDocument.name)?
         {conversationId:String(state.conversationId||''),messageId:m.id,sourceRevision:m.sourceRevision,id:generatedDocument.id,sha256:generatedDocument.sha256}:null;
-    const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
       receiptsInMenu={!!savedTrace&&Number.isSafeInteger(m.sourceRevision)&&!!m.content.trim()&&can('tasks.open')&&can('history.read')}
@@ -7934,7 +7932,6 @@ export default function App(){
         {openingChatResultId===m.id?'正在读取成果…':earlierRun?'查看所属工作':returnedWork.status==='completed'?'查看成果':'查看这次工作'}
        </Button>}
       {m.role==='assistant'&&!!m.content&&<MessageActions onCopy={()=>copyWithLocalFeedback(m.content)} onSpeak={can('speech.speak')&&m.id&&row.lastOfRole?playing=>run(playing?'speech.speak':'speech.stop',{messageId:m.id}):undefined} speaking={!!state.speaking}/>}
-      {memoryShortcut&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconMemory} aria-label="核对这条回答提供给模型的记忆" onClick={()=>setProvidedMemoryMessage(memoryShortcut)}>本次记忆</Button>}
       {memoryDraftReply&&<Button variant="secondary" size="small" className="pw-message-trace" leadingIcon={IconMemory}
         onClick={event=>{
           const live=bridge.getState(),resume=obj(live.view).resumeRevision,conversation=live.state.conversationId;
@@ -7975,7 +7972,7 @@ export default function App(){
         {m.role==='user'&&row.lastOfRole&&m.id&&m.quoteAvailable&&Number(m.sourceRevision)>0&&!!m.content.trim()&&can('phone.draft.fromMessage')&&can('phone.prepare')&&<Button variant="ghost" leadingIcon={IconMonitor} disabled={phoneReviewPending||!!state.chatSubmitting||!!state.chatBusy||!!state.phoneSubmitting||isListening||phoneStart?.status==='unknown'} onClick={()=>stageMessageForPhone(m,['changed','unverified'].includes(phoneDraft.sourceState))}>{['changed','unverified'].includes(phoneDraft.sourceState)?'保留手机草稿，关联这条原话':'准备手机任务'}</Button>}
 
         {m.id&&replyContext?.replyToMessageIds.length&&can('message.origin')?<Button variant="ghost" leadingIcon={IconHistory} onClick={()=>{const source=Array.from(scroll.current?.querySelectorAll<HTMLElement>('[data-message-id]')||[]).find(row=>row.dataset.messageId===id);rememberChatPosition();setMessageOriginTarget({conversationId:String(state.conversationId),messageId:m.id!,sourceMessageIds:replyContext.replyToMessageIds,returnFocus:source?.querySelector<HTMLElement>('button[aria-label="消息操作与来源"]')});setMessageMenu(null)}}>查看对应原请求</Button>:null}
-        {m.role==='user'&&m.submission?.taskId&&can('queued.open')&&!savedLocalScreenResult(m,String(state.conversationId||''))&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
+        {!openQueuedReceipt&&m.role==='user'&&m.submission?.taskId&&can('queued.open')&&!savedLocalScreenResult(m,String(state.conversationId||''))&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{setMessageMenu(null);run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}}>原任务的输入队列</Button>}
         {canQuote&&<Button variant="ghost" leadingIcon={IconQuote} disabled={!draftKey||!!state.chatSubmitting} onClick={()=>{setMessageMenu(null);openQuote(m)}}>引用到草稿</Button>}
         {canKeepDocument&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting}
           onClick={()=>{setMessageMenu(null);openQuote(m,true)}}>保留为文档草稿</Button>}
@@ -7984,7 +7981,7 @@ export default function App(){
          选作草稿附件{savedAttachmentChoices.length>1?` ${index+1}`:''} · {file.name}</Button>)}
         {m.retainedSources&&can('sources.open')&&<Button variant="ghost" leadingIcon={IconLink} onClick={()=>{setMessageMenu(null);openSource(m)}}>回答来源</Button>}
         {m.projectConventionRecorded===true&&m.id&&can('conversation.projectConvention.read')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProjectConventionMessage(m.id!)}}>核对本次项目约定</Button>}
-        {!memoryShortcut&&m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>核对本次记忆</Button>}
+        {m.memoryReference&&m.id&&can('taskMemory.answer')&&<Button variant="ghost" leadingIcon={IconMemory} onClick={()=>{setMessageMenu(null);setProvidedMemoryMessage(m.id!)}}>核对本次记忆</Button>}
         {m.memoryReference&&<Button variant="ghost" onClick={()=>{setMessageMenu(null);openPersonalMemory({view:'memories'})}}>管理个人记忆</Button>}
         {m.role==='assistant'&&!phoneResult&&!taskResult&&m.taskId&&can('conversation.drafts')&&messageTaskAnchors.get(m.taskId)===index&&<ConversationDrafts key={m.taskId} taskId={m.taskId} reviewingMemory={memoryDraftTarget?.taskId===m.taskId} refreshRevision={Number(state.memoryRefreshRevision||0)} open={draft=>{setMessageMenu(null);openConversationDraft(draft,m)}}/>}
        </div></Popover>

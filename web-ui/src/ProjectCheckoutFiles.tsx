@@ -4,7 +4,7 @@ import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextFi
 import { InlineDiff } from './shell-library';
 import { IconFolder, IconSearch } from './icons';
 import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectCheckoutTextSearch';
-import {ProjectCheckoutPathSearch} from './ProjectCheckoutPathSearch';
+import {checkoutPathPage,ProjectCheckoutPathSearch,type CheckoutPathHit,type CheckoutPathPage} from './ProjectCheckoutPathSearch';
 import {checkoutDirectoryPage,ProjectCheckoutDirectory,type DirectoryFile,type DirectorySelection} from './ProjectCheckoutDirectory';
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { bridge } from './bridge';
@@ -86,7 +86,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
   const [listing, setListing] = useState<Data | null>(null), [file, setFile] = useState<Data | null>(null), [text, setText] = useState('');
-  const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'directory'|'path'|'text'|'git'>('path');
+  const [finding,setFinding]=useState(false),[finder,setFinder]=useState<'directory'|'path'|'text'|'git'|'changes'>('path');
+  const [changes,setChanges]=useState<CheckoutPathPage|null>(null),[changeSubmitted,setChangeSubmitted]=useState(false);
+  const changesHeading=useRef<HTMLHeadingElement>(null);
   const [directory,setDirectory]=useState<DirectorySelection|null>(null);
   const [folderEditor,setFolderEditor]=useState<FolderEditor|null>(null), folderEditorNow=useRef<FolderEditor|null>(null);
   const folderHeading=useRef<HTMLHeadingElement>(null);
@@ -231,10 +233,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const readDirectoryPage = (value: Data, path: string) => value.readOnly===true&&value.directoryPage?
     checkoutDirectoryPage(value.directoryPage,projectId,checkoutId,value.filesHandle,path,0,value.sourceDigest):null;
+  const retireListedSave = () => setListing(previous=>previous?.priorSavedFile?{...previous,priorSavedFile:undefined}:previous);
+  const invalidateFileInventory = () => {
+    setListingStale(true);setFinding(false);setSearchVersion(epoch=>epoch+1);
+    setDirectory(previous=>previous?{path:previous.path,page:null}:null);
+  };
   const readList = (more = false) => {
     const folder=more?undefined:directory?.path;
-    if (!entered.current && !edits.current && live(generation.current))
-      setListing(previous => previous?.priorSavedFile ? {...previous,priorSavedFile:undefined} : previous);
+    if (!entered.current && !edits.current && live(generation.current)) retireListedSave();
     return invoke('list', { afterPath: more ? listing?.nextPath || '' : '', sourceDigest: more ? listing?.sourceDigest || '' : '',
       ...(folder!==undefined?{refreshDirectory:folder}:{}) }, value => {
       if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('文件列表不属于原副本。');
@@ -388,6 +394,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     const original = currentFile.current;
     if (!original || folderEditorNow.current || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || document.hidden) return;
     const key = keyFor(original.path);
+    if (finder==='changes') return;
     if (value.length > 262144 || new TextEncoder().encode(value).length > 262144) { setError('编辑上限为 256 KiB，已有文字保留。'); return; }
     if (!interfaceDrafts.has(key) && interfaceDrafts.size >= 32) { setError('有 32 份界面文字尚未确认缓存，请先处理已有草稿。'); return; }
     interfaceDrafts.set(key, value); currentText.current = value; setText(value);
@@ -401,6 +408,112 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       .finally(() => { edits.current--; if (alive.current) setEditing(edits.current > 0); });
   };
   const dismissAdoption = () => { if (entered.current || edits.current) return; const selected = activeAdoption.current; activeAdoption.current = null; setAdoption(null); if (selected) void latest.current.run(command + 'dismissImport', { viewHandle, filesHandle: handle.current, importHandle: selected.importHandle }).catch(() => {}); };
+  const hasChangeReview = !sourceMember&&!hostFile&&listing?.readOnly===true&&listing.projectId===projectId&&
+    listing.checkoutId===checkoutId&&listing.filesHandle===handle.current&&
+    ['find','findNext','readFound','reviewImport','import','dismissImport'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
+  const cleanChangeSource = (value:Data,sha?:string) => {
+    const actual=value.latest;
+    return value.filesHandle===handle.current&&value.projectId===projectId&&value.checkoutId===checkoutId&&
+      typeof value.fileHandle==='string'&&!!value.fileHandle&&Number.isSafeInteger(value.revision)&&value.revision>=0&&value.dirty===false&&value.conflict===false&&value.saveUnknown===false&&!value.draftError&&
+      actual?.deleted===false&&actual.projectId===projectId&&actual.checkoutId===checkoutId&&actual.path===value.path&&
+      fileHash(value.baseHash)&&value.baseHash===actual.expectedHash&&value.baseHash===actual.sha256&&
+      (!sha||sha===value.baseHash)&&typeof actual.content==='string'&&value.baseContent===actual.content&&value.text===actual.content&&
+      currentText.current===value.text&&!interfaceDrafts.has(keyFor(value.path));
+  };
+  const canEnterChanges = hasChangeReview&&orphan===null&&!blockedEdit.current&&!choice&&!adoption&&!pythonRunReview&&
+    !activeMarkdown.current&&(!file||currentFile.current===file&&cleanChangeSource(file));
+  const readChangedPage = (start=0,previous?:CheckoutPathPage) => {
+    if (!hasChangeReview||entered.current||edits.current||!live(generation.current)) return;
+    if (!previous) setChanges(null);
+    void invoke(previous?'findNext':'find',previous?{searchHandle:previous.searchHandle,start}:{query:'',filter:'changed'},value=>{
+      const page=checkoutPathPage(value,projectId,checkoutId,handle.current,'','changed',start,previous);
+      if(page.files.some(hit=>hit.change==='unchanged'))throw Error('没有取得该副本的原改动列表。');
+      setChanges(page);
+    });
+  };
+  const clearChangeEditor = () => {
+    currentFile.current=null;setFile(null);setOrphan(null);setFileFind(null);holdFolderEditor(null);
+  };
+  const enterChanges = () => {
+    if (!canEnterChanges||entered.current||edits.current||!live(generation.current)||currentFile.current!==file||
+        activeAdoption.current||pythonReviewNow.current||activeMarkdown.current) return;
+    // The ordinary editor is clean. Retain its verified Save receipt, not an editor handle
+    // which a later file read could replace before its acknowledgement.
+    clearChangeEditor();setChangeSubmitted(false);setFinding(false);setFinder('changes');setTreeOpen(true);
+    readChangedPage();
+  };
+  const reviewImport = (source:Data,sha?:string) => invoke('reviewImport',{fileHandle:source.fileHandle},value=>{
+    if(value.projectId!==projectId||value.checkoutId!==checkoutId||value.fileHandle!==source.fileHandle||
+        value.path!==source.path||value.filesHandle!==handle.current||!value.importHandle)
+      throw Error('采纳审阅不属于原文件。');
+    if(sha&&(currentFile.current!==source||!cleanChangeSource(source,sha)||
+        value.format!=='pocketworld.local-text-file-review.v1'||value.expectedHash!==sha||value.content!==source.latest.content||
+        typeof value.importHandle!=='string'||!/^([a-f0-9]{8})(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value.importHandle)||
+        !Number.isSafeInteger(value.expiresAt)||value.expiresAt<=Date.now()||
+        value.deleted!==false||value.executionAuthorized!==false||value.projectVersionWritten!==false||
+        !Number.isInteger(value.expectedVersion)||value.expectedVersion<0||
+        !(value.targetDeleted===true&&value.expectedTargetHash==='absent'||value.targetDeleted===false&&fileHash(value.expectedTargetHash))||
+        typeof value.diff!=='string'||value.diff.length>65536||typeof value.same!=='boolean'||typeof value.importable!=='boolean'||typeof value.truncated!=='boolean'))
+      throw Error('未核对到该已保存文件与当前正式版本，没有准备采纳。');
+    activeAdoption.current=value;setAdoption(value);
+  });
+  const openChangedFile = async (hit:CheckoutPathHit) => {
+    const page=changes,sequence=generation.current,filesHandle=handle.current;
+    if(finder!=='changes'||!page?.files.includes(hit)||hit.binary||hit.bytes>262144||
+        currentFile.current||entered.current||edits.current||!live(sequence))return;
+    // Native can open the hit even if the reply is lost. Its earlier cold
+    // save locator is usable only with no file opened in this same window.
+    retireListedSave();
+    const opened=await invoke('readFound',{searchHandle:page.searchHandle,hit:hit.hit},value=>{
+      if(value.path!==hit.path||value.matchedFileSha256!==hit.sha256||value.latest?.expectedHash!==hit.sha256||
+          value.filesHandle!==filesHandle||value.projectId!==projectId||value.checkoutId!==checkoutId)
+        throw Error('副本中的所选文件已变化，请重读改动，没有打开替代文件。');
+      apply(value);setTreeOpen(false);
+    });
+    const source=currentFile.current as Data|null;
+    if(!opened||!source||source.fileHandle!==opened.fileHandle||filesHandle!==handle.current||!live(sequence)||entered.current||edits.current)return;
+    if(!cleanChangeSource(source,hit.sha256)){
+      // A preexisting retained draft belongs to this editor, never to the import.
+      setFinder(directory?'directory':'path');setChanges(null);
+      setError('这条改动还不能采纳。已打开同一文件；请先处理这里的草稿或保存状态。');
+      requestAnimationFrame(()=>{if(live(sequence)&&currentFile.current===source)editorHeading.current?.focus()});
+      return;
+    }
+    await reviewImport(source,hit.sha256);
+  };
+  const confirmImport = (shown:Data) => {
+    const selected=activeAdoption.current,fromChanges=finder==='changes';
+    if (!selected||selected!==shown||Number(selected.expiresAt)<=Date.now()||entered.current||edits.current||
+        !live(generation.current)||!selected.importable||selected.truncated||
+        fromChanges&&(!file||currentFile.current!==file||file.fileHandle!==selected.fileHandle||!cleanChangeSource(file,selected.expectedHash)))return;
+    activeAdoption.current=null;setAdoption(null);
+    if(fromChanges){
+      // Adoption can change the baseline without changing the copy's source
+      // digest. A lost receipt cannot justify any pre-adoption change flags.
+      setChangeSubmitted(true);setChanges(null);invalidateFileInventory();
+    }
+    void invoke('import',{importHandle:selected.importHandle},value=>{
+      if(fromChanges){
+        const receipt=value.importReceipt;
+        if(value.fileHandle!==selected.fileHandle||value.path!==selected.path||
+            !(value.importStatus==='unknown'&&receipt==null||value.importStatus==='observed'&&receipt?.format==='pocketworld.local-text-file-import.v1'&&
+              receipt.projectId===projectId&&receipt.checkoutId===checkoutId&&receipt.path===selected.path&&
+              receipt.importedHash===selected.expectedHash&&receipt.replayAllowed===false&&
+              receipt.projectVersionCommitted===!selected.same&&receipt.version===selected.expectedVersion+(selected.same?0:1)&&
+              typeof receipt.checkoutBaselineUpdated==='boolean'))
+          throw Error('没有取得所选文件的完整采纳回执。请重新核对，不自动重发。');
+      }
+      apply(value);
+    });
+  };
+  const backFromChanges = () => {
+    if (finder!=='changes') return false;
+    if (entered.current||edits.current||!live(generation.current)) return true;
+    if (file) {
+      dismissAdoption();clearChangeEditor();setChangeSubmitted(false);setTreeOpen(true);setError('');
+    }else{setFinder(directory?'directory':'path');setChanges(null);setError('');}
+    return true;
+  };
   const observedPythonRead:PythonEditorSource|undefined = !hostFile && !sourceMember && file && orphan===null && !blockedEdit.current &&
     file.filesHandle===handle.current && file.projectId===projectId && file.checkoutId===checkoutId &&
     file.dirty===false && file.conflict===false && file.saveUnknown===false &&
@@ -552,9 +665,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       folderHeading.current?.focus({preventScroll:true});
     }
   },[browsingFolder]);
+  useLayoutEffect(() => {
+    if(finder==='changes'&&!file&&live(generation.current)){
+      changesHeading.current?.scrollIntoView({block:'start'});
+      changesHeading.current?.focus({preventScroll:true});
+    }
+  },[finder,!!file]);
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
     if (activeMarkdown.current) closeMarkdown();
+    else if (backFromChanges()) return;
     else if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
     else if(!browseFromEditor())close();
   };
@@ -574,12 +694,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
-    if (browsingFolder || markdownVisit || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
+    if (finder==='changes' || browsingFolder || markdownVisit || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
     const timer = window.setTimeout(() => {
       if (!folderEditorNow.current&&!activeMarkdown.current) void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false));
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [file, busy, editing, orphan, adoption, markdownVisit, browsingFolder]);
+  }, [file, busy, editing, orphan, adoption, markdownVisit, browsingFolder, finder]);
   useEffect(() => {
     setAdoptionExpired(false); if (!adoption) return; adoptionHeading.current?.focus();
     const remaining = Number(adoption.expiresAt) - Date.now();
@@ -606,8 +726,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         if (known) setSavedEdit(known);
         // Inventory, path and text hits may refer to the pre-save tree. A
         // new list/search is explicit and never executes Git in the background.
-        setListingStale(true); setFinding(false); setSearchVersion(epoch=>epoch+1);
-        setDirectory(previous=>previous?{path:previous.path,page:null}:null);
+        invalidateFileInventory();
         setGitView(last=>last?.pendingOperation ? {pendingOperation:last.pendingOperation} : null);
       }
     });
@@ -649,9 +768,29 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       {evidence === 'equal_content' ? '查看内容相同的正式版本' : '打开已核对的正式文件'} v{pin.version}
     </Button></div>;
   };
-  return <SettingsDialog isOpen title={readingMarkdown ? 'Markdown 预览' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
-    onClose={() => {if(activeMarkdown.current)closeMarkdown();else if(!browseFromEditor())close();}}
-    closeLabel={readingMarkdown?'返回编辑':editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+  const adoptionPanel=adoption&&<section className="pw-checkout-adoption" aria-label="采纳一个文件">
+    <h3 ref={adoptionHeading} tabIndex={-1}>只采纳 <bdi>{adoption.path}</bdi></h3>
+    <p>{finder==='changes' && adoption.targetDeleted ? '正式项目当前没有此文件' : `正式项目 v${adoption.expectedVersion}`} → 这份已保存的私人副本。{adoption.deleted ? '这会在正式项目中登记此文件删除，可从原版本历史核对。' : '不会采纳其他文件或尚未保存的草稿。'}</p>
+    <p>{adoption.message}</p>
+    {adoption.diff ? <pre className="pw-checkout-review-diff" aria-label="正式版本与副本差异">{adoption.diff}</pre> : <p>{adoption.same ? '正式内容与副本已经相同。' : '文字相同，但文件存在或删除状态不同，请核对上方说明。'}</p>}
+    {adoption.truncated && <p role="alert">差异超出完整展示范围，不能采纳。请缩小改动后重新比较。</p>}
+    {adoption.same && formalLink(adoption.formalFile, 'equal_content')}
+    {adoption.same && adoption.baselineNeedsRefresh && <p>本次只登记已一致的副本基线，不创建新的正式版本。</p>}
+    <p className="pw-muted">{finder==='changes'?'确认时仍核对所选副本文件和正式版本。没有回执时须重新核对，不会自动重试。':'确认前仍核对副本 SHA 和正式版本。不是跨两处存储的原子事务；确认后离开页面不等于撤销已写入的版本。回执不明时重新比较，不会自动重试。'}</p>
+    {adoptionExpired && <p role="status">这次审阅已过期，尚未采纳。返回后重新比较。</p>}
+    <div className="pw-form-actions">
+      <Button variant="secondary" disabled={busy || editing} onClick={finder==='changes'?backFromChanges:dismissAdoption}>
+        {finder==='changes'?'返回改动列表':'返回文件'}
+      </Button>
+      <Button disabled={busy || editing || adoptionExpired || !adoption.importable || adoption.truncated} onClick={()=>confirmImport(adoption)}>
+        {adoption.same ? '只登记已一致的基线' : adoption.deleted ? '采纳此文件删除' : '采纳这个文件'}
+      </Button>
+    </div>
+  </section>;
+  const changesBackLabel=file?'返回改动列表':'返回选文件';
+  return <SettingsDialog isOpen title={readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
+    onClose={() => {if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
+    closeLabel={readingMarkdown?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
     {readingMarkdown && <section className="pw-checkout-files">
       <header><h3 ref={markdownHeading} tabIndex={-1} dir="auto">{readingMarkdown.path}</h3>
         <small>已核对保存版本 · <code>{readingMarkdown.sha256.slice(0,8)}</code> · 不加载图片，不打开链接</small></header>
@@ -659,10 +798,36 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       <Button variant="secondary" onClick={closeMarkdown}>返回编辑</Button>
     </section>}
     <div hidden={markdownVisible}><div className="pw-checkout-files">
-    <p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
-    <small className="pw-checkout-identity">{projectId} / {checkoutId}</small>
+    {finder!=='changes'&&<><p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
+    <small className="pw-checkout-identity">{projectId} / {checkoutId}</small></>}
     {error && <p role="alert">{error}</p>}
-    {!listing ? <Button variant="secondary" disabled={busy} onClick={() => { if(entry&&error)close();else void openFiles(); }}>
+    {finder!=='changes'&&hasChangeReview&&<div className="pw-form-actions">
+      <Button size="small" variant="secondary" disabled={locked||!canEnterChanges} onClick={enterChanges}>核对已保存的改动</Button>
+    </div>}
+    {finder==='changes' ? <>
+      {!file ? <section className="pw-form-flow" aria-busy={busy} aria-label="已保存的副本改动">
+        <h3 ref={changesHeading} tabIndex={-1}>已保存的改动</h3>
+        <p className="pw-field-hint">相对这个副本的基线，只列新增和修改。不含删除或未保存的草稿。点一个文件，再与正式项目比较。</p>
+        {!changes&&(busy?<p role="status">正在读取这份副本的改动…</p>:
+          !error&&<p className="pw-field-hint">改动列表需要重新读取。</p>)}
+        {changes&&<><p role="status">{changes.total?`${changes.total} 个改动 · 第 ${changes.start+1} 至 ${changes.start+changes.files.length} 项`:'这份副本没有已保存的新增或修改。'}</p>
+          <div className="pw-checkout-file-list">{changes.files.map(hit=><Button key={hit.path} variant="ghost"
+              disabled={locked||hit.binary||hit.bytes>262144} onClick={()=>void openChangedFile(hit)}>
+            <span dir="auto">{hit.path}</span><small>{hit.change==='added'?'新增':'修改'}{hit.binary?' · 二进制，只列信息':hit.bytes>262144?' · 超过编辑上限，只列信息':''}</small>
+          </Button>)}</div>
+          <div className="pw-form-actions">
+            {changes.start>0&&<Button size="small" variant="ghost" disabled={locked} onClick={()=>readChangedPage(changes.start-40,changes)}>上一页</Button>}
+            {changes.next!==-1&&<Button size="small" variant="ghost" disabled={locked} onClick={()=>readChangedPage(changes.next,changes)}>下一页</Button>}
+          </div></>}
+        <div className="pw-form-actions"><Button size="small" variant="secondary" disabled={locked} onClick={()=>readChangedPage()}>重新读取改动</Button></div>
+      </section> : adoptionPanel || <section className="pw-checkout-adoption" aria-label="所选文件的采纳结果" aria-busy={busy}>
+        <h3 tabIndex={-1} ref={adoptionHeading}><bdi>{file.path}</bdi></h3>
+        {busy ? <p role="status">{changeSubmitted?'正在核对采纳回执…':'正在与当前正式版本比较…'}</p> :
+          changeSubmitted ? <><p role="status">{file.importReceipt?.message || file.importMessage ||
+              '没有取得完整的采纳回执。返回后重新核对这个文件，不会自动重发。'} {file.projectListRefreshMessage || ''}</p>
+            {file.importStatus==='observed'&&formalLink(file.formalFile,'import_receipt')}</> : <p>未取得所选文件的正式差异，没有写入正式项目。</p>}
+      </section>}
+    </> : !listing ? <Button variant="secondary" disabled={busy} onClick={() => { if(entry&&error)close();else void openFiles(); }}>
       {busy?'正在核对原副本…':entry&&error?'返回项目重新核对入口':'重新读取副本文件'}
     </Button> : <>
       {resume && !file && !busy && <div className="pw-form-actions">
@@ -800,20 +965,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
             <Button disabled={busy || editing || !canReviewPython} onClick={confirmSavedPython}>在本机运行</Button></div>
         </section>}
         {pythonSource && uncertainPythonSource===pythonSource.clickKey && <p role="status">已提交运行确认。若未进入原工作，请到「我的工作」核对。</p>}
-        <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown} onClick={() => void invoke('reviewImport', { fileHandle: file.fileHandle }, value => {
-          if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.fileHandle !== file.fileHandle || value.path !== file.path || value.filesHandle !== handle.current || !value.importHandle) throw new Error('采纳审阅不属于原文件。');
-          setAdoption(value);
-        })}>比较并采纳到正式项目…</Button></div>
-        {adoption && <section className="pw-checkout-adoption" aria-label="采纳一个文件"><h3 ref={adoptionHeading} tabIndex={-1}>只采纳 {adoption.path}</h3>
-          <p>正式项目 v{adoption.expectedVersion} → 这份已保存的私人副本。{adoption.deleted ? '这会在正式项目中登记此文件删除，可从原版本历史核对。' : '不会采纳其他文件或尚未保存的草稿。'}</p>
-          <p>{adoption.message}</p>{adoption.diff ? <pre className="pw-checkout-review-diff" aria-label="正式版本与副本差异">{adoption.diff}</pre> : <p>{adoption.same ? '正式内容与副本已经相同。' : '文字相同，但文件存在或删除状态不同，请核对上方说明。'}</p>}
-          {adoption.truncated && <p role="alert">差异超出完整展示范围，不能采纳。请缩小改动后重新比较。</p>}
-          {adoption.same && formalLink(adoption.formalFile, 'equal_content')}
-          {adoption.same && adoption.baselineNeedsRefresh && <p>本次只登记已一致的副本基线，不创建新的正式版本。</p>}
-          <p className="pw-muted">确认前仍核对副本 SHA 和正式版本。不是跨两处存储的原子事务；确认后离开页面不等于撤销已写入的版本。回执不明时重新比较，不会自动重试。</p>
-          {adoptionExpired && <p role="status">这次审阅已过期，尚未采纳。返回后重新比较。</p>}
-          <div className="pw-form-actions"><Button variant="secondary" disabled={busy || editing} onClick={dismissAdoption}>返回文件</Button><Button disabled={busy || editing || adoptionExpired || !adoption.importable || adoption.truncated} onClick={() => { const selected = activeAdoption.current; if (!selected || Number(selected.expiresAt) <= Date.now()) return; activeAdoption.current = null; setAdoption(null); void invoke('import', { importHandle: selected.importHandle }, value => apply(value)); }}>{adoption.same ? '只登记已一致的基线' : adoption.deleted ? '采纳此文件删除' : '采纳这个文件'}</Button></div>
-        </section>}
+        <div className="pw-form-actions"><Button variant="secondary" disabled={locked || orphan !== null || blockedEdit.current || file.dirty || file.saveUnknown}
+          onClick={()=>void reviewImport(file)}>比较并采纳到正式项目…</Button></div>
+        {adoptionPanel}
         {file.importStatus && <p role="status">{file.importReceipt?.message || file.importMessage} {file.importError || ''} {file.projectListRefreshMessage || ''}</p>}
         {!adoption && file.importStatus === 'observed' && formalLink(file.formalFile, 'import_receipt')}
         {file.message && <p role="status">{file.saveStatus==='observed' && recentSave?.path===file.path && !showingSavedFile && '上次保存：'}{file.message} {file.saveError || ''}</p>}
@@ -822,6 +976,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         </>}
       </section></div>}
     </>}
-    <Button variant="secondary" disabled={busy || editing} onClick={() => close()}>{adoption || choice ? '返回文件' : backLabel}</Button>
+    {!(finder==='changes'&&adoption)&&<Button variant="secondary" disabled={busy || editing} onClick={() => {if(!backFromChanges())close();}}>
+      {finder==='changes'?changesBackLabel:adoption || choice ? '返回文件' : backLabel}
+    </Button>}
   </div></div></SettingsDialog>;
 }
