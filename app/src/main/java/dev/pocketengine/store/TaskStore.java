@@ -1378,8 +1378,12 @@ public final class TaskStore {
     /** Only the original live native service can obtain/consume this first-screen state. No port or runner is opened here. */
     public record FirstMainPreparation(long policy,boolean inspection) {}
     public synchronized FirstMainPreparation firstMainPreparation(RunControl original)throws Exception {
-        JSONObject task=firstMainTask(original,"waiting");
-        return new FirstMainPreparation(task.getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision"),firstMainInspectionMarked(task));
+        db.beginTransaction();try{
+            JSONObject task=firstMainTask(original,"waiting");
+            // The original conversation source proof requires this TaskStore and its transaction.
+            FirstMainPreparation result=new FirstMainPreparation(task.getJSONObject(FIRST_MAIN_SCREEN).getLong("appPolicyRevision"),firstMainInspectionMarked(task));
+            db.setTransactionSuccessful();return result;
+        }finally{db.endTransaction();}
     }
 
     private JSONObject firstMainTask(RunControl original,String phase)throws Exception {
