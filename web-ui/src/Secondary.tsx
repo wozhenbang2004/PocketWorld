@@ -812,9 +812,22 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
   const endpoints = wirelessEndpoints(discovery, kind);
   const endpointKeys = endpoints.map(item => item.id).join('|');
   const endpoint = endpoints.find(item => item.id === selected);
-  const port = manual ? wirelessPort(portText) : endpoint?.port;
-  const host = manual ? '127.0.0.1' : endpoint?.host || '127.0.0.1';
   const requiresCheck = connection.requiresConnectionCheck || unknownResult;
+  const firstWirelessSource = state.backgroundSetupOpen === true && state.webWorkspaceTaskOpen !== true &&
+    state.phoneSubmitting !== true && connection.backend === 'wireless_adb' && connection.canPair &&
+    display.taskOwned === false && display.configured === false && display.helperConnected === false &&
+    adb.phase === 'idle' && adb.identityPresent === false && adb.helperAuthenticated === false &&
+    autoCapture.active === false && !requiresCheck;
+  // Pairing credentials can be entered in Android's existing notification even when
+  // the owner has not granted screen reading. That is not a task-readiness check.
+  const notificationOnlyPair = firstWirelessSource && state.accessibilityEnabled === false && state.notificationsEnabled === true &&
+    !connecting && !openWirelessWhenArmed && !pending.includes('phone_setup.pairing.observe') && supported('background.pairing.begin') &&
+    (pairing.active === true ? pairing.lastOutcome === 'awaiting_owner_code' : pairing.active === false &&
+      ['not_requested', 'cancelled', 'expired', 'notification_unavailable', 'auto_capture_expired'].includes(pairing.lastOutcome));
+  const noticePending = notificationOnlyPair && (pending.includes('phone_setup.pairing.begin') || pending.includes('phone_setup.pairing.cancel'));
+  const manualPort = manual || notificationOnlyPair;
+  const port = manualPort ? wirelessPort(portText) : endpoint?.port;
+  const host = manualPort ? '127.0.0.1' : endpoint?.host || '127.0.0.1';
   const resultSignature = (key: string) => JSON.stringify([object(state.moduleResults)[key] ?? null, object(state.moduleErrors)[key] ?? null]);
   const closeSecrets = () => setCode('');
   const mainLocation = (disabled: boolean, primary = false) => onChoosePhonePlace
@@ -872,7 +885,7 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
     }
   }, [pending.join('|'), state.moduleResults, state.moduleErrors, awaiting]);
   const submit = async () => {
-    if (requesting || awaiting || pairGuard.current || port == null) return;
+    if (notificationOnlyPair || requesting || awaiting || pairGuard.current || port == null) return;
     if (connecting ? !connection.canConnect || port === pairPort : !connection.canPair || requiresCheck || !/^\d{6}$/.test(code)) return;
     const action = connecting ? 'background.connect' : 'background.pair';
     if (!supported(action)) return;
@@ -894,17 +907,13 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
   const alternate = connection.backend === 'shizuku' || connection.backend === 'adb';
   const permissions = state.accessibilityEnabled === true && state.notificationsEnabled === true;
   const steps = [
-    { title: '系统准备', done: connection.loaded && connection.supported && permissions, detail: !connection.loaded ? '先读取真实系统与连接状态' : !connection.supported ? '当前系统不支持后台独立屏，可明确选择主屏模式' : !permissions ? '完成界面读取权限与任务通知后返回' : '权限已读取，继续核对后台连接' },
+    { title: '系统准备', done: connection.loaded && connection.supported && permissions, detail: !connection.loaded ? '先读取真实系统与连接状态' : !connection.supported ? '当前系统不支持后台独立屏，可明确选择主屏模式' : notificationOnlyPair ? '可先通过通知配对；使用独立屏前仍需开启界面读取' : !permissions ? '完成界面读取权限与任务通知后返回' : '权限已读取，继续核对后台连接' },
     { title: alternate ? '已选连接授权' : '本机配对身份', done: !requiresCheck && (alternate ? connection.helperConnected : connection.identityPresent || connection.phase === 'paired' || connection.helperConnected), detail: requiresCheck ? '核对原连接，避免重复提交配对码' : alternate ? '保留已选择的兼容连接方式' : connection.identityPresent || connection.phase === 'paired' || connection.helperConnected ? '已读取本机身份，连接时会核对有效性' : '使用当前系统窗口的配对端口与六位码' },
     { title: '连接核对', done: connection.helperConnected && !connection.busy && !requiresCheck, detail: connection.helperConnected && !requiresCheck ? '助手已连接，正式使用时核对实际独立屏' : '配对后使用无线调试主页的另一连接端口' },
     { title: '返回原目标', done: false, detail: display.taskOwned === true ? '有任务持有后台资源，查看可核对的原工作' : connection.taskOwned ? '此页未核实后台资源属于哪项工作' : '完成设置后返回，由你确认是否开始原目标' },
   ];
   const locked = connection.taskOwned || connection.busy || requesting || awaiting !== null;
-  const firstWirelessAbout = state.backgroundSetupOpen === true && state.webWorkspaceTaskOpen !== true &&
-    state.phoneSubmitting !== true && connection.backend === 'wireless_adb' && connection.canPair &&
-    display.taskOwned === false && display.configured === false && display.helperConnected === false &&
-    adb.phase === 'idle' && adb.identityPresent === false && adb.helperAuthenticated === false &&
-    pairing.active === false && autoCapture.active === false && !requiresCheck && supported('settings.openSystem');
+  const firstWirelessAbout = firstWirelessSource && pairing.active === false && supported('settings.openSystem');
   const returnToDraft = connection.helperConnected && !requiresCheck && !locked ? onReturnConnectedPhoneDraft : undefined;
   const canUseExistingShizuku = !locked && !connection.displayBarrier && !connection.recoveryRequired && !requiresCheck;
   const reconnectSaved = async () => {
@@ -918,7 +927,7 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
     finally { setRequesting(false); }
   };
   const connected = connection.helperConnected && connection.backend === 'wireless_adb' && !display.releasePending && !display.recoveryRequired;
-  const activeStep = connection.taskOwned || connection.helperConnected && !requiresCheck ? 3 : !connection.loaded || !connection.supported || !permissions ? 0 : connecting || requiresCheck ? 2 : 1;
+  const activeStep = connection.taskOwned || connection.helperConnected && !requiresCheck ? 3 : !connection.loaded || !connection.supported || (!permissions && !notificationOnlyPair) ? 0 : connecting || requiresCheck ? 2 : 1;
   const blockedGroups = list(object(state.phoneReadiness).groups).filter(group => group.state === 'blocked').length;
   return <div className="pw-background-workspace" data-background-panel={panel}>
     <section className="pw-background-flow" aria-label="当前连接准备">
@@ -963,7 +972,7 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
          onChange={enabled => { void run('background.recovery.consent', { enabled, expectedRevision: recovery.revision }).catch(() => {}); }}
        />}
        {!wirelessSaved && !shizukuAuthorized && <section className="pw-background-auto-pairing">
-         <p className="pw-field-hint">首次独立屏授权：先允许系统界面读取，再打开无线调试的「使用配对码配对设备」。可以自动识别当前窗口，不需要抄写验证码。</p>
+         <p className="pw-field-hint">{notificationOnlyPair ? '可以先用通知配对。正式使用独立屏前，仍需开启界面读取权限。' : '首次独立屏授权：先允许系统界面读取，再打开无线调试的「使用配对码配对设备」。可以自动识别当前窗口，不需要抄写验证码。'}</p>
          {firstWirelessAbout && <Accordion>
            <AccordionItem id="first-wireless-developer-options" title="找不到开发者选项？">
              <p>在系统「关于本机」找到「版本号」（也可能在「版本」或「软件信息」中），连续点七次，按系统提示手动启用开发者选项。返回这里后，再打开无线调试设置。</p>
@@ -972,34 +981,42 @@ function BackgroundSettings({ state, supported, run, onChoosePhonePlace, onRetur
                disabled={locked}>打开「关于本机」</CapabilityAction>
            </AccordionItem>
          </Accordion>}
-         <div className="pw-form-actions">
+         {!notificationOnlyPair && <div className="pw-form-actions">
            {autoCapture.active === true
              ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run}>停止识别</CapabilityAction>
              : <Button disabled={locked || !connection.canPair || state.accessibilityEnabled !== true || !supported('background.pairing.observe')}
                  onClick={() => { setOpenWirelessWhenArmed(true); void run('background.pairing.observe', {}).catch(() => setOpenWirelessWhenArmed(false)); }}>自动准备配对并打开设置</Button>}
            <CapabilityAction action="settings.openSystem" args={{ section: 'wireless' }} supported={supported} run={run} disabled={locked}>打开无线调试设置</CapabilityAction>
-         </div>
+         </div>}
          {autoCapture.active === true && <p role="status" className="pw-field-hint">正在识别当前系统配对窗口。打开「使用配对码配对设备」后会自动读取并核对；两分钟后失效，不会保存六位码。</p>}
          {pairing.lastOutcome === 'submitted_check_original_connection' && <p role="status" className="pw-field-hint">系统配对信息已交给原生连接器，等待系统配对回执；还未确认后台助手连接。</p>}
        </section>}
-       <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setShowWirelessSetup(value => !value); }}>{showWirelessSetup ? '收起连接设置' : '首次授权或手动连接'}</Button>
+       <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); if (notificationOnlyPair) setPortText(''); setShowWirelessSetup(value => !value); }}>{showWirelessSetup ? '收起连接设置' : notificationOnlyPair ? '查看通知配对步骤' : '首次授权或手动连接'}</Button>
      </Card>}
-     {showWirelessSetup && (permissions || connecting || requiresCheck) && !connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
+     {showWirelessSetup && (permissions || connecting || requiresCheck || notificationOnlyPair) && !connection.taskOwned && connection.loaded && connection.supported && !alternate && !connected && <Card title={connecting ? '连接后台助手' : notificationOnlyPair ? '通过通知配对本机' : '与这台手机配对'} description={connecting ? '回到系统无线调试主页，读取连接端口。它与配对窗口的端口不同。' : notificationOnlyPair ? '先让口袋世界和系统设置分屏，再在无线调试里打开「使用配对码配对设备」。保持窗口打开，填写该窗口的配对端口。' : '在开发者选项开启无线调试，打开“使用配对码配对设备”，保持当前窗口可见。'}>
       {!connection.wirelessAvailable ? <Empty>此安装包尚未提供手机内无线配对能力。</Empty> : <>
-        <div className="pw-form-actions"><Button variant="secondary" disabled={locked || !supported('settings.openSystem')} onClick={() => { setCode(''); void run('settings.openSystem', { section: 'wireless' }).catch(() => {}); }}>前往无线调试设置</Button><CapabilityAction action="background.discover" supported={supported} run={run} disabled={connection.taskOwned || pending.includes('display.adb.discover')}>查找本机服务</CapabilityAction></div>
+        {!notificationOnlyPair && <div className="pw-form-actions"><Button variant="secondary" disabled={locked || !supported('settings.openSystem')} onClick={() => { setCode(''); void run('settings.openSystem', { section: 'wireless' }).catch(() => {}); }}>前往无线调试设置</Button><CapabilityAction action="background.discover" supported={supported} run={run} disabled={connection.taskOwned || pending.includes('display.adb.discover')}>查找本机服务</CapabilityAction></div>}
         <div className="pw-background-endpoints">
-          {!manual && endpoints.length > 0 && <RadioOptions label={connecting ? '本机连接服务' : '当前配对窗口'} value={selected} isDisabled={locked} options={endpoints.map((item, index) => ({ id: item.id, label: '本机服务 ' + (index + 1) + ' · 端口 ' + item.port, description: item.host }))} onChange={value => { setCode(''); setSelected(value); }} />}
-          {!manual && endpoints.length === 0 && <Empty>{discovery.discovering ? '正在查找本机服务，请保持系统无线调试打开。' : '暂未发现本机服务。打开系统页面后再查找，或填写此手机页面上的端口。'}</Empty>}
-          {!manual && endpoints.length === 0 && text(discovery.errorCode) && <p className="pw-field-hint">{text(discovery.message)}</p>}
-          {manual && <TextField label={connecting ? '无线调试主页的连接端口' : '当前配对窗口的端口'} inputMode="numeric" value={portText} isDisabled={locked} onChange={value => { setCode(''); setPortText(value.replace(/\D/g, '').slice(0, 5)); }} isInvalid={Boolean(portText && port == null)} hint="仅连接这台手机的 127.0.0.1，不填写其他设备地址。" />}
-          <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setPortText(''); setManual(current => !current); }}>{manual ? '改用自动发现' : '未找到？填写本机端口'}</Button>
+          {!manualPort && endpoints.length > 0 && <RadioOptions label={connecting ? '本机连接服务' : '当前配对窗口'} value={selected} isDisabled={locked} options={endpoints.map((item, index) => ({ id: item.id, label: '本机服务 ' + (index + 1) + ' · 端口 ' + item.port, description: item.host }))} onChange={value => { setCode(''); setSelected(value); }} />}
+          {!manualPort && endpoints.length === 0 && <Empty>{discovery.discovering ? '正在查找本机服务，请保持系统无线调试打开。' : '暂未发现本机服务。打开系统页面后再查找，或填写此手机页面上的端口。'}</Empty>}
+          {!manualPort && endpoints.length === 0 && text(discovery.errorCode) && <p className="pw-field-hint">{text(discovery.message)}</p>}
+          {manualPort && <TextField label={connecting ? '无线调试主页的连接端口' : '当前配对窗口的端口'} inputMode="numeric" value={portText} isDisabled={locked || noticePending || notificationOnlyPair && pairing.active === true} onChange={value => { setCode(''); setPortText(value.replace(/\D/g, '').slice(0, 5)); }} isInvalid={Boolean(portText && port == null)} hint={notificationOnlyPair ? '配对端口和无线调试主页的连接端口不同。' : '仅连接这台手机的 127.0.0.1，不填写其他设备地址。'} />}
+          {!notificationOnlyPair && <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setPortText(''); setManual(current => !current); }}>{manual ? '改用自动发现' : '未找到？填写本机端口'}</Button>}
         </div>
-        {!connecting && <TextField label="系统窗口当前的六位配对码" type="password" inputMode="numeric" autoComplete="off" value={code} isDisabled={locked || !connection.canPair || requiresCheck} onChange={value => setCode(value.replace(/\D/g, '').slice(0, 6))} hint="仅用于本次配对，提交或离开后清空。" />}
-        {!connecting && <div className="pw-form-actions">{object(object(object(state.features).phone_setup).pairing).active === true ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run}>停止通知输码</CapabilityAction> : <Button variant="ghost" disabled={locked || !connection.canPair || port == null || host !== '127.0.0.1' || state.notificationsEnabled !== true || !supported('background.pairing.begin')} onClick={() => { setCode(''); void run('background.pairing.begin', { host, port }).catch(() => {}); }}>在系统配对页通过通知输码</Button>}</div>}
-        {connecting && port != null && port === pairPort && <p className="pw-background-attention">这是刚才的配对端口，请填写无线调试主页的另一连接端口。</p>}
-        <div className="pw-form-actions"><PressButton compact disabled={locked || port == null || !supported(connecting ? 'background.connect' : 'background.pair') || (connecting ? !connection.canConnect || port === pairPort : !connection.canPair || requiresCheck || !/^\d{6}$/.test(code))} onClick={() => { void submit(); }}>{connecting ? requiresCheck ? '恢复并核对原连接' : '完成手机连接' : '确认配对并继续'}</PressButton>
-          {!connecting ? <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setConnecting(true); }}>{connection.identityPresent ? '使用已保存身份连接' : '此前配对过？直接连接'}</Button> : <Button variant="ghost" disabled={locked || !connection.canPair || requiresCheck} onClick={() => { setCode(''); setConnecting(false); }}>重新读取配对窗口</Button>}
-        </div>
+        {!connecting && !notificationOnlyPair && <TextField label="系统窗口当前的六位配对码" type="password" inputMode="numeric" autoComplete="off" value={code} isDisabled={locked || !connection.canPair || requiresCheck} onChange={value => setCode(value.replace(/\D/g, '').slice(0, 6))} hint="仅用于本次配对，提交或离开后清空。" />}
+        {notificationOnlyPair && <p className="pw-field-hint">提交配对码并配对成功后，会尝试连接本机助手。这里只准备连接，不会读取界面或开始任务；使用独立屏仍需另行开启界面读取。</p>}
+        {!connecting && <div className="pw-form-actions">{pairing.active === true ? <CapabilityAction action="background.pairing.cancel" supported={supported} run={run} disabled={noticePending}>停止通知输码</CapabilityAction> : <Button variant="ghost" disabled={locked || noticePending || !connection.canPair || port == null || host !== '127.0.0.1' || state.notificationsEnabled !== true || !supported('background.pairing.begin')} onClick={() => { setCode(''); if (notificationOnlyPair) setPortText(''); void run('background.pairing.begin', { host, port }).catch(() => {}); }}>{notificationOnlyPair ? '开启通知输码' : '在系统配对页通过通知输码'}</Button>}</div>}
+        {notificationOnlyPair ? <>
+          {pairing.active === true && <p className="pw-field-hint" role="status">保持系统配对窗口打开，下拉通知，从「在系统窗口保留配对码」通知输入当前六位码。</p>}
+          {pairing.lastOutcome === 'expired' && <p className="pw-field-hint" role="status">本次通知输码已失效。请重新打开系统配对窗口，填写新的配对端口。</p>}
+          {pairing.lastOutcome === 'notification_unavailable' && <p className="pw-field-hint" role="status">没能开启配对通知。请核对系统中是否允许「手机配对输码」通知。</p>}
+          <p className="pw-field-hint">如果分屏无法保留配对窗口，先完成界面读取授权，再用自动准备。系统不允许时请保持未连接。</p>
+        </> : <>
+          {connecting && port != null && port === pairPort && <p className="pw-background-attention">这是刚才的配对端口，请填写无线调试主页的另一连接端口。</p>}
+          <div className="pw-form-actions"><PressButton compact disabled={locked || port == null || !supported(connecting ? 'background.connect' : 'background.pair') || (connecting ? !connection.canConnect || port === pairPort : !connection.canPair || requiresCheck || !/^\d{6}$/.test(code))} onClick={() => { void submit(); }}>{connecting ? requiresCheck ? '恢复并核对原连接' : '完成手机连接' : '确认配对并继续'}</PressButton>
+            {!connecting ? <Button variant="ghost" disabled={locked} onClick={() => { setCode(''); setConnecting(true); }}>{connection.identityPresent ? '使用已保存身份连接' : '此前配对过？直接连接'}</Button> : <Button variant="ghost" disabled={locked || !connection.canPair || requiresCheck} onClick={() => { setCode(''); setConnecting(false); }}>重新读取配对窗口</Button>}
+          </div>
+        </>}
       </>}
     </Card>}
     {connection.loaded && !connection.supported && <Card title="此系统使用主屏兼容模式" description="后台独立屏需要 Android 14 或以上；执行主屏任务时会切换应用并占用当前屏幕。">{mainLocation(connection.taskOwned||connection.busy)}</Card>}

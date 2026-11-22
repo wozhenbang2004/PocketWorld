@@ -1223,7 +1223,7 @@ public final class ConversationRepository {
         return page.put("reportMessageId",ref.sourceId).put("reportRevision",ref.revision).put("bodyFingerprint",fingerprint);
     }
     /** A regular reader-shaped page containing only the already proven user row. */
-    public JSONObject windowAtOwnerWorkRequest(JSONObject source,RunControl control)throws Exception{
+    public JSONObject windowAtOwnerWorkRequest(JSONObject source,RunControl control,String selectedTeam)throws Exception{
         if(!Thread.holdsLock(monitor)||!db.inTransaction()||control==null||control.hasHostRun())
             throw new SecurityException("原请求须在原工作事务中核对");
         SourceRef ref=SourceRef.fromJson(source.getJSONObject("sourceRef"));
@@ -1233,8 +1233,14 @@ public final class ConversationRepository {
         try{
             control.checkpoint();
             if(!"message".equals(ref.kind)||!"owner".equals(ref.ownerId)||!"private".equals(ref.spaceId)||
-                    !activeGeneration().equals(source.opt("generation"))||!fingerprint.matches("sha256:[a-f0-9]{64}")||historyPosition(conversation,ref,fingerprint,signal)<1)
+                    !activeGeneration().equals(source.opt("generation"))||!fingerprint.matches("sha256:[a-f0-9]{64}"))
                 throw new SecurityException("原请求已换版、撤回或无法核对，未打开其他消息。");
+            String selectedName=null;
+            try(Cursor position=historyPositionRow(conversation,ref,fingerprint,signal,selectedTeam!=null)){
+                if(!position.moveToFirst()||position.getLong(0)<1)
+                    throw new SecurityException("原请求已换版、撤回或无法核对，未打开其他消息。");
+                if(selectedTeam!=null&&!position.isNull(1))selectedName=originalSelectedTeamName(position.getString(1),ref,selectedTeam);
+            }
             JSONObject row;
             try{row=historyMessage(conversation,ref.sourceId,signal,65536);}
             catch(ReadLimited limited){throw new SecurityException("原请求超过本次阅读范围，未打开其他消息。",limited);}
@@ -1244,8 +1250,25 @@ public final class ConversationRepository {
             control.checkpoint();
             return new JSONObject().put("conversationId",conversation).put("title","原请求").put("messages",new JSONArray().put(row))
                     .put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor",""))
-                    .put("requestMessageId",ref.sourceId).put("requestRevision",ref.revision);
+                    .put("requestMessageId",ref.sourceId).put("requestRevision",ref.revision).putOpt("originalSelectedTeamName",selectedName);
         }finally{deadline.cancel(false);control.removeCancelAction(cancel);}
+    }
+    private static String originalSelectedTeamName(String raw,SourceRef ref,String selectedTeam){
+        try{
+            JSONObject meta=new JSONObject(raw);Object revision=meta.opt("revision");
+            if(!ref.sourceId.equals(meta.opt("id"))||!"user".equals(meta.opt("role"))||
+                    !actualInteger(revision)||ref.revision!=((Number)revision).longValue()||
+                    meta.has("importAssignedIdentity")&&!Boolean.FALSE.equals(meta.opt("importAssignedIdentity")))return null;
+            JSONArray refs=OwnerObjectReferences.checked(meta.optJSONArray("ownerObjectRefs"));
+            String name=null;
+            for(int i=0;i<refs.length();i++){
+                JSONObject candidate=refs.getJSONObject(i);
+                if(!"team".equals(candidate.opt("kind")))continue;
+                if(name!=null||!selectedTeam.equals(candidate.opt("id")))return null;
+                name=candidate.getString("label");
+            }
+            return name;
+        }catch(Exception unavailable){return null;} // Optional historical metadata never substitutes for the exact request.
     }
     public JSONObject importedMessage(String conversation,String record)throws Exception{
         String gen=activeGeneration();try(Cursor row=db.rawQuery("SELECT r.record_version,r.historical_revision,r.at_ms,r.role,r.source_sha,r.byte_offset,r.byte_length,r.fragment_sha,length(f.data) FROM assistant_import_records r JOIN assistant_conversations c ON c.generation=r.generation AND c.conversation_id=r.conversation_id JOIN assistant_import_fragments f ON f.generation=r.generation AND f.source_sha=r.source_sha AND f.byte_offset=r.byte_offset WHERE r.generation=? AND r.conversation_id=? AND r.record_id=? AND r.deleted=0 AND c.deleted=0 LIMIT 1",new String[]{gen,conversation,record})){
@@ -1536,7 +1559,12 @@ public final class ConversationRepository {
     private static JSONObject neighborUnavailable(String status,String reason,JSONObject adjacency)throws Exception{return ConversationHistory.proof(new JSONObject().put("status",status).put("reason",reason).put("entries",new JSONArray()).put("gaps",new JSONArray()).put("nextCursor","").put("hasMore",false).put("charsReturned",0).put("adjacency",adjacency));}
     /** One typed metadata-only identity check. Never materializes source_json, meta_json or body. */
     private long historyPosition(String conversation,SourceRef ref,String fingerprint,CancellationSignal signal)throws Exception{
-        try(Cursor row=db.rawQuery("SELECT m.sequence FROM meta a JOIN assistant_messages m ON m.generation=a.value JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id JOIN assistant_conversations c ON c.generation=m.generation AND c.conversation_id=m.conversation_id WHERE a.key='assistant_history_generation' AND m.generation=? AND m.conversation_id=? AND s.conversation_id=m.conversation_id AND m.source_id=? AND m.revision=? AND s.revision=m.revision AND m.body_sha=? AND m.body IS NOT NULL AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND c.deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation,ref.sourceId,Long.toString(ref.revision),fingerprint},signal)){return row.moveToFirst()?row.getLong(0):-1;}
+        try(Cursor row=historyPositionRow(conversation,ref,fingerprint,signal,false)){return row.moveToFirst()?row.getLong(0):-1;}
+    }
+    /** Only the explicit original Work request may include the same user's bounded, body-free metadata. */
+    private Cursor historyPositionRow(String conversation,SourceRef ref,String fingerprint,CancellationSignal signal,boolean includeOwnerMeta)throws Exception{
+        String metadata=includeOwnerMeta?",CASE WHEN s.role='user' AND length(CAST(m.meta_json AS BLOB))<=65536 THEN m.meta_json END":"";
+        return db.rawQuery("SELECT m.sequence"+metadata+" FROM meta a JOIN assistant_messages m ON m.generation=a.value JOIN assistant_sources s ON s.generation=m.generation AND s.source_id=m.source_id JOIN assistant_conversations c ON c.generation=m.generation AND c.conversation_id=m.conversation_id WHERE a.key='assistant_history_generation' AND m.generation=? AND m.conversation_id=? AND s.conversation_id=m.conversation_id AND m.source_id=? AND m.revision=? AND s.revision=m.revision AND m.body_sha=? AND m.body IS NOT NULL AND s.deleted=0 AND s.retired_through<s.revision AND s.context_retired=0 AND c.deleted=0 LIMIT 1",new String[]{activeGeneration(),conversation,ref.sourceId,Long.toString(ref.revision),fingerprint},signal);
     }
     public JSONObject stageLegacyArray(String stage,byte[] original,String sourceSha,Callable<Void> beforeBatch)throws Exception{
         if(active())throw new IllegalStateException("已有DB原文权威，不能再次导入旧数组");if(!sourceSha.equals(shaBytes(original)))throw new SecurityException("原始字节SHA与native review不符");

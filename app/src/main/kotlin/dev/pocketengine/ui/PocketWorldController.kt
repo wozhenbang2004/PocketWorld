@@ -3629,11 +3629,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             it.opt("executionRole")=="owner_work"&&it.opt("actorId")=="owner"&&it.opt("spaceId")=="private"&&
                 it.opt("runId")==run&&it.optInt("coordinatorEpoch",-1)==epoch&&it.opt("contextAvailable")==true
         }==true
+    private fun workRequestTeamMismatch(task:String)=state.tasks.singleOrNull { it.id==task }?.raw?.let {
+        it.opt("hasUnresolvedOperations")==false&&TaskStore.stoppedOwnerSelectedTeamMismatch(it)
+    }==true
     internal fun conversationReaderForWeb():ConversationReadPage? {
         val page=conversationReader?:return null
         val pin=page.workRequestAnchor?:return page
-        return if(pin.sourceRevision==conversationSourceRevision&&workRequestWindowCurrent(pin.task,pin.run,pin.epoch))page
-            else page.copy(messages=emptyList(),rowBytes=emptyMap(),bytes=0,error="原工作或原请求已变化。请返回当前工作重新核对。")
+        if(pin.sourceRevision!=conversationSourceRevision||!workRequestWindowCurrent(pin.task,pin.run,pin.epoch))
+            return page.copy(messages=emptyList(),rowBytes=emptyMap(),bytes=0,notice=null,error="原工作或原请求已变化。请返回当前工作重新核对。")
+        return if(page.notice!=null&&!workRequestTeamMismatch(pin.task))page.copy(notice=null) else page
     }
     internal fun closeOwnerWorkRequestHistory() {
         openingOwnerWorkRequest?.cancel(); openingOwnerWorkRequest=null
@@ -3663,7 +3667,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         require(pin.revision>0&&page.initialized&&!page.limited&&!page.hasMore&&page.messages.singleOrNull()?.let {
                             it.role=="user"&&it.id==pin.message&&it.sourceRevision==pin.revision
                         }==true) { "这件工作的唯一原请求尚未核对，未打开其他消息。" }
-                        conversationReadSequence=page.window;conversationReader=page
+                        val name=(native.opt("originalSelectedTeamName") as? String)?.takeIf {
+                            it.isNotBlank()&&it.length<=160&&workRequestTeamMismatch(task)
+                        }
+                        conversationReadSequence=page.window
+                        conversationReader=if(name==null)page else page.copy(notice="当时选择的编组：$name")
                         JSONObject().put("window",page.window).put("conversationId",conversation).put("taskId",task)
                             .put("readOnly",true).put("executionAuthorized",false)
                     }

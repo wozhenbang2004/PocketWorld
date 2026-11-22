@@ -130,6 +130,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  const returnToInput=useRef<(ConversationHistoryTaskOrigin&{taskId:string;revision:number})|null>(null);
  const rows:Json[]=Array.isArray(shown.messages)?requestOnly?(page&&page.window===shown.window&&!page.error&&shown.messages.length===1&&
   shown.messages[0]?.role==='user'&&shown.messages[0].id===shown.workRequest.messageId&&shown.messages[0].sourceRevision===shown.workRequest.revision?shown.messages:[]):shown.messages:[];
+ const workRequestNotice=requestOnly&&readyPage(page)&&rows.length===1&&typeof page?.notice==='string'?page.notice:null;
  const marker=rows.map(row=>`${row.id}:${row.sourceRevision||0}`).join('|');
  const loadingInput=(id:string)=>pending&&inputNotice?.window===shown.window&&inputNotice?.messageId===id&&!inputNotice?.error;
  const shownRow=(messageId:string,revision?:number)=>{
@@ -382,10 +383,11 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   else if(searchOnly&&!live.current&&!bridge.getState().state.conversationReader)onSearchReturn?.(shown.window);
   else if(origin&&!document.hidden&&!bridge.getState().state.conversationReader)onReturnToChat?.();
  }}>
-  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">{requestOnly?'只读查看这件工作的原话，不会切换原输入。':searchOnly?'从命中的原消息开始，查看它在对话中的前后文。原输入没有切换。':'只读查看，原输入和发送回执仍留在原对话。'}{!requestOnly&&canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}</Drawer.Description></div>{!requestOnly&&!searchOnly&&<IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/>}<IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':backLabel} disabled={!page||pending} onClick={back}/></header>
+  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">{requestOnly?'只读查看这件工作的原话，不会切换原输入。':searchOnly?'从命中的原消息开始，查看它在对话中的前后文。原输入没有切换。':'只读查看，原输入和发送回执仍留在原对话。'}{!requestOnly&&canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}
+   {workRequestNotice&&<span className="pw-field-hint">{workRequestNotice}</span>}</Drawer.Description></div>{!requestOnly&&!searchOnly&&<IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/>}<IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':backLabel} disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
-   {shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
+   {!requestOnly&&shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
    {page&&positionNote?.scope===scope&&<div className="pw-action-row"><p className="pw-muted" role="status">{positionNote.text}</p>
     {!!rows.length&&<Button variant="ghost" size="small" disabled={pending||shown.loading} onClick={()=>{setMissingPlace(false);remember(true);void persist()}}>从这里继续阅读</Button>}</div>}
    {page&&quoteNote&&<p className="pw-muted" role="status">{quoteNote}</p>}

@@ -3896,7 +3896,13 @@ public final class TaskStore {
             var ref=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
             JSONObject source=conversationRepository.nativeMessageSource(ref);
             if(!work.getString("conversationId").equals(source.opt("sourceConversationId")))throw new SecurityException("原请求不属于这件工作的所属对话");
-            JSONObject page=conversationRepository.windowAtOwnerWorkRequest(source,control);
+            String selectedTeam=null;
+            if(stoppedOwnerSelectedTeamMismatch(work)&&!hasUnresolved(id)){
+                OwnerSelectedTeamSource selected=ownerSelectedTeamSource(work);
+                if(selected!=null&&ref.sourceId.equals(selected.message)&&ref.revision==selected.revision)
+                    selectedTeam=selected.team;
+            }
+            JSONObject page=conversationRepository.windowAtOwnerWorkRequest(source,control,selectedTeam);
             control.checkpoint();db.setTransactionSuccessful();return page;
         }finally{db.endTransaction();}
     }
@@ -17390,6 +17396,21 @@ public final class TaskStore {
             "original_selected_team_source_unavailable","这次没有启动团队：无法核对原请求选定的编组。请回原对话核对目标和编组。");
     private static final OwnerSelectedTeamRefusal SELECTED_TEAM_MISMATCH=new OwnerSelectedTeamRefusal(
             "original_selected_team_mismatch","这次没有启动团队：拟议编组与原请求选定的不一致。请回原对话核对目标和编组。");
+
+    /** Display only: the typed native preflight stopped an ordinary original Work, not an approval or new run. */
+    public static boolean stoppedOwnerSelectedTeamMismatch(JSONObject task){
+        JSONObject receipt=task.optJSONObject("evidence");
+        return receipt!=null&&OwnerWorkTask.isOwnerWork(task)&&"assistant".equals(task.opt("kind"))
+                &&"capabilities".equals(task.opt("executionMode"))&&"owner".equals(task.opt("actorId"))
+                &&"private".equals(task.opt("spaceId"))&&task.isNull("origin")&&task.isNull("parentTaskId")
+                &&task.isNull("teamRunId")&&task.isNull("teamAssignment")&&task.isNull("workProfileRef")&&task.isNull("workProfileIntent")
+                &&task.isNull("developmentContext")&&task.isNull("ownerPhoneControl")&&task.isNull("ownerDeviceWork")
+                &&"awaiting_user".equals(task.opt("status"))&&Boolean.FALSE.equals(task.opt("cancelRequested"))
+                &&SELECTED_TEAM_MISMATCH.code().equals(receipt.opt("code"))&&"not_dispatched".equals(receipt.opt("status"))
+                &&Boolean.FALSE.equals(receipt.opt("ok"))&&Boolean.FALSE.equals(receipt.opt("accepted"))
+                &&Boolean.FALSE.equals(receipt.opt("nativeDispatched"))&&Boolean.FALSE.equals(receipt.opt("automaticReplayAllowed"))
+                &&Boolean.TRUE.equals(receipt.opt("requiresPause"));
+    }
 
     /** Called by the existing native teams_start preflight, before journaling a tool or asking for approval. */
     public synchronized OwnerSelectedTeamRefusal ownerSelectedTeamStartRefusal(String id,String run,int epoch,JSONObject args)throws Exception {

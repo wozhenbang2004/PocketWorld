@@ -6052,7 +6052,6 @@ export default function App(){
     expected:{runId:identity.runId,epoch:identity.epoch},teamModelReturn:{documentEpoch:modelWindow.documentEpoch,conversation}}};
    void openRelatedWorkspace('model-settings',origin);
   };
-  if(!setDefault&&!supplement&&!continuing&&!note&&controls.resultCapacityState!=='full')return null;
   // The original unanswered wait already has an actual reply action. Neither
   // starting another round nor opening an unsent supplement answers it.
   const currentQuestionDecision=ownerQuestionInWindow&&originalTaskOverview(task)&&review?.task?.id===task.id&&
@@ -6062,6 +6061,17 @@ export default function App(){
   const coldQuestionDecision=canUseColdWorkQuestion&&ownerQuestion?.replyAvailability==='cold_save_only'&&
    can('tasks.saveColdQuestionChoice')&&review?.actions?.some(row=>row.action==='tasks.saveColdQuestionChoice')===true;
   const originalDecision=currentPlanDecision||currentQuestionDecision||coldQuestionDecision;
+  const sameTeamMismatch=(row:Task|undefined)=>{
+   const work=ordinaryChatWorkRow(row,conversation,true),raw=row?.raw,receipt=obj(raw?.evidence);
+   return !!work&&!!row&&!!raw&&workIdentityKey(work)===workIdentityKey(identity)&&row.status==='awaiting_user'&&raw.status===row.status&&
+    raw.cancelRequested===false&&raw.hasUnresolvedOperations===false&&obj(raw.controls).canInput===false&&
+    Array.isArray(raw.ownerWork?.sourceMessageRefs)&&raw.ownerWork.sourceMessageRefs.length===1&&
+    receipt.code==='original_selected_team_mismatch'&&receipt.status==='not_dispatched'&&receipt.ok===false&&receipt.accepted===false&&
+    receipt.nativeDispatched===false&&receipt.requiresPause===true&&receipt.automaticReplayAllowed===false;
+  };
+  const inspectTeamMismatch=!originalDecision&&!currentResultDecision&&originalTaskOverview(task)&&sameTeamMismatch(task)&&
+   can('conversation.reader.open')&&can('conversation.reader.close');
+  if(!inspectTeamMismatch&&!setDefault&&!supplement&&!continuing&&!note&&controls.resultCapacityState!=='full')return null;
   const foldNewRound=continuing&&(currentResultDecision||originalDecision);
   const foldSupplement=originalDecision&&supplement&&controls.canInput===false;
   const more=foldNewRound||foldSupplement;
@@ -6069,6 +6079,20 @@ export default function App(){
   const newRound=continuing&&<Button variant="secondary" disabled={taskOpening||control?.pending||control?.unknown||control?.usedForContinuation} onClick={()=>controlWork(task,'continue')}>在原任务开新一轮</Button>;
   const openSupplement=supplement&&<Button variant={continuing||hasTeamDecision?'ghost':'secondary'} disabled={taskOpening||!!state.chatSubmitting} onClick={()=>{void targetWork(task)}}>{controls.canInput===true?'补充这件工作':'查看补充草稿'}</Button>;
   return <section className="pw-owner-work-actions" aria-label={more?'这件工作的其他操作':'继续这件工作'}>
+   {inspectTeamMismatch&&<>
+    <Button variant="secondary" leadingIcon={IconChat} aria-busy={openingWorkRequest===task.id||undefined}
+      disabled={!!openingWorkRequest||!!historyPage||!!workSupplementTarget||control?.pending||control?.unknown}
+      onClick={event=>{
+       const live=bridge.getState(),rows=asArray<Task>(live.state.tasks).filter(row=>row.id===task.id);
+       const reading=workRequestVisit.current;
+       if(reading&&reading.window===undefined&&reading.document===bridge.getDocumentEpoch()&&
+          reading.navigation===navigationWindow.current&&workIdentityKey(reading.work)===workIdentityKey(identity))return;
+       if(originalTaskOverview(task)&&rows.length===1&&sameTeamMismatch(rows[0]))
+        void readOriginalWorkRequest(task,event.currentTarget);
+      }}>{openingWorkRequest===task.id?'正在核对原请求…':'核对原请求与所选编组'}</Button>
+    {workRequestError&&workIdentityKey(workRequestError.work)===workIdentityKey(identity)&&
+      <p className="pw-field-hint" role="status">{workRequestError.message}</p>}
+   </>}
    {setDefault&&<Button variant="secondary" leadingIcon={IconSettings} onClick={openDefaultSetup}>设置应用默认模型</Button>}
    {!foldNewRound&&explanation&&<p>{explanation}</p>}
    {!note&&controls.resultCapacityState==='full'&&<p role="status">这件事的结果留存已满，暂不能继续执行。已有结果未因容量限制而删除；能否查看仍取决于原任务来源是否可用。容量限制不代表正在执行的任务已经停止。</p>}
@@ -7264,7 +7288,11 @@ export default function App(){
   document.addEventListener('visibilitychange',hide);window.addEventListener('pagehide',leave);
   return()=>{document.removeEventListener('visibilitychange',hide);window.removeEventListener('pagehide',leave)};
  },[deliveredFileVisit]);
- const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onDeliveredFiles={currentConversation&&intent==='chat'&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?showDeliveredFiles:undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}/>;
+ const chatHistoryAvailable=ready&&messages.length>0&&!!state.conversationId&&can('conversation.reader.open');
+ const chatHistoryResumeAvailable=chatHistoryAvailable&&intent==='chat'&&state.detachedHistoryResumeAvailable===true;
+ const chatNavigation=!desktopNavigation&&<ChatNavigationMenu title={messages.length?currentTitle:'与管家对话'} navigationTrigger={<IconButton ref={chatBackGlass} icon={IconArrowLeft} className="pw-chat-glass-trigger" aria-label="返回管家" onClick={()=>navigate('butler')}/>} onHome={()=>navigate('butler')} isOpen={chatMenuOpen} onOpenChange={setChatMenuOpen} triggerRef={chatMenuTrigger} submitting={!!state.chatSubmitting} unread={can('remoteInbox.state')?Number(state.remoteInbox?.unread||0):0} onNewConversation={can('conversation.new')?()=>{void navigate('butler',()=>run('conversation.new'))}:undefined} onConversations={trigger=>{navigationReturnFocus.current=trigger;showWorkSearch()}} onNavigation={()=>{navigationReturnFocus.current=chatMenuTrigger.current;setCommandOpen(false);setWorkOpen(true)}} onOrganize={currentConversation&&can('conversation.organization.read')?()=>setOrganizationTarget(currentConversation.id):undefined} onMemory={canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} onDeliveredFiles={currentConversation&&intent==='chat'&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?showDeliveredFiles:undefined} onNotifications={can('remoteInbox.state')?()=>{void openNotifications()}:undefined} onSettings={()=>navigate('settings')}
+   onBrowseHistory={chatHistoryAvailable?trigger=>{void openChatHistory(trigger,'browse')}:undefined}
+   onResumeHistory={chatHistoryResumeAvailable?trigger=>{void openChatHistory(trigger,'resume')}:undefined}/>;
  const latestSavedMessage=messages.at(-1),latestSavedWork=savedReplyDetails.at(-1);
  const chatReports=useMemo(()=>route==='chat'&&intent==='chat'&&ready&&
   ordinaryMessageWorkChat(snapshot,conversation,draftEpoch)&&['tasks.open','tasks.close','ownerWork.report.read'].every(can)?
@@ -7295,9 +7323,9 @@ export default function App(){
  const readingChatOpening=chatOpening&&state.loadingFirstConversationMessages===true;
  const chatPage=<main className={`pw-chat-workspace${chatOpening&&!readingChatOpening?' pw-chat-empty':''}`}>
   <div ref={scroll} tabIndex={-1} className="pw-conversation-scroll" data-conversation-id={String(state.conversationId||'')} onScroll={saveReading} aria-label="当前对话消息"><div ref={chatContent} className="pw-conversation-content">
-   {ready&&messages.length>0&&state.conversationId&&can('conversation.reader.open')&&<div className="pw-action-row">
+   {desktopNavigation&&chatHistoryAvailable&&<div className="pw-action-row">
     <Button ref={chatHistoryBrowse} variant="ghost" size="small" leadingIcon={IconHistory} onClick={event=>void openChatHistory(event.currentTarget,'browse')}>浏览对话记录</Button>
-    {intent==='chat'&&state.detachedHistoryResumeAvailable===true&&<Button variant="ghost" size="small" onClick={event=>void openChatHistory(event.currentTarget,'resume')}>继续上次浏览</Button>}
+    {chatHistoryResumeAvailable&&<Button variant="ghost" size="small" onClick={event=>void openChatHistory(event.currentTarget,'resume')}>继续上次浏览</Button>}
    </div>}
    {!ready||readingChatOpening?<div className="pw-start" role={readingChatOpening?'status':undefined}><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>{readingChatOpening?'正在读取当前对话':'正在恢复当前工作'}</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:chatOpening?<ConversationOpening setup={!composerModelName&&!displayGate?modelSetupAction:undefined}
     editing={editingChat} pending={pendingHere} onDraft={stageExample}/>:null}
