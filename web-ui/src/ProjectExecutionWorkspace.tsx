@@ -6,6 +6,8 @@ import {ProjectExecutionExitPanel} from './ProjectExecutionExitPanel';
 import {originalExecutionExit,type ExecutionExit} from './project-execution-exit';
 import { bridge } from './bridge';
 import { registerOverlayBack } from './overlay-back';
+import { taskAuditPage } from './task-history';
+import { getTaskOperations } from './task-presentation';
 import { bareManagedNodeCheck, currentManagedNodeOperation, directNodeLogPin, nodeCompilerOutputReply, originalDirectNodeDependencyExecution, originalDirectNodeExecution, originalFirstBuildFailure, originalNodeCompilerOutput, projectExecutionActivity, projectExecutionCanInput, projectExecutionRows, projectExecutionShouldRead, sameDirectNodeDependency, sameDirectNodeExecution, sameManagedNodeOperation, sameNodeCompilerOutput, type BareManagedNodeCheck, type DirectNodeDependencyPin, type DirectNodeExecutionPin, type NodeCompilerOutputReply, type OriginalManagedNodePending, type OriginalNodeCompilerOutput, type ProjectExecutionData as Data } from './project-execution';
 import './local-workspace.css';
 import './project-workspace-manga.css';
@@ -24,18 +26,40 @@ function dependencyWorkVisible(taskId:string,host=bridge.getState()) {
   return !document.hidden&&view.taskId===taskId&&view.section==null&&host.state.filePath==null&&
     host.state.attachmentWorkspace?.open!==true&&!host.state.conversationReader;
 }
-function compilerOutputWindow(taskId: string, native = bridge.getState()) {
+function compilerOutputWindow(taskId: string, native = bridge.getState(), keepWhileReading = false) {
   const view = native.view as Data;
   return !document.hidden && view?.taskId === taskId && view.section == null && native.state.filePath == null &&
-    native.state.attachmentWorkspace?.open !== true && [reviewCompilerOutput,saveCompilerOutput].every(name => native.capabilities.commands.includes(name))
+    (keepWhileReading || native.state.attachmentWorkspace?.open !== true) &&
+    [reviewCompilerOutput,saveCompilerOutput].every(name => native.capabilities.commands.includes(name))
     ? JSON.stringify([bridge.getDocumentEpoch(),taskId,view.resumeRevision]) : '';
 }
 type CompilerOutputState = NodeCompilerOutputReply | {state: 'unconfirmed'};
+type SavedCompilerFile = {id: string; sha256: string};
+type OpenSavedCompilerFile = (file: SavedCompilerFile, trigger: HTMLButtonElement, current: () => boolean) => void;
+
+/** Promote the one already-projected direct Tool receipt, not a cached/fetched log row. */
+export function originalCompilerOverview(task: Data | undefined, native = bridge.getState()) {
+  if (!task || task.status !== 'completed' || task.raw?.kind !== 'tool' || native.state.conversationReader ||
+      !native.capabilities.commands.includes('attachmentWorkspace.open')) return;
+  // Keep the trigger mounted while its existing file reader covers this Work.
+  const owner = compilerOutputWindow(task.id,native,true);
+  if (!owner) return;
+  try {
+    const page = taskAuditPage(task.raw.historyOperationPage,task.id,'operations');
+    const rows = page.entries.filter(row=>row.tool === 'project_execute' && row.runId === task.raw.runId);
+    if (rows.length !== 1 || rows[0].status !== 'available') return;
+    // Use the same body-availability normalization as Process, only on this scoped row.
+    const [operation] = getTaskOperations({id:task.id,raw:{historyOperationPage:{...page,entries:rows}}});
+    if (!operation) return;
+    const original = originalNodeCompilerOutput(task,operation);
+    if (original) return {original, operation, owner};
+  } catch { /* An incomplete overview must not replace the original audit entry. */ }
+}
 
 /** One affirmative save for the only file witnessed at this build's native
  * exit. It never needs the log reader, another task window, or a path argument. */
-function NodeCompilerOutput({original, operation, owner}: {
-  original: OriginalNodeCompilerOutput; operation: Data; owner: string;
+export function NodeCompilerOutput({original, operation, owner, onOpenSaved, covered = false}: {
+  original: OriginalNodeCompilerOutput; operation: Data; owner: string; onOpenSaved?: OpenSavedCompilerFile; covered?: boolean;
 }) {
   const [reply, setReply] = useState<CompilerOutputState | null>(null);
   const [busy, setBusy] = useState(''), [note, setNote] = useState('');
@@ -48,10 +72,14 @@ function NodeCompilerOutput({original, operation, owner}: {
   }, []);
   const current = () => {
     const host = bridge.getState(), surface = region.current;
-    const task = (Array.isArray(host.state.tasks) ? host.state.tasks as Data[] : []).find(task => task.id === original.taskId);
-    return active.current && !!surface?.isConnected && !!surface.getClientRects().length &&
-      !surface.closest('[hidden],[inert],[aria-hidden="true"]') && compilerOutputWindow(original.taskId,host) === owner &&
-      sameNodeCompilerOutput(original, originalNodeCompilerOutput(task,operation));
+    const tasks = Array.isArray(host.state.tasks) ? host.state.tasks as Data[] : [];
+    if (!active.current || !surface?.isConnected || !surface.getClientRects().length ||
+        surface.closest('[hidden],[inert],[aria-hidden="true"]') || compilerOutputWindow(original.taskId,host) !== owner) return false;
+    if (onOpenSaved) {
+      const rows = tasks.filter(task=>task.id === original.taskId);
+      return rows.length === 1 && sameNodeCompilerOutput(original, originalCompilerOverview(rows[0],host)?.original);
+    }
+    return sameNodeCompilerOutput(original, originalNodeCompilerOutput(tasks.find(task=>task.id === original.taskId),operation));
   };
   async function request(saving: boolean) {
     if (!current() || flight.current) return;
@@ -84,9 +112,15 @@ function NodeCompilerOutput({original, operation, owner}: {
       if (flight.current === token) { flight.current = null; if (active.current) setBusy(''); }
     }
   }
+  const openSaved = (trigger: HTMLButtonElement) => {
+    const saved = currentReply.current;
+    if (!onOpenSaved || saved?.state !== 'saved') return;
+    const still = () => currentReply.current === saved && current() && trigger.isConnected && !trigger.disabled;
+    if (still()) onOpenSaved({id:saved.artifactId,sha256:original.sha256},trigger,still);
+  };
   const ready = reply?.state === 'ready';
   const awaiting = reply?.state === 'pending' || reply?.state === 'unconfirmed';
-  return <section className="pw-form-flow" ref={region} aria-label="这次构建的编译输出" aria-busy={!!busy}>
+  return <section className="pw-form-flow" ref={region} aria-label="这次构建的编译输出" aria-busy={!!busy} hidden={covered || undefined}>
     {ready && <>
       <p><strong>保存这一个编译文件</strong></p>
       <p><bdi dir="ltr">{original.path}</bdi> · {original.bytes.toLocaleString()} 字节</p>
@@ -94,9 +128,13 @@ function NodeCompilerOutput({original, operation, owner}: {
       <details><summary>核对文件版本</summary><p className="pw-field-hint">SHA-256：<bdi>{original.sha256}</bdi></p></details>
       {note && <p className="pw-field-hint" role="status">{note}</p>}
     </>}
-    {reply?.state === 'saved' && <p className="pw-reading-note" role="status">
-      <strong>已保存到本机成果。</strong> 在这件工作的「概览 → 已保存的文件成果」可打开 <bdi dir="ltr">{original.path}</bdi> 的固定原件。
-    </p>}
+    {reply?.state === 'saved' && <>
+      <p className="pw-reading-note" role="status"><strong>已保存到本机成果。</strong>{onOpenSaved
+        ? <> <bdi dir="ltr">{original.path}</bdi></>
+        : <> 在这件工作的「概览 → 已保存的文件成果」可打开 <bdi dir="ltr">{original.path}</bdi> 的固定原件。</>}</p>
+      {onOpenSaved && <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={!!busy}
+        onClick={event=>openSaved(event.currentTarget)}>打开已保存的编译文件</Button></div>}
+    </>}
     {awaiting && <p role="status" className="pw-field-hint">{busy === saveCompilerOutput ? '正在等待原保存回执。' :
       busy === reviewCompilerOutput ? '正在核对这笔原保存。' :
       note || '这笔原保存仍待核对。只查询原保存，不会再写一份或重新构建。'}</p>}
@@ -115,10 +153,10 @@ function NodeCompilerOutput({original, operation, owner}: {
 
 /** One original project execution, displayed through the existing VT surface.
  * Open/read do not create a process; close only retires this observation session. */
-export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure, focusFailure = false, projectName, editFailedCopy, originalPending, reviewedPending = [], skipPending = [] }: {
+export function ProjectExecutionWorkspace({ task, operation, active = true, run = bridge.command, prepareFailure, focusFailure = false, projectName, editFailedCopy, originalPending, reviewedPending = [], skipPending = [], compilerInOverview = false }: {
   task: Data; operation?: Data; active?: boolean; run?: Run; prepareFailure?:(r:ExecutionExit)=>void;
   focusFailure?:boolean; projectName?:string; editFailedCopy?:()=>void; originalPending?:OriginalManagedNodePending;
-  reviewedPending?:readonly OriginalManagedNodePending[]; skipPending?:readonly OriginalManagedNodePending[];
+  reviewedPending?:readonly OriginalManagedNodePending[]; skipPending?:readonly OriginalManagedNodePending[]; compilerInOverview?:boolean;
 }) {
   const rows = focusFailure ? [] : projectExecutionRows(task, operation).filter(row=>!skipPending.some(pin=>sameManagedNodeOperation(row,pin)));
   const knownFailure = operation&&!originalPending ? undefined : originalFirstBuildFailure(task);
@@ -344,7 +382,7 @@ export function ProjectExecutionWorkspace({ task, operation, active = true, run 
   };
   const activity = projectExecutionActivity(output.activity || {}, execution), logPolicy = output.logObservationPolicy || {};
   const observed=originalExecutionExit(output.observedExit,metadata,output.nativeStatus);
-  const compiler = active && operation && !originalPending && !focusFailure && !directWaiting && !dependency ? originalNodeCompilerOutput(task,operation) : undefined;
+  const compiler = active && operation && !compilerInOverview && !originalPending && !focusFailure && !directWaiting && !dependency ? originalNodeCompilerOutput(task,operation) : undefined;
   const compilerWindow = compiler ? compilerOutputWindow(compiler.taskId) : '';
   const directBuildNote=direct&&'pin' in direct&&direct.logAvailable===false&&!direct.checkReceipt?'原构建未留下可读取的进程日志。':
     direct?.phase==='waiting'?'这次构建已登记。收到结束与资源释放回执后，才可查看原日志。':

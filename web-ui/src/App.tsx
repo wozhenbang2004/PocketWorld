@@ -79,7 +79,7 @@ import {OriginalWindowsWorkspaceOverview} from './OriginalWindowsTextRead';
 import { OriginalReceivedTextResult } from './OriginalReceivedTextResult';
 import {ProjectRuntimeHealth} from './ProjectRuntimeHealth';
 import {ProjectLivePreview} from './ProjectLivePreview';
-import {ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
+import {NodeCompilerOutput, originalCompilerOverview, ProjectExecutionWorkspace} from './ProjectExecutionWorkspace';
 import {bareManagedNodeCheck,currentManagedNodeOperation,originalDirectNodeDependencyExecution,originalDirectViteEditorReturn,originalFirstBuildFailure,reviewedManagedNodePending,sameDirectNodeDependency,type DirectNodeDependencyPin,type OriginalManagedNodePending} from './project-execution';
 import { OwnerPythonRun } from './OwnerPythonRun';
 import { originalPythonExit, originalPythonNotStarted, originalPythonRun, ownerPythonRead, ownerPythonSaveText, samePythonRun, savedPythonPath, type OriginalPythonRun } from './owner-python-run';
@@ -1109,7 +1109,7 @@ export default function App(){
  const registerOriginalPhoneTool=useCallback((handler:((pin:OriginalPhoneToolRecord)=>boolean)|null)=>{originalPhoneToolOpen.current=handler},[]);
  const registerMainPhoneRead=useCallback((handler:((visit:MainPhoneReadVisit)=>boolean)|null)=>{mainPhoneReadOpen.current=handler},[]);
  const attachmentBack=useRef<(()=>boolean)|null>(null);
- const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn;shelf?:PreferredChatFile})&{target:HTMLButtonElement}|null>(null);
+ const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport;compilerFile?:{id:string;sha256:string;request:number;document:number}}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn;shelf?:PreferredChatFile})&{target:HTMLButtonElement}|null>(null);
  const [fileAttachmentPicker,setFileAttachmentPicker]=useState<FileAttachmentPickerOrigin|null>(null);
  const fileAttachmentPickerLaunch=useRef<FileAttachmentPickerLaunch|null>(null);
  const [reopenedAttachmentPicker,setReopenedAttachmentPicker]=useState<ReopenedAttachmentPicker|null>(null);
@@ -3965,7 +3965,7 @@ export default function App(){
   pin.windowId=shown.windowId;
  };
  useLayoutEffect(observeFileWorkVisit,[snapshot?.revision,taskOpen,taskOpening,taskId,taskLayer,navigationRevision]);
- const openWorkFiles=(id:string,file?:TaskResultFile)=>{
+ const openWorkFiles=(id:string,file?:Pick<TaskResultFile,'id'|'sha256'>)=>{
   const live=bridge.getState(),prior=workFileVisit.current;
   const parent=readFileWorkParent(id,live);
   if(parent&&(live.state.attachmentWorkspace?.open===true||prior&&!prior.windowId&&stillFileWorkParent(prior,live)))return Promise.resolve(undefined);
@@ -3987,11 +3987,11 @@ export default function App(){
    scope.taskRunId===pin.work.runId&&scope.coordinatorEpoch===pin.work.epoch&&
    (!pin.file||selected.id===pin.file.id&&selected.sha256===pin.file.sha256);
  };
- const openTaskResultFile=(id:string,file:TaskResultFile,target:HTMLButtonElement)=>{
+ const openTaskResultFile=(id:string,file:Pick<TaskResultFile,'id'|'sha256'>,target:HTMLButtonElement,compilerCurrent?:()=>boolean)=>{
   const open=()=>{
    const native=bridge.getState();
-   if(document.hidden||openedTaskId.current!==id||obj(native.view).taskId!==id||native.state.attachmentWorkspace?.open||resultFileReturnFocus.current)return;
-   const origin={taskId:id,target};
+   if(compilerCurrent?.()===false||document.hidden||openedTaskId.current!==id||obj(native.view).taskId!==id||native.state.attachmentWorkspace?.open||resultFileReturnFocus.current)return;
+   const origin={taskId:id,target,...(compilerCurrent?{compilerFile:{...file,request:reviewRequest.current,document:bridge.getDocumentEpoch()}}:{})};
    resultFileReturnFocus.current=origin;
    void openWorkFiles(id,file).then(receipt=>{if(!receipt&&resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;}).catch(()=>{
     if(resultFileReturnFocus.current===origin)resultFileReturnFocus.current=null;
@@ -4110,7 +4110,9 @@ export default function App(){
   const native=bridge.getState().state;
   if('taskId' in origin){
    if(!origin.target.isConnected||origin.target.disabled||openedTaskId.current!==origin.taskId||origin.report&&(homeReport.current!==origin.report||taskLayer!=='homeReport'||
-      obj(bridge.getState().view).taskId!==origin.taskId||!currentHomeReport(origin.report)))return;
+      obj(bridge.getState().view).taskId!==origin.taskId||!currentHomeReport(origin.report))||origin.compilerFile&&(
+      origin.compilerFile.request!==reviewRequest.current||origin.compilerFile.document!==bridge.getDocumentEpoch()||
+      taskLayer!=='overview'||obj(bridge.getState().view).taskId!==origin.taskId||native.attachmentWorkspace?.open!==false||origin.target.closest('[hidden]')))return;
    event.preventDefault();origin.target.focus({preventScroll:true});
    return;
   }
@@ -5823,9 +5825,12 @@ export default function App(){
   const op=presentOperation(operation);const key=`${scope}:${op.runId}:${op.id||index}`;
   const packageTarget=packageOperationTarget(tasks.find(task=>task.id===scope),operation);
   const executionTask=tasks.find(task=>task.id===scope);
+  const execution=obj(operation),compilerOverview=execution.tool==='project_execute'?originalCompilerOverview(executionTask):undefined;
+  const compilerInOverview=!!compilerOverview&&execution.operationId===compilerOverview.original.buildOperationId&&
+   execution.runId===compilerOverview.original.runId;
   const memoryProposal=obj(obj(obj(operation).receipt).memoryDraft);const memoryTarget=memoryProposal.format==='pocketworld.conversation-memory-draft.v1'&&memoryProposal.taskId===scope&&memoryProposal.operationId===obj(operation).operationId&&memoryProposal.runId===obj(operation).runId?memoryProposal:null;
   const proposal=obj(obj(obj(operation).receipt).skillDraft);const draftTarget=proposal.format==='pocketworld.conversation-skill-draft.v1'&&proposal.taskId===scope&&proposal.operationId===obj(operation).operationId&&proposal.runId===obj(operation).runId?proposal:null;
-  return <section className="pw-operation-entry" key={key}><ToolCall id={op.id||String(index)} name={op.name} summary={op.stateLabel} status={op.status} input={op.arguments} result={op.result} durationMs={op.durationMs} open={expandedCalls[key]??false} onOpenChange={value=>setExpandedCalls(x=>({...x,[key]:value}))}/>{packageTarget&&can('projects.package.preview.inspect')&&<Button variant="secondary" disabled={packageOpening||taskOpening||!can('projects.package.preview.open')||!can('tasks.close')} onClick={()=>openTaskPackage(packageTarget)}>{packageTarget.savedBuildWeb?'打开这版固定网页':'查看这次任务的固定包'}</Button>}{draftTarget&&can('skillDraft.open')&&<Button variant="secondary" onClick={()=>setSkillDraftTarget(draftTarget as ConversationDraftTarget)}>审阅原技能提案</Button>}{memoryTarget&&can('memoryDraft.open')&&<Button variant="secondary" onClick={()=>setMemoryDraftTarget(memoryTarget as ConversationDraftTarget)}>审阅原记忆提案</Button>}{op.readLimited&&<p className="pw-muted">这条记录仅保留摘要，详情需要回到原记录读取。</p>}{executionTask&&obj(operation).tool==='project_execute'&&(can('local.execution.observe')||can('local.execution.open'))&&<ConversationModelPickerVisibility key={'log:'+key}>{pickerVisible=><ProjectExecutionWorkspace task={executionTask} operation={obj(operation)} reviewedPending={managedNodePending(scope)} prepareFailure={taskOpen&&openedTaskId.current===executionTask.id&&can('tasks.review')?prepareFailedBuild:undefined} active={taskOpen&&taskLayer==='process'&&!pickerVisible&&!phoneViewerObscured} run={act}/>}</ConversationModelPickerVisibility>}</section>;
+  return <section className="pw-operation-entry" key={key}><ToolCall id={op.id||String(index)} name={op.name} summary={op.stateLabel} status={op.status} input={op.arguments} result={op.result} durationMs={op.durationMs} open={expandedCalls[key]??false} onOpenChange={value=>setExpandedCalls(x=>({...x,[key]:value}))}/>{packageTarget&&can('projects.package.preview.inspect')&&<Button variant="secondary" disabled={packageOpening||taskOpening||!can('projects.package.preview.open')||!can('tasks.close')} onClick={()=>openTaskPackage(packageTarget)}>{packageTarget.savedBuildWeb?'打开这版固定网页':'查看这次任务的固定包'}</Button>}{draftTarget&&can('skillDraft.open')&&<Button variant="secondary" onClick={()=>setSkillDraftTarget(draftTarget as ConversationDraftTarget)}>审阅原技能提案</Button>}{memoryTarget&&can('memoryDraft.open')&&<Button variant="secondary" onClick={()=>setMemoryDraftTarget(memoryTarget as ConversationDraftTarget)}>审阅原记忆提案</Button>}{op.readLimited&&<p className="pw-muted">这条记录仅保留摘要，详情需要回到原记录读取。</p>}{executionTask&&obj(operation).tool==='project_execute'&&(can('local.execution.observe')||can('local.execution.open'))&&<ConversationModelPickerVisibility key={'log:'+key}>{pickerVisible=><ProjectExecutionWorkspace task={executionTask} operation={obj(operation)} compilerInOverview={compilerInOverview} reviewedPending={managedNodePending(scope)} prepareFailure={taskOpen&&openedTaskId.current===executionTask.id&&can('tasks.review')?prepareFailedBuild:undefined} active={taskOpen&&taskLayer==='process'&&!pickerVisible&&!phoneViewerObscured} run={act}/>}</ConversationModelPickerVisibility>}</section>;
  };
  const taskActionLabel=(task:Task)=>conversationWorkActionLabel(task);
  const prepareFailedBuild=(exit:ExecutionExit)=>{
@@ -6374,6 +6379,14 @@ export default function App(){
     (route==='projects'&&state.projectId===buildTarget.projectId||failureOverview&&['tasks','chat','butler'].includes(route)&&
       (state.projectId===buildTarget.projectId||can('projects.select')))?buildTarget:null;
   const viteEditor=overviewActive?originalViteEditorCopy(task):null;
+  const compilerOverview=overviewActive?originalCompilerOverview(task,snapshot):undefined;
+  const fileReturn=resultFileReturnFocus.current, fileCover=obj(state.attachmentWorkspace), selectedCompilerFile=obj(fileCover.file);
+  const compilerFile=fileReturn&&'taskId' in fileReturn&&fileReturn.taskId===task.id?fileReturn.compilerFile:undefined;
+  // Keep only this click's original file trigger through the native loading/reading cover.
+  const compilerCovered=!!compilerOverview&&!!compilerFile&&compilerFile.sha256===compilerOverview.original.sha256&&
+   compilerFile.request===reviewRequest.current&&compilerFile.document===bridge.getDocumentEpoch()&&
+   fileCover.open===true&&fileCover.taskId===task.id&&fileCover.fromWorkResult===true&&fileCover.originalReturn==='entry'&&
+   (fileCover.file==null||selectedCompilerFile.id===compilerFile.id&&selectedCompilerFile.sha256===compilerFile.sha256);
   const preparedDependencies=overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!dependencyBuildReturn?
    originalDirectNodeDependencyExecution(task):undefined;
   const dependencyBuild=preparedDependencies?.phase==='completed'&&currentDependencyBuildVisit(preparedDependencies.pin,snapshot)?
@@ -6547,6 +6560,11 @@ export default function App(){
      {phoneInterrupted&&overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&<InterruptedPhoneRecord
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
+     {compilerOverview&&<ConversationModelPickerVisibility key={'compiler:'+task.id}>{pickerVisible=>
+      !pickerVisible&&!phoneViewerExpanded&&(!phoneViewerObscured||compilerCovered)&&
+      <NodeCompilerOutput key={JSON.stringify([compilerOverview.owner,compilerOverview.original])} {...compilerOverview} covered={compilerCovered}
+       onOpenSaved={(file,trigger,current)=>openTaskResultFile(task.id,file,trigger,current)}/>
+     }</ConversationModelPickerVisibility>}
      {inspectResult?[earlyEditor,evidence,taskToolsInOverview&&taskTools,decision,workFacts]:
        decisionFirst?[earlyEditor,mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:
        [latestProgress,promoteSupplement&&workActions,earlyEditor,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
