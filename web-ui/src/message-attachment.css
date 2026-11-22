@@ -1,10 +1,14 @@
 .pw-message-file { min-width: 0; max-width: 100%; }
-.pw-message-files > .pw-message-file > button {
+.pw-message-pdf-actions { display: flex; align-items: center; max-width: 100%; gap: 2px; }
+.pw-message-pdf-actions > button:last-child { flex: none; min-width: 44px; min-height: 44px; }
+.pw-message-files > .pw-message-file > button,
+.pw-message-pdf-actions > button:first-child {
   min-width: 0;
   min-height: 44px;
   max-width: 100%;
 }
-.pw-message-files > .pw-message-file > button > span {
+.pw-message-files > .pw-message-file > button > span,
+.pw-message-pdf-actions > button:first-child > span {
   flex-shrink: 1;
   min-width: 0;
   overflow: hidden;

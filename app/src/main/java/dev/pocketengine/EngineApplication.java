@@ -3118,7 +3118,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         if(attachmentOutcomes==null)throw new IllegalStateException("原消息文件宿主尚未就绪");EngineModule assistant=features.module("assistant");if(assistant==null)throw new IllegalStateException("原消息暂不可读");
         JSONObject actual=assistant.handle("get",json("conversationId",conversationId)),result=new JSONObject();JSONArray messages=actual.getJSONArray("messages");
         for(int i=0;i<messages.length();i++){JSONObject message=messages.getJSONObject(i);if(message.optBoolean("importAssignedIdentity"))continue;String id=message.optString("id");if(id.isEmpty())continue;JSONArray refs=message.optJSONArray("attachments");if(refs==null)continue;
-            result.put(id,json("revision",message.optLong("revision",1),"files",attachmentOutcomes.messageReferences(refs)));}
+            result.put(id,json("revision",message.optLong("revision",1),"files",attachmentOutcomes.messageReferences(refs),
+                    "ownerOriginalLocator",message.optJSONObject("ownerOriginalLocator")));}
         return result;
     }
     public JSONObject ownerOutcomeSnapshot(String taskId,RunControl control)throws Exception {

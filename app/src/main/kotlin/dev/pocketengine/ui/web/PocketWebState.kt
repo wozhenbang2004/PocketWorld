@@ -158,7 +158,13 @@ internal object PocketWebState {
                     .put("pinOrder", original.pinOrder).put("organizationRevision", original.organizationRevision))
             } })
             .put("conversationId", state.conversationId ?: JSONObject.NULL)
-            .put("messages", JSONArray().also { out -> state.messages.forEach { out.put(message(it)) } })
+            .put("messages", JSONArray().also { out -> state.messages.forEach { row ->
+                val visible = message(row)
+                if (row.attachmentFilesSourceRevision == controller.messageAttachmentSourceRevision &&
+                    row.attachments.any { it.mimeType == "application/pdf" })
+                    visible.put("localMessagePdfSourceCurrent", true)
+                out.put(visible)
+            } })
             .put("loadingFirstConversationMessages", controller.loadingFirstConversationMessages())
             .put("chatBusy", state.chatBusy).put("chatSubmitting", state.chatSubmitting)
             .put("chatActiveTurn", publicValue(state.chatActiveTurn)).put("chatSendMode", state.chatSendMode)
@@ -241,13 +247,15 @@ internal object PocketWebState {
             .put("window", page.window).put("conversation", page.conversation).put("title", page.title)
             .put("messages", JSONArray().also { out -> page.messages.forEach { row ->
                 val view = message(row)
-                if (!page.loading && page.error == null && !page.limited) page.quoteTrail.ranges(row.id)?.let { view.put("registeredQuotes", it) }
+                if (page.searchAnchor == null && !page.loading && page.error == null && !page.limited) page.quoteTrail.ranges(row.id)?.let { view.put("registeredQuotes", it) }
                 out.put(view)
             } })
             .put("cursor", page.cursor).put("hasMore", page.hasMore).put("loading", page.loading)
             .put("error", page.error ?: JSONObject.NULL).put("notice", page.notice ?: JSONObject.NULL)
             .put("limited", page.limited).put("index", page.index).put("offset", page.offset).put("anchor", page.anchor)
             .put("originalReportMessageId",page.reportAnchor?.message ?: JSONObject.NULL)
+            .also { out -> page.searchAnchor?.let { search -> out.put("searchAnchor",JSONObject()
+                .put("requestId",search.request).put("messageId",search.message).put("revision",search.revision)) } }
             .also { result -> page.workRequestAnchor?.let { request ->
                 result.put("workRequest", JSONObject().put("taskId",request.task).put("runId",request.run).put("epoch",request.epoch)
                     .put("messageId",request.message).put("revision",request.revision))

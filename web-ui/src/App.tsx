@@ -65,7 +65,7 @@ import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {ConversationOrganization,orderConversations} from './ConversationOrganization';
 import {ConversationQueuedInputs} from './ConversationQueuedInputs';
 import {ConversationHistoryWindow,type ConversationHistoryTaskOrigin,type HistoryResultOrigin} from './ConversationHistoryWindow';
-import {MessageAttachment} from './MessageAttachment';
+import {MessageAttachment,type MessageAttachmentSource} from './MessageAttachment';
 import {ChatNavigationMenu} from './ChatNavigationMenu';
 import {ConversationDeliveredFiles,type DeliveredFileSource} from './ConversationDeliveredFiles';
 import {useNavigationGlass} from './useNavigationGlass';
@@ -189,7 +189,7 @@ type Task={id:string;goal:string;status:string;summary?:string;executionMode?:st
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
@@ -204,6 +204,7 @@ type PhoneReview=PhoneReviewDisplay&{reviewHandle:string;expiresInMs?:number;doc
 type TaskLayer='overview'|'goal'|'process'|'scope'|'homeReport';
 type OriginalOwnerRequest={work:WorkIdentity;draftEpoch:number;resume:number;nativeTaskRequest:number};
 type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number};phoneDelivery?:{result:PhoneResult;resume:number};ownerRequest?:OriginalOwnerRequest};
+type ChatMessagePdfVisit={source:MessageAttachmentSource;input:ModelSetupInput;anchor:ChatWorkReturn;navigation:number;resume:number;windowId:string};
 type ChatWorkRowOrigin={work:WorkIdentity;conversation:string;draftEpoch:number;documentEpoch:number;resumeRevision:number;navigation:number;nativeTaskRequest:number;trigger:HTMLButtonElement;question?:true;composerRail?:true};
 type ChatWorkTaskOpen={beforeTaskRequest:number;navigation:number}&({returnTo:ChatWorkReturn;row?:never}|{row:ChatWorkRowOrigin;returnTo?:never});
 type AcknowledgedWorkVisit=TaskReviewWindow&{chatRow?:ChatWorkRowOrigin;chatReturnRequest?:number};
@@ -234,6 +235,8 @@ type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number}};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+type ChatSearchContext={hit:WorkSearchItem;requestId:string;request:number;document:number;navigation:number;resume:number;
+ conversation:string;key:string;epoch:number;message:string;revision:number;window:number};
 type ChatReferenceVisit={input:ModelSetupInput;resume:number;navigation:number;trigger:HTMLButtonElement};
 function originalChatReferenceInput(native:ReturnType<typeof bridge.getState>,documentEpoch:number){
  const input=modelSetupInput(native,documentEpoch),owner=native.state,view=obj(native.view),phone=obj(native.phoneDraft);
@@ -704,6 +707,8 @@ export default function App(){
  const workSearchMemory=useRef<WorkSearchMemory>({}),capabilityMemory=useRef<CapabilityWorkspaceMemory>({});
  const searchOpenRequest=useRef(0);
  const [searchReturn,setSearchReturn]=useState(false),[searchOriginal,setSearchOriginal]=useState<WorkSearchItem|null>(null);
+ const [searchContext,setSearchContext]=useState<ChatSearchContext|null>(null);
+ const searchContextFlight=useRef<string|null>(null),retiredSearchReader=useRef<number|null>(null);
  const [desktopNavigation,setDesktopNavigation]=useState(()=>window.matchMedia('(min-width: 1024px)').matches);
  const showWorkSearch=useCallback(()=>{searchOpenRequest.current++;setCommandOpen(true);setWorkOpen(!desktopNavigation)},[desktopNavigation]);
  const closeSearchOriginal=useCallback(()=>{setSearchOriginal(null);showWorkSearch()},[showWorkSearch]);
@@ -950,7 +955,6 @@ export default function App(){
  const scroll=useRef<HTMLDivElement>(null);
  const conversationDraft=foregroundConversationDraft(state);
  const conversationStream=conversationDraft?.text.trim()?conversationDraft:null;
- const {rows:replyRows,continued:wasReplyVisible}=useReplyRows(String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0);
  const streamMarker=conversationStream?`${conversationStream.requestId}:${conversationStream.generation}:${conversationStream.sequence}`:'';
  const {content:chatContent,messageList:chatMessageList,readingNav,saveReading,rememberChatPosition,goToLatest,stopFollowing}=useConversationReading({scroll,active:route==='chat',conversationId:String(state.conversationId||''),composer,messages,streamMarker,paused:readingDocuments.length>0||!!messageOriginTarget||!!state.conversationReader||!!state.queuedInputsPage});
  const openReading=useCallback((document:ReadingSnapshot)=>{rememberChatPosition();const entry={...document,key:++readingSerial.current};setReadingDocuments(previous=>[...previous,entry])},[rememberChatPosition]);
@@ -986,6 +990,36 @@ export default function App(){
   setTaskToolsPlace(place=>place??{taskId:task.id,overview});
  },[taskToolsPlace,taskOpen,taskOpening,selectedTask,snapshot?.view,can]);
  const historyPage=state.conversationReader||null,workRequestPin=obj(historyPage?.workRequest),workRequestOrigin=workRequestVisit.current;
+ const searchAnchor=obj(historyPage?.searchAnchor),searchView=obj(snapshot?.view);
+ const searchContextHere=!!searchContext&&searchContext.hit===searchOriginal&&route==='chat'&&intent==='chat'&&!document.hidden&&
+  searchOpenRequest.current===searchContext.request&&bridge.getDocumentEpoch()===searchContext.document&&
+  navigationWindow.current===searchContext.navigation&&searchView.resumeRevision===searchContext.resume&&searchView.section===null&&searchView.taskId===null&&
+  state.conversationId===searchContext.conversation&&composer.ready===true&&composer.key===searchContext.key&&composer.epoch===searchContext.epoch&&
+  phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&
+  (!historyPage||historyPage.window===searchContext.window&&searchAnchor.requestId===searchContext.requestId);
+ const searchHistoryPage=searchContext&&searchContextHere&&historyPage?.window===searchContext.window&&historyPage.conversation===searchContext.conversation&&
+  searchAnchor.requestId===searchContext.requestId&&searchAnchor.messageId===searchContext.message&&searchAnchor.revision===searchContext.revision?historyPage:null;
+ const finishSearchContext=(windowId:number)=>{
+  if(!searchContext||searchContext.window!==windowId)return;
+  if(searchContextFlight.current===searchContext.requestId)searchContextFlight.current=null;
+  setSearchContext(current=>current===searchContext?null:current);
+ };
+ useEffect(()=>{
+  if(!searchContext||searchContextHere)return;
+  if(searchContextFlight.current===searchContext.requestId)searchContextFlight.current=null;
+  setSearchContext(current=>current===searchContext?null:current);
+  if(searchOriginal===searchContext.hit){setSearchOriginal(null);setSearchReturn(false)}
+ },[searchContext,searchContextHere,searchOriginal]);
+ useEffect(()=>{
+  // A late acknowledgement after Back cannot become an ordinary History window.
+  // Retire only this positively identified original native context, never another reader.
+  const live=bridge.getState(),page=live.state.conversationReader,view=obj(live.view),pin=obj(page?.searchAnchor);
+  if(!page||!pin.requestId||searchContextFlight.current===pin.requestId||retiredSearchReader.current===page.window||
+     document.hidden||view.section!==null||view.taskId!==null||live.state.conversationId!==page.conversation||
+     !live.capabilities.commands.includes('conversation.reader.close'))return;
+  retiredSearchReader.current=page.window;
+  void bridge.command('conversation.reader.close',{window:page.window,conversationId:page.conversation}).catch(()=>{});
+ },[historyPage,searchContextHere]);
  const workRequestPage=taskOpen&&workRequestOrigin&&taskId===workRequestOrigin.work.taskId&&snapshot?.view?.taskId===taskId&&
   workRequestPin.taskId===taskId&&workRequestPin.runId===workRequestOrigin.work.runId&&workRequestPin.epoch===workRequestOrigin.work.epoch&&
   (workRequestOrigin.window===undefined||workRequestOrigin.window===historyPage?.window)&&
@@ -1129,6 +1163,13 @@ export default function App(){
  const currentCancelIdentity=chatCancelIdentity(state);
  const currentCancelKey=currentCancelIdentity?chatCancelKey(currentCancelIdentity):'';
  const currentCancelFeedback=chatStopObservation(state,cancelFeedback);
+ const {rows:replyRows,continued:wasReplyVisible,paintedKey,liveReply,retainVisibleReply,clearStoppedReply}=useReplyRows(
+  String(state.conversationId||''),messages,conversationDraft,foregroundTurn as WorkIdentity|null,route==='chat'&&commands.length>0,
+  {snapshot,documentEpoch:personalDocumentEpoch,navigation:navigationRevision,navigationWindow,
+   feedback:currentCancelFeedback?cancelFeedback[chatCancelKey(currentCancelFeedback.original)]:undefined,
+   enabled:intent==='chat'&&!taskOpen&&!taskOpening&&!workOpen&&!commandOpen&&
+    !preparationTarget&&!searchOriginal&&!readingDocuments.length&&!deliveredFileVisit&&!messageOriginTarget&&!messageQuoteTarget&&
+    !sourceSelection&&!organizationTarget&&!conversationMemoryOpen&&!permissionOptionsOpen&&!voiceReview&&!phoneReview&&!chatReferenceVisit});
  // A newer foreground run in the same conversation retires the old inline notice,
  // not its actual durable task or saved results in the work directory.
  useEffect(()=>{
@@ -1139,11 +1180,12 @@ export default function App(){
   });
  },[currentCancelKey,state.conversationId]);
  const stopOriginalChat=()=>{
-  const expected=currentCancelIdentity;
-  if(document.hidden||!expected||!can('chat.cancel')||!sameChatCancelIdentity(bridge.getState().state,expected))return;
+  const expected=currentCancelIdentity,native=bridge.getState();
+  if(document.hidden||!expected||!can('chat.cancel')||!sameChatCancelIdentity(native.state,expected))return;
   const key=chatCancelKey(expected);
   if(cancelPending.current.has(key))return;
   cancelPending.current.add(key);
+  retainVisibleReply(expected,native);
   setCancelFeedback(before=>Object.fromEntries([...Object.entries(before).filter(([prior])=>prior!==key),
    [key,{original:expected,request:'sending'} as ChatStopRecord]].slice(-16)));
   const remember=(request:ChatStopRecord['request'])=>setCancelFeedback(before=>before[key]?.original===expected?
@@ -2964,7 +3006,7 @@ export default function App(){
  },[state.requestedConnectionRevision,state.requestedConnectionSection,state.requestedReminderNotice?.connectionRevision,navigate,ready,personalDocumentEpoch,route,secondaryPage,taskOpen]);
  const reminderNotice=route==='automation'&&reminderNoticeVisit.current?.navigation===navigationRevision&&
   reminderNoticeVisit.current.documentEpoch===personalDocumentEpoch?reminderNoticeVisit.current:undefined;
- useEffect(()=>{bridge.setBackHandler(()=>{if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
+ useEffect(()=>{bridge.setBackHandler(()=>{if(searchHistoryPage&&historyWindowBack.current?.())return true;if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
   if(deliveredFileRef.current){
    const origin=resultFileReturnFocus.current,frame=bridge.getState().state.attachmentWorkspace;
    const reader=origin&&!('taskId' in origin)?origin.shelf:undefined;
@@ -2982,7 +3024,7 @@ export default function App(){
    }
   }
   if(route==='chat'&&savedHostSession.current){closeSavedHost();return true}
-  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchOriginal,closeSearchOriginal,shownChatReference,closeChatReference,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
+  if(historyWindowBack.current?.())return true;if(navigationMoreOpen){setNavigationMoreOpen(false);return true}if(chatMenuOpen){setChatMenuOpen(false);return true}if(permissionOptionsOpen){closePermissionOptions();return true}if(attachmentBack.current?.())return true;if(phoneViewerExpanded){setPhoneViewerExpanded(false);return true}if(readingDocuments.length){closeReading();return true}if(messageOriginTarget){setMessageOriginTarget(null);return true}if(messageQuoteTarget){setMessageQuoteTarget(null);return true}if(routeReferenceTarget){setRouteReferenceTarget(null);return true}if(skillDraftTarget){setSkillDraftTarget(null);return true}if(shownOriginalMemoryDraft){closeOriginalMemoryDraft(shownOriginalMemoryDraft);return true}if(memoryDraftTarget){setMemoryDraftTarget(null);return true}if(sourceSelection){setSourceSelection(null);return true}if(messageMenu){setMessageMenu(null);return true}if(modelPicker.current?.handleBack())return true;if(state.chatAttachmentPickerOpen&&closeChatAttachmentPicker())return true;if(voiceReview){setVoiceReview(null);return true}if(phoneReview){if(!phoneReviewPending)setPhoneReview(null);return true}if(newProjectOpen||newFileOpen){closeCreate();return true}if(voiceOptionsOpen){setVoiceOptionsOpen(false);return true}if(workOptionsOpen){setWorkOptionsOpen(false);return true}if(commandOpen){setCommandOpen(false);return true}if(workOpen){setWorkOpen(false);return true}if(projectPickerOpen){setProjectPickerOpen(false);return true}if(fileDisplayOpen){setFileDisplayOpen(false);return true}if(taskOpen){backFromTask();return true}if(route==='tasks'&&taskFiltersOpen){closeWorkFind();return true}if(route==='tasks'&&restoreWorkScope())return true;if(route==='projects'&&projectWorkBack.current?.())return true;if(route==='projects'&&projectDevelopmentBack.current?.())return true;if(route==='projects'&&projectPreview.handleBack())return true;if(route==='projects'&&state.filePath){if(fileAdoption.isPending()||bridge.getState().state.fileSaving)return true;if(projectFileBack.current?.())return true;if(can('projects.close')&&!fileAdoption.pending){run('projects.close',fileIdentity);return true}return true}if(route==='chat'){if(inlinePhoneSelection.current){chooseInlinePhoneVisit(null);return true}if(preparationBeforeLeave.current&&preparationBack.current?.())return true;void navigate('butler');return true}if(route!=='butler'){if(route!=='tasks'&&route!=='projects'&&secondaryBack.current?.())return true;if(route==='setup')closeSetup();else returnFromSecondary();return true}return false;});return()=>{bridge.setBackHandler(()=>false)};},[searchHistoryPage,searchOriginal,closeSearchOriginal,shownChatReference,closeChatReference,navigationMoreOpen,chatMenuOpen,deliveredFileVisit,permissionOptionsOpen,closePermissionOptions,phoneViewerExpanded,messageQuoteTarget,messageOriginTarget,routeReferenceTarget,skillDraftTarget,memoryDraftTarget,shownOriginalMemoryDraft,sourceSelection,readingDocuments,closeReading,messageMenu,voiceReview,phoneReview,phoneReviewPending,newProjectOpen,newFileOpen,voiceOptionsOpen,workOptionsOpen,commandOpen,workOpen,projectPickerOpen,fileDisplayOpen,taskFiltersOpen,closeWorkFind,restoreWorkScope,taskOpen,taskLayer,backFromTask,closeTask,route,state.filePath,state.chatAttachmentPickerOpen,fileIdentity,can,run,projectPreview,fileAdoption.pending,closeChatAttachmentPicker,chooseInlinePhoneVisit]);
  useEffect(()=>{document.documentElement.dataset.pocketUi=ready?'ready':'connecting';},[ready]);
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{
@@ -3162,6 +3204,7 @@ export default function App(){
   if(!can('composer.send')||state.chatSubmitting||pendingOriginal)return;
   if(!localDisplayReady&&ordinaryDraftRevision===null){setLocalError('请等本机核对当前草稿，再发送。');return;}
   const settled=registration.begin();if(!settled)return;
+  clearStoppedReply();
   if(route==='butler'){butlerSendConversation.current=String(state.conversationId||'');void navigate('chat')}
   setLocalStatus('');goToLatest();chatDraft.markSent();markMessageArrival();
   const displayedTurn=foregroundTurn?{taskId:foregroundTurn.taskId,runId:foregroundTurn.runId,epoch:foregroundTurn.epoch}:{};
@@ -3362,6 +3405,55 @@ export default function App(){
  const fileResultReader=(native:Json,origin:HistoryResultOrigin)=>{
   const reader=obj(native.conversationReader);
   return reader.window===origin.window&&reader.conversation===origin.conversationId&&!reader.loading&&!reader.error&&!reader.limited?reader:null;
+ };
+ const messagePdfReturn=useRef<ChatMessagePdfVisit|null>(null),openingMessagePdf=useRef(false);
+ const messagePdfView=obj(snapshot?.view);
+ const mayOpenChatMessagePdf=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&!draftSwitching&&!state.conversationReader&&
+  composer.ready===true&&!!state.conversationId&&composer.key===`conversation:${state.conversationId}`&&
+  composer.conversationId===state.conversationId&&messagePdfView.section===null&&messagePdfView.taskId===null&&
+  Number.isSafeInteger(messagePdfView.resumeRevision)&&can('attachments.open')&&can('attachmentWorkspace.open');
+ const currentChatMessagePdf=(source:MessageAttachmentSource,input:ModelSetupInput,resume:number,navigation:number,requireReady=true)=>{
+  const live=bridge.getState(),owner=live.state,view=obj(live.view),phone=obj(live.phoneDraft);
+  if(document.hidden||draftSwitchPending()||navigationWindow.current!==navigation||
+     !sameModelSetupInput(input,live,bridge.getDocumentEpoch())||input.key!==`conversation:${source.conversationId}`||
+     source.window!==undefined||source.taskId!==undefined||view.section!==null||view.taskId!==null||view.resumeRevision!==resume||
+     owner.conversationReader||owner.queuedInputsPage||owner.filePath||owner.chatAttachmentPickerOpen||
+     phone.phone!==false||phone.channelOrigin!==false)return false;
+  const matches=asArray<Message>(owner.messages).filter(row=>row.id===source.messageId);
+  const message=matches.length===1?matches[0]:undefined;
+  return message?.role==='user'&&message.sourceRevision===source.sourceRevision&&
+   (!requireReady||message.localMessagePdfSourceCurrent===true&&savedOwnerAttachmentChoices(message).some(file=>file.fileId===source.id&&file.sha256===source.sha256))&&
+   asArray<Json>(message.attachments).filter(file=>file.id===source.id).length===1&&asArray<Json>(message.attachments).some(file=>
+    file.id===source.id&&file.sha256===source.sha256&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0);
+ };
+ const openChatMessagePdf=async(source:MessageAttachmentSource,trigger:HTMLButtonElement)=>{
+  const native=bridge.getState(),input=modelSetupInput(native,bridge.getDocumentEpoch()),resume=obj(native.view).resumeRevision;
+  const navigation=navigationWindow.current,node=scroll.current,article=trigger.closest<HTMLElement>('[data-message-id]');
+  if(!mayOpenChatMessagePdf||openingMessagePdf.current||native.state.attachmentWorkspace?.open!==false||
+     !input||!Number.isSafeInteger(resume)||!currentChatMessagePdf(source,input,resume,navigation)||
+     !node||node.dataset.conversationId!==source.conversationId||!article||article.dataset.messageId!==source.messageId||
+     !node.contains(article)||!trigger.isConnected)throw new Error('请从原消息查看这份 PDF。');
+  const anchor={document:input.document,conversation:source.conversationId,message:source.messageId,revision:source.sourceRevision,
+   top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger};
+  openingMessagePdf.current=true;stopFollowing();
+  try{
+   const opened=await bridge.command('attachmentWorkspace.open',{messagePdf:source});
+   if(opened?.opened!==true||opened.reading!==true||opened.readOnly!==true||typeof opened.windowId!=='string'||!opened.windowId)
+    throw new Error('原消息 PDF 尚未打开。');
+   if(currentChatMessagePdf(source,input,resume,navigation,false))
+    messagePdfReturn.current={source,input,anchor,navigation,resume,windowId:opened.windowId};
+  }finally{openingMessagePdf.current=false;}
+ };
+ const restoreChatMessagePdf=(event:Event,windowId:string)=>{
+  const visit=messagePdfReturn.current;
+  if(!visit||visit.windowId!==windowId)return;
+  messagePdfReturn.current=null;
+  if(event.defaultPrevented||route!=='chat'||intent!=='chat'||taskOpen||workOpen||
+     bridge.getState().state.attachmentWorkspace?.open!==false||
+     document.querySelector('[role="dialog"][data-state="open"]')||
+     !currentChatMessagePdf(visit.source,visit.input,visit.resume,visit.navigation,false)||
+     !chatWorkLocation(visit.anchor,undefined,true))return;
+  if(restoreChatWorkAt(visit.anchor))event.preventDefault();
  };
  const restoreTaskFileFocus=(event:Event)=>{
   if(bridge.getState().state.attachmentWorkspace?.open!==true)workFileVisit.current=null;
@@ -4727,6 +4819,67 @@ export default function App(){
   {key:'settings',label:'设置',icon:IconSettings,group:'偏好'},
    {key:'developer-logs',label:'开发诊断',icon:IconTerminal,group:'偏好'}
  ],[attentionTasks.length,state.remoteInbox?.unread,can]);
+ const canLocateSearchOriginal=(hit:WorkSearchItem)=>{
+  const live=bridge.getState(),owner=live.state,view=obj(live.view),draft=live.composer,loc=hit.ownerLocator;
+  return route==='chat'&&intent==='chat'&&live.host?.ready===true&&obj(live.phoneDraft).phone===false&&
+   obj(live.phoneDraft).channelOrigin===false&&view.taskId===null&&view.section===null&&Number.isSafeInteger(view.resumeRevision)&&
+   hit.kind==='conversation'&&loc?.kind==='owner_native_original'&&loc.conversationId===owner.conversationId&&
+   draft?.ready===true&&draft.conversationId===owner.conversationId&&draft.key==='conversation:'+owner.conversationId&&
+   Number.isSafeInteger(draft.epoch)&&!owner.conversationReader&&!owner.filePath&&!owner.queuedInputsPage&&!owner.chatAttachmentPickerOpen&&
+   owner.attachmentWorkspace?.open===false&&live.capabilities.commands.includes('conversation.reader.open');
+ };
+ const openSearchContext=async(hit:WorkSearchItem,locator:Record<string,unknown>)=>{
+  const original=bridge.getState(),composer=original.composer,view=obj(original.view),conversation=original.state.conversationId;
+  const message=locator.recordId,revision=locator.recordVersion,expected=hit.ownerLocator;
+  const failed='暂未在原对话定位这条消息。已核对的原文仍在这里，没有打开其他记录。';
+  const keys=['kind','generation','conversationId','recordId','recordVersion','fingerprint'];
+  if(document.hidden||searchOriginal!==hit||searchContextFlight.current||!canLocateSearchOriginal(hit)||!composer||
+     !expected||keys.some(key=>expected[key]!==locator[key])||typeof conversation!=='string'||!conversation||locator.conversationId!==conversation||
+     typeof message!=='string'||!message||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1)throw Error(failed);
+  const request=searchOpenRequest.current,requestId=crypto.randomUUID(),doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const resume=Number(view.resumeRevision),key=String(composer.key),epoch=Number(composer.epoch);
+  const current=()=>{
+   const now=bridge.getState(),scope=obj(now.view);
+   return searchOpenRequest.current===request&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&
+    !document.hidden&&scope.section===null&&scope.taskId===null&&scope.resumeRevision===resume&&
+    now.state.conversationId===conversation&&now.composer?.ready===true&&now.composer.key===key&&now.composer.epoch===epoch&&
+    obj(now.phoneDraft).phone===false&&obj(now.phoneDraft).channelOrigin===false&&searchContextFlight.current===requestId;
+  };
+  let accepted=false,windowId:number|undefined;
+  searchContextFlight.current=requestId;
+  try{
+   const receipt=await bridge.command('conversation.reader.open',{conversationId:conversation,searchLocator:locator,requestId});
+   if(receipt?.requestId!==requestId||receipt.conversationId!==conversation||receipt.messageId!==message||
+      receipt.revision!==revision||receipt.readOnly!==true||!Number.isSafeInteger(receipt.window)||receipt.window<1)throw Error(failed);
+   windowId=receipt.window;
+   if(!current())return;
+   const painted=()=>{
+    const page=bridge.getState().state.conversationReader,pin=obj(page?.searchAnchor);
+    return !!page&&page.window===windowId&&page.conversation===conversation&&page.anchor===message&&!page.error&&!page.loading&&!page.limited&&
+      pin.requestId===requestId&&pin.messageId===message&&pin.revision===revision&&
+      asArray<Message>(page.messages).filter(row=>row.id===message&&row.sourceRevision===revision).length===1;
+   };
+   const visible=painted()||await new Promise<boolean>(resolve=>{
+    let off=()=>{};
+    const check=()=>{if(!current()||painted()){window.clearTimeout(timer);off();resolve(current()&&painted())}};
+    const timer=window.setTimeout(()=>{off();resolve(false)},2000);
+    off=bridge.subscribe(check);check();
+   });
+   if(!current())return;
+   if(!visible)throw Error(failed);
+   accepted=true;
+   setSearchContext({hit,requestId,request,document:doc,navigation,resume,conversation,key,epoch,message,revision,window:Number(windowId)});
+  }finally{
+   if(!accepted&&searchContextFlight.current===requestId){
+    searchContextFlight.current=null;
+    // If Back won before the native ack, close its exact native window, not a later reader.
+    if(windowId&&bridge.getDocumentEpoch()===doc&&!document.hidden){
+     retiredSearchReader.current=windowId;
+     void bridge.command('conversation.reader.close',{window:windowId,conversationId:conversation}).catch(()=>{});
+    }
+   }
+  }
+ };
  const openSearchResult=async(item:WorkSearchItem,searchCurrent:()=>boolean=()=>true)=>{
   if(!searchCurrent())return;
   const request=++searchOpenRequest.current,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
@@ -6790,9 +6943,13 @@ export default function App(){
    {!ready||readingChatOpening?<div className="pw-start" role={readingChatOpening?'status':undefined}><AgentAvatar agentId="main" state="idle" size={40}/><ShimmerText>{readingChatOpening?'正在读取当前对话':'正在恢复当前工作'}</ShimmerText><div className="pw-loading-copy" aria-hidden="true"><Skeleton width="68%" height={13}/><Skeleton width="92%" height={13}/><Skeleton width="80%" height={13}/></div></div>:chatOpening?<ConversationOpening setup={!composerModelName&&!displayGate?modelSetupAction:undefined}
     editing={editingChat} pending={pendingHere} onDraft={stageExample}/>:null}
    {ready&&replyRows.length>0&&<div ref={chatMessageList} className="pw-message-stream">{replyRows.map(row=>{
+    if(row.kind==='stopped')return <article key={row.key} className="pw-message pw-message-assistant" aria-label="未保存的回复片段">
+     <header>未保存的回复片段{row.truncated?' · 仅保留部分':''}</header>
+     <p className="pw-markdown whitespace-pre-wrap break-words" dir="auto">{row.text}</p>
+    </article>;
     if(row.kind==='live'){
      const draft=row.draft,hasText=!!draft?.text.trim(),phase=replyActivityPhase(draft,foregroundTurn?.resourceState,conversationActivity);
-     return <article key={row.key} className="pw-message pw-message-assistant" aria-label={hasText?'当前回复草稿':'当前回复状态'} aria-busy={['thinking','replying','stopping'].includes(phase.state)}>
+     return <article key={row.key} ref={liveReply} data-painted-reply={paintedKey} className="pw-message pw-message-assistant" aria-label={hasText?'当前回复草稿':'当前回复状态'} aria-busy={['thinking','replying','stopping'].includes(phase.state)}>
       <ConversationTurnActivity phase={phase} conversation={String(state.conversationId||'')} identity={foregroundTurn as WorkIdentity|null}
        task={foregroundTurn?replyTasksById.get(foregroundTurn.taskId):undefined} actionElsewhere={!!chatAttention&&chatAttention.id===foregroundTurn?.taskId}
        onRead={can('tasks.open')&&foregroundTurn?layer=>openTurnNotes(foregroundTurn as WorkIdentity,layer):undefined}/>
@@ -6831,7 +6988,7 @@ export default function App(){
       !phoneResult&&!taskResult&&!m.hostGoalTaskId&&!m.originalHostFinal&&
       (m.role==='assistant'||m.role==='user'&&['accepted','consumed'].includes(m.submission?.status||''))&&
       ['messageQuote.document.open','messageQuote.document.retain','messageQuote.document.check','messageQuote.close'].every(action=>can(action));
-    const savedAttachmentChoices=messageAttachmentDraft?savedOwnerAttachmentChoices(m):[];
+    const savedAttachmentChoices=messageAttachmentDraft||mayOpenChatMessagePdf?savedOwnerAttachmentChoices(m):[];
     const memoryShortcut=intent==='chat'&&row.lastOfRole&&!phoneResult&&!taskResult&&can('taskMemory.answer')?originalAnswerMemoryMessage(m,replyContext):null;
     return <article key={row.key} tabIndex={-1} data-message-index={index} data-message-id={id} data-reply-continuing={continued||undefined} className={`pw-message pw-message-${m.role}`} aria-label={m.role==='assistant'?(phoneResult||taskResult?'任务结果':'助手回复'):'你的消息'}>
      {m.role==='assistant'&&<ConversationTurnActivity phase={null} conversation={String(state.conversationId||'')} identity={noteIdentity} task={linked}
@@ -6849,7 +7006,9 @@ export default function App(){
      {asArray<Json>(m.attachments).length>0&&<div className="pw-message-files">{asArray<Json>(m.attachments).map(file=><MessageAttachment
       key={`${file.id}:${file.sha256}`} file={file} view={`chat:${navigationRevision}:${draftEpoch}`}
       origin={{conversationId:String(state.conversationId||''),messageId:m.id,sourceRevision:m.sourceRevision}}
-      enabled={!taskOpen&&!state.conversationReader&&can('attachments.open')} canLocate={can('attachmentWorkspace.open')}/>)}</div>}
+      enabled={!taskOpen&&!state.conversationReader&&can('attachments.open')} canLocate={can('attachmentWorkspace.open')}
+      onLocalPdf={mayOpenChatMessagePdf&&m.localMessagePdfSourceCurrent===true&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0&&
+       savedAttachmentChoices.some(choice=>choice.fileId===file.id&&choice.sha256===file.sha256)?openChatMessagePdf:undefined}/>)}</div>}
      {originalMessageWork&&<Button variant="ghost" size="small" className="pw-message-work-action" leadingIcon={IconClock} trailingIcon={IconChevronRight}
        disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
        aria-label={`查看这件工作：${originalMessageWork.task.goal}`} title={originalMessageWork.task.goal}
@@ -7402,7 +7561,7 @@ export default function App(){
     openTask(task.id,attention(task)&&can('tasks.review')?'review':'overview',alreadyOpen,undefined,undefined,undefined,stillOriginal)
    }} onAllWork={(scope='all')=>{void openRelatedWorkspace('tasks',undefined,()=>{setEndedScopeOrigin(null);setFilter(scope);setTaskQuery('')})}} initialScrollTop={butlerScrollTop.current} onScrollTop={top=>{butlerScrollTop.current=top}}/>:route==='chat'?chatPage:route==='tasks'?tasksPage:projectsPage}</div>:route==='remoteInbox'&&can('remoteInbox.state')?<div className="pw-workspace pw-route-workspace"><RemoteInboxWorkspace memory={notificationMemory.current} onOpenTeamAttention={locator=>{setTeamAttentionFocus({...locator,requestId:crypto.randomUUID()});void openRelatedWorkspace('teams')}} onOpenTask={(id,review)=>openTask(id,review?'review':'overview')} state={state.remoteInbox} navigationTrigger={navigationTrigger} onBack={returnFromSecondary} registerBack={registerSecondaryBack}/></div>:route==='developer-logs'?<div className="pw-workspace pw-route-workspace"><DeveloperDiagnosticsWorkspace onBack={returnFromSecondary} navigationTrigger={navigationTrigger}/></div>:route==='setup'?<div className="pw-workspace pw-route-workspace"><SetupWorkspace key={`setup:${setupMode}:${setupCapability||''}:${setupRuntimeTask||''}`} snapshot={snapshot} mode={setupMode} initialCapability={setupCapability} initialView={setupView} onViewChange={setSetupView} returnLabel={setupOrigin.current.label} originGoal={setupOrigin.current.goal} runtimeTaskId={setupRuntimeTask} onNavigate={navigateFromSetup} onClose={closeSetup} onReviewOriginalVite={setupOrigin.current.viteToolsSource?.navigation===navigationRevision&&setupOrigin.current.viteToolsSource?.ownerCurrent('setup')===true?reviewViteAfterTools:undefined} registerBackHandler={registerSecondaryBack}/></div>:route==='profile'?<div className="pw-workspace pw-route-workspace"><ProfileWorkspace initialTarget={personalTarget} targetRequestKey={String(personalTargetKey)} onOpenAdvancedMemory={()=>{void navigate('advanced-memory')}} onOpenCommitments={()=>{void navigate('commitments')}} onOpenReminders={()=>{void navigate('automation')}} state={state} presentationKey={`${personalDocumentEpoch}:${Number(snapshot?.view?.resumeRevision||0)}:${String(snapshot?.view?.taskId||'')}:${String(snapshot?.view?.section||'')}`} supported={can} run={bridge.command} onBack={returnFromProfile} onSettings={()=>{void navigate('group:data')}} registerBack={registerSecondaryBack} registerBeforeLeave={registerProfileBeforeLeave}/></div>:<SecondaryRouteBoundary navigation={route+':'+navigationRevision} onBack={returnFromSecondary}><Suspense fallback={<SecondaryRoutePending onBack={returnFromSecondary}/>}><Secondary reminderNoticeVisit={reminderNotice} originalChatReminderRuleVisit={originalReminderPage} reviewedSkill={route==='skills'?relatedOrigin.current?.reviewedSkill:undefined} onChoosePhonePlace={choosePhonePlaceFromSettings} onReturnConnectedPhoneDraft={returnConnectedPhoneDraft} cloudGoal={route==='remote'&&cloudGoal?.navigation===navigationRevision?cloudGoal:undefined} onCloudGoalUsed={consumeCloudGoal} onSavedHostSetup={returnAfterSavedHostSetup} sentPhoneFocus={sentPhoneFocus?.navigation===navigationRevision?sentPhoneFocus:undefined} teamRunFocus={teamRunFocus} onTeamRunFocusConsumed={requestId=>setTeamRunFocus(current=>current?.requestId===requestId?undefined:current)} onAskButlerForTeam={askButlerForTeam} originalWorkDraft={route==='teams'&&relatedOrigin.current?.teamDraft?.navigation===navigationRevision} onOpenTeamOwnerWork={openTeamOwnerWork} capabilityMemory={capabilityMemory.current} onStartCapability={startCapability} onTeamAttentionConsumed={requestId=>setTeamAttentionFocus(current=>current?.requestId===requestId?undefined:current)} teamAttentionFocus={teamAttentionFocus} registerBeforeLeave={registerSecondaryBeforeLeave} route={route} terminalCheckout={originalTerminalCheckout} localDraft={localWorkspaceDraft} onLocalDraftChange={setLocalWorkspaceDraft} initialProjectId={setupReturnPending.current?setupOrigin.current.contextProjectId:relatedOrigin.current?.contextProjectId} originGoal={setupReturnPending.current?setupOrigin.current.goal:relatedOrigin.current?.goal} returnLabel={setupReturnPending.current?'返回能力准备':relatedOrigin.current?.label} onOpenProjectDraft={openStagedProjectDraft} onOpenProjects={()=>{if(relatedOrigin.current?.route==='projects')returnFromSecondary();else void openRelatedWorkspace('projects')}} onBack={returnFromSecondary} snapshot={snapshot} registerBackHandler={registerSecondaryBack} navigationTrigger={navigationTrigger} navigationRevision={navigationRevision} onNavigationPageChange={setSecondaryPage} onOpenSetup={can('setup.read')?(capability,origin)=>{void openSetup(capability,undefined,undefined,origin)}:undefined} settingsRestore={settingsRestore?.revision===navigationRevision?settingsRestore:undefined} onReturnToSetup={setupReturnPending.current?returnFromSecondary:undefined} onReturnOriginalModelInput={returnOriginalModelInput} onReturnOriginalPhoneInput={returnOriginalPhoneModelInput}/></Suspense></SecondaryRouteBoundary> }
   </div>{allWork}
-  <ConversationHistoryWindow page={workRequestPage||(route==='chat'&&!historyPage?.workRequest?historyPage:null)} covered={taskOpen&&!workRequestPage} onReturnToChat={focusAfterHistoryClose} onWorkRequestReturn={restoreWorkRequestFocus}
+  <ConversationHistoryWindow page={workRequestPage||searchHistoryPage||(route==='chat'&&!historyPage?.workRequest&&!historyPage?.searchAnchor?historyPage:null)} covered={taskOpen&&!workRequestPage} onReturnToChat={focusAfterHistoryClose} onWorkRequestReturn={restoreWorkRequestFocus} onSearchReturn={finishSearchContext}
     activeDraft={!workRequestPage&&intent==='chat'&&composer.ready===true&&draftKey&&state.conversationId&&composer.conversationId===state.conversationId?{conversation:state.conversationId,key:draftKey,epoch:draftEpoch}:undefined} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin,alreadyOpen=false)=>openTask(id,entry,alreadyOpen,origin)}
    onOpenResultFiles={can('tasks.resultFiles')&&can('attachmentWorkspace.open')?openChatResult:undefined}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
@@ -7419,9 +7578,13 @@ export default function App(){
     source={shownOriginalReminder.source} isCurrent={()=>originalReminderChatCurrent(shownOriginalReminder)}
     onClose={()=>closeOriginalReminder(shownOriginalReminder)} onOpenSavedRule={pin=>openSavedOriginalReminder(shownOriginalReminder,pin)}
     registerBack={registerOriginalReminderBack}/>}
-  {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal} onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={event=>{
+  {searchOriginal&&<WorkSearchOriginalReader target={searchOriginal} covered={searchContextHere} identity={`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} onClose={closeSearchOriginal}
+    onContext={searchContextHere||canLocateSearchOriginal(searchOriginal)||
+      (searchAnchor.requestId&&searchAnchor.requestId===searchContextFlight.current)?locator=>openSearchContext(searchOriginal,locator):undefined}
+    onConversation={()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onReturnFocus={(event,messagePdfWindow)=>{
    restoreTaskFileFocus(event);
+   if(messagePdfWindow)restoreChatMessagePdf(event,messagePdfWindow);
    if(quotedDraftArrival&&bridge.getState().state.attachmentWorkspace?.open!==true){
     quotedDraftArrival.restoreFocus(event);setQuotedDraftArrival(previous=>previous===quotedDraftArrival?undefined:previous);
    }

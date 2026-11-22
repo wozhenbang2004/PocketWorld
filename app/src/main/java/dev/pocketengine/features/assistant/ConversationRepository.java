@@ -1080,6 +1080,42 @@ public final class ConversationRepository {
         JSONArray messages=new JSONArray();for(int i=reverse.length()-1;i>=0;i--)messages.put(reverse.getJSONObject(i));String next=more&&last>=0?encode(new JSONObject().put("before",last)):"";
         return result.put("messages",messages).put("messagePage",new JSONObject().put("hasMore",more).put("nextCursor",next).put("scannedRows",scanned).put("materializedOriginalRecordUtf8Bytes",bytes).put("gaps",gaps).put("retentionLimitApplied",false));
     }
+    /** Read a bounded page around one verified search hit in the currently selected conversation.
+     * No search rerun, drawn context outside this conversation, or persisted reading position. */
+    public JSONObject windowAtOwnerSearchHit(String conversation,JSONObject locator,RunControl control)throws Exception{
+        return read(()->{
+            if(control==null||control.hasHostRun()||!locator.keySet().equals(Set.of("kind","generation","conversationId","recordId","recordVersion","fingerprint"))||
+                    !"owner_native_original".equals(locator.opt("kind"))||!conversation.equals(locator.opt("conversationId"))||
+                    !activeGeneration().equals(locator.opt("generation"))||
+                    !(locator.opt("recordId") instanceof String id)||id.isBlank()||id.length()>512||
+                    !(locator.opt("fingerprint") instanceof String fingerprint)||!fingerprint.matches("sha256:[0-9a-f]{64}"))
+                throw new SecurityException("未核对到这段私聊的原生搜索消息");
+            long revision=integer(locator,"recordVersion",1);
+            SourceRef ref=new SourceRef("message",id,revision,"owner","private");
+            control.checkpoint();
+            long sequence=historyPosition(conversation,ref,fingerprint,new CancellationSignal());
+            if(sequence<1||sequence>Long.MAX_VALUE-4)throw new SecurityException("原消息已变化，没有定位到其他消息");
+            // Use the ordinary private reader's byte and row limits. The upper bound
+            // includes at most three following sequence slots, including gaps.
+            JSONObject page=window(conversation,encode(new JSONObject().put("before",sequence+4)),20);
+            JSONObject exact=null;
+            JSONArray rows=page.getJSONArray("messages");
+            for(int i=0;i<rows.length();i++){
+                JSONObject row=rows.getJSONObject(i);
+                if(!id.equals(row.opt("id")))continue;
+                JSONObject original=row.optJSONObject("ownerOriginalLocator");
+                if(exact!=null||original==null||!("user".equals(row.opt("role"))||"assistant".equals(row.opt("role")))||
+                        !"owner_native_original".equals(original.opt("kind"))||!conversation.equals(original.opt("conversationId"))||
+                        !id.equals(original.opt("recordId"))||revision!=original.getLong("recordVersion")||
+                        !locator.getString("generation").equals(original.opt("generation"))||!fingerprint.equals(original.opt("fingerprint")))
+                    throw new SecurityException("原搜索消息版本不可核对，没有定位到其他消息");
+                exact=row;
+            }
+            if(exact==null)throw new SecurityException("原消息未进入这次有界阅读范围，仍可查看已核对的原文");
+            control.checkpoint();
+            return page;
+        });
+    }
     /** Re-open the ordinary history window at the actual saved report, not the current tail.
      * Only the original TaskStore report selection may supply the source in its read transaction. */
     public JSONObject windowAtOwnerWorkReport(JSONObject source,RunControl control)throws Exception{

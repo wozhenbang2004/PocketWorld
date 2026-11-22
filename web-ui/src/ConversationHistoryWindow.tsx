@@ -38,14 +38,16 @@ function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource,eligi
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
 type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
- onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void};
+ onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void;
+ onSearchReturn?:(windowId:number)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn}:Props){
  const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
- const requestOnly=!!shown.workRequest,backLabel=requestOnly?'返回原工作':'返回原输入';
- const can=(action:string)=>available(action)&&(!requestOnly||action==='conversation.reader.close');
+ const requestOnly=!!shown.workRequest,searchOnly=!!shown.searchAnchor,backLabel=requestOnly?'返回原工作':searchOnly?'返回命中的原文':'返回原输入';
+ const can=(action:string)=>available(action)&&(!requestOnly||action==='conversation.reader.close')&&
+  (!searchOnly||action==='conversation.reader.close'||action==='conversation.reader.earlier');
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef(''),position=useRef<Position>({index:0,offset:0,anchor:''});
  const closingFromReader=useRef(''),unresolved=useRef(''),programScroll=useRef<{scope:string;top:number}|null>(null);
@@ -266,6 +268,23 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  };
  const focusOpenedRow=()=>{
   if(focusOriginalInput())return true;
+  const shownPage=live.current,search=shownPage?.searchAnchor;
+  if(search){
+   const node=scroll.current,native=bridge.getState().state.conversationReader;
+   if(document.hidden||!node?.isConnected||!readyPage(shownPage)||!readyPage(native)||readerScope(native)!==scope||
+      native.searchAnchor?.requestId!==search.requestId||native.searchAnchor.messageId!==search.messageId||
+      native.searchAnchor.revision!==search.revision||!exactRow(native,search.messageId,search.revision))return false;
+   const row=shownRow(search.messageId,search.revision);
+   if(!row?.isConnected||!row.getClientRects().length)return false;
+   // Vaul's portal can mount after the parent layout effect. Its real open
+   // autofocus must align the connected exact row as well, not just focus it.
+   if(restored.current!==scope){
+    node.scrollTop+=row.getBoundingClientRect().top-node.getBoundingClientRect().top;
+    programScroll.current={scope,top:node.scrollTop};restored.current=scope;
+    position.current={index:Number(row.dataset.readerIndex),offset:0,anchor:search.messageId,revision:search.revision};
+   }
+   row.focus({preventScroll:true});return true;
+  }
   const message=live.current?.workRequest?.messageId||live.current?.originalReportMessageId;
   if(!message||!scroll.current)return false;
   const report=Array.from(scroll.current.querySelectorAll<HTMLElement>('[data-reader-id]')).find(row=>row.dataset.readerId===message);
@@ -296,6 +315,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const node=scroll.current;
   if(!readyPage(page)||!node||!page)return;
   const first=restored.current!==scope;
+  if(first&&page.searchAnchor){focusOpenedRow();return;}
   const saved:Position=first?{index:Number(page.index||0),offset:Number(page.offset||0),anchor:String(page.anchor||'')}:position.current;
   const items=Array.from(node.querySelectorAll<HTMLElement>('[data-reader-index]'));
   // A native bookmark identifies a saved message. Its former index is no
@@ -319,9 +339,10 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   exit.onCloseAutoFocus(event);
   const origin=closingFromReader.current;closingFromReader.current='';
   if(requestOnly&&!live.current&&!document.hidden)onWorkRequestReturn?.(shown.window);
+  else if(searchOnly&&!live.current&&!bridge.getState().state.conversationReader)onSearchReturn?.(shown.window);
   else if(origin&&!document.hidden&&!bridge.getState().state.conversationReader)onReturnToChat?.();
  }}>
-  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">{requestOnly?'只读查看这件工作的原话，不会切换原输入。':'只读查看，原输入和发送回执仍留在原对话。'}{!requestOnly&&canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}</Drawer.Description></div>{!requestOnly&&<IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/>}<IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':backLabel} disabled={!page||pending} onClick={back}/></header>
+  <header className="pw-drawer-header"><div><Drawer.Title>{shown.title||'阅读对话'}</Drawer.Title><Drawer.Description id="pw-history-window-description">{requestOnly?'只读查看这件工作的原话，不会切换原输入。':searchOnly?'从命中的原消息开始，查看它在对话中的前后文。原输入没有切换。':'只读查看，原输入和发送回执仍留在原对话。'}{!requestOnly&&canQuoteNew&&' 仍可在原对话核对的消息，可以选取原话加入草稿。'}</Drawer.Description></div>{!requestOnly&&!searchOnly&&<IconButton icon={IconRefresh} aria-label={shown.originalReportMessageId?'重新核对这份原汇报':'刷新这份对话历史'} disabled={!page||pending||!!shown.loading||!can('conversation.reader.refresh')} onClick={()=>void invoke('conversation.reader.refresh')}/>}<IconButton icon={IconClose} aria-label={visibleVisit?'返回引用它的请求':backLabel} disabled={!page||pending} onClick={back}/></header>
   <div className="pw-drawer-body pw-history-window-messages" ref={scroll} onScroll={saveReading}>
    {(error||shown.error)&&<p className="pw-error" role="alert">{error||shown.error}</p>}
    {shown.notice&&shown.notice!=='上次阅读位置不在当前窗口，可继续查看较早消息；当前任务未切换。'&&<p className="pw-muted">{shown.notice}</p>}
@@ -331,7 +352,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    {shown.hasMore&&!shown.limited&&<Button variant="ghost" disabled={!page||pending||shown.loading||!can('conversation.reader.earlier')} onClick={()=>void invoke('conversation.reader.earlier')}>查看更早消息</Button>}
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
-    const result=messageTaskResult(message),fileResult=onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
+    const result=messageTaskResult(message),fileResult=!searchOnly&&onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
     const canSelectQuote=canQuoteNew&&!pending&&!!newQuoteTarget(message);
     const readingFiles=resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
     return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
@@ -341,13 +362,13 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
       onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
       <AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>
      </PhoneMessageReturn>:message.originalHostFinal?<p className="pw-user-text">{message.content}</p>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
-    {!requestOnly&&Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><MessageAttachment
+    {!requestOnly&&!searchOnly&&Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><MessageAttachment
      key={`${file.id}:${file.sha256}`} file={file} history view={`history:${shown.window}`}
      origin={{conversationId:shown.conversation,messageId:message.id,sourceRevision:message.sourceRevision,window:shown.window}}
      enabled={!!page&&page.window===shown.window&&!pending&&can('conversation.reader.attachment')} canLocate={can('attachmentWorkspace.open')}
      beforeOpen={()=>{remember();persist()}}/>)}</div>}
     {!requestOnly&&page?.window===shown.window&&message.role==='user'&&message.automaticLearningExcluded===true&&<Accordion className="pw-compact-disclosures"><AccordionItem id={'memory-'+message.id} title="这条原话已排除自动记忆整理"><p className="pw-muted">后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{message.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p></AccordionItem></Accordion>}
-    {!requestOnly&&page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} hasEarlier={shown.hasMore===true} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
+    {!requestOnly&&!searchOnly&&page?.window===shown.window&&!page?.loading&&!page?.error&&!page?.limited&&message.role==='user'&&<RegisteredQuoteTrail message={message} hasEarlier={shown.hasMore===true} locked={pending||!!visibleVisit&&visibleVisit.request!==message.id} locate={(range,target,from)=>{
      const h=live.current;if(!h||!scroll.current?.contains(from)||h.window!==shown.window||h.conversation!==shown.conversation)return;
      const visit={...range,scope,returnInset:from.getBoundingClientRect().top-scroll.current.getBoundingClientRect().top,window:h.window,conversation:h.conversation,request:message.id,requestRevision:message.sourceRevision,target};
      if(moveToQuoteRow(visit,false)){setQuoteNote('');setQuoteVisit(visit)}else setQuoteNote('当前窗口还没有核对到引用的原消息，没有跳到其他位置。');
@@ -389,7 +410,7 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">当前窗口未读到可显示的消息。</p>}
   </div>
-  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':backLabel}</Button>{!requestOnly&&<Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button>}</footer>
+  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':backLabel}</Button>{!requestOnly&&!searchOnly&&<Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button>}</footer>
   {!requestOnly&&reviewing&&<MessageQuote key={`${scope}:${reviewing.messageId}:${reviewing.prior?.request||''}`} target={reviewing}
    onClose={()=>{setReuse(null);setFirstQuote(null)}} onStaged={()=>{if(readerScope(live.current)===scope)void invoke('conversation.reader.close')}}/>}
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}

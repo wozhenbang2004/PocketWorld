@@ -297,6 +297,10 @@ public final class AssistantModule implements EngineModule {
     public JSONObject readOriginalConversation(String conversation,String cursor,int limit)throws Exception{
         if(limit<1||limit>80)throw new IllegalArgumentException("消息分页最多80条");if(durable())return historyRepository.read(()->historyRepository.window(conversation,cursor,limit));if(!cursor.isEmpty())throw new IllegalArgumentException("旧原件尚未分页入库");return findConversation(conversation).put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor","").put("retentionLimitApplied",true));
     }
+    public JSONObject readOriginalSearchHistory(String conversation,JSONObject locator,RunControl control)throws Exception{
+        if(!durable()||migrationInProgress)throw new IllegalStateException("本机原文暂不可定位");
+        return historyRepository.windowAtOwnerSearchHit(conversation,locator,control);
+    }
     public JSONObject deleteOriginalImportedRecord(String conversation,String record,long version)throws Exception{
         if(version<1||version==Long.MAX_VALUE)throw new IllegalArgumentException("内部recordVersion无效");synchronized(admission){idle(conversation);if(!durable())throw new IllegalStateException("先审核导入原件，再按内部记录版本删除");historyRepository.transaction(()->{historyRepository.deleteImportedMessage(conversation,record,version);return null;});sourceGeneration++;synchronizationPending=true;}synchronizeSources();return new JSONObject().put("deleted",true).put("recordId",record).put("recordVersion",version+1).put("historicalRevision",JSONObject.NULL);
     }

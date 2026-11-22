@@ -21,6 +21,7 @@ import dev.pocketengine.ui.ChatInputRules
 import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.accountConnectionsFailure
+import dev.pocketengine.ui.UiChatAttachment
 import dev.pocketengine.ui.UiTask
 import dev.pocketengine.ui.UiTaskResult
 import dev.pocketengine.ui.isPhoneTask
@@ -1032,6 +1033,25 @@ internal class PocketWebBridge(
                 // but does not start or restore a draft lease.
                 val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0 ||
                     action == "attachmentWorkspace.action" && draftCommand == "queryDocument") freshLibraryEntry() else null
+                if (action == "attachmentWorkspace.open" && args.has("messagePdf")) {
+                    checkedPayload(args,setOf("messagePdf"))
+                    val source=checkedMessageAttachmentSource(args.getJSONObject("messagePdf"))
+                    val original=visibleMessageAttachmentSelection(source,ordinaryPdf=true)?:error("原消息 PDF 或版本已变化，请返回原消息")
+                    val originalDocument=documentId?:error("原消息页面已关闭")
+                    // Unlike the generic ticket, this existing navigation-only ticket never follows a sibling Phone execution.
+                    val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
+                    val reader=controller.conversationReaderRevision
+                    val sourceRevision=controller.messageAttachmentSourceRevision
+                    val draft=controller.composerDraft?:error("原对话已关闭")
+                    val composerKey=draft.key
+                    val composerEpoch=controller.composerViewEpoch
+                    fun current()=!closed&&documentId==originalDocument&&ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())&&
+                        controller.conversationReaderRevision==reader&&controller.messageAttachmentSourceRevision==sourceRevision&&
+                        controller.composerViewEpoch==composerEpoch&&controller.composerDraft?.key==composerKey&&
+                        visibleMessageAttachmentSelection(source,ordinaryPdf=true,inOwnPdf=true)==original
+                    complete(id,attachmentPages.openMessagePdf(original.file,ticket,::current),null,retainValue=false)
+                    publishState();return
+                }
                 if (action == "attachmentWorkspace.open" && args.has("messageAttachment")) {
                     checkedPayload(args, setOf("messageAttachment"))
                     val file = visibleMessageAttachment(checkedMessageAttachmentSource(args.getJSONObject("messageAttachment")))
@@ -1404,6 +1424,21 @@ internal class PocketWebBridge(
                     "edit"->controller.editOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),requiredString(args,"text",true),requiredString(args,"mode"),done)
                     "send"->controller.sendOwnerWorkSupplement(expected,requiredString(args,"key"),requiredLong(args,"revision"),requiredString(args,"clientMessageId"),done)
                     "query"->controller.queryOwnerWorkSupplement(expected,requiredString(args,"key"),requiredString(args,"clientMessageId"),done)
+                }
+                return
+            }
+            if (action == "conversation.reader.open" && args.has("searchLocator")) {
+                require(args.keys().asSequence().toSet()==setOf("conversationId","searchLocator","requestId"))
+                val conversation=requiredString(args,"conversationId");val request=requiredString(args,"requestId")
+                require(conversation.length<=240&&runCatching { UUID.fromString(request).toString()==request }.getOrDefault(false))
+                val locator=JSONObject(args.getJSONObject("searchLocator").toString());val ticket=captureWindow();val document=documentId
+                fun current()=!closed&&document!=null&&documentId==document&&acceptsWindow(ticket)&&section==null&&taskViewId==null&&
+                    controller.webPrivateOwnerVisible()&&!controller.hasChannelPhoneOrigin&&!phoneComposer.intent&&controller.state.filePath==null&&
+                    !controller.state.chatAttachmentPickerOpen&&controller.queuedInputsPage==null&&!controller.attachmentOutcomes.state.open&&
+                    controller.state.conversationId==conversation
+                require(current()) { "请从当前原私聊定位搜索消息" }
+                controller.openOriginalSearchHistory(conversation,locator,request,::current){value,error->
+                    complete(id,value,error,retainValue=false,replayHint="请从原搜索消息重新定位");publishState()
                 }
                 return
             }
@@ -2867,7 +2902,7 @@ internal class PocketWebBridge(
                 controller.openConversationReader(conversation)
             }
             "conversation.reader.close" -> { requireConversationReader(args, closing = true); controller.closeConversationReader() }
-            "conversation.reader.earlier" -> { requireConversationReader(args); controller.loadEarlierConversationReader() }
+            "conversation.reader.earlier" -> { requireConversationReader(args, earlier = true); controller.loadEarlierConversationReader() }
             "conversation.reader.refresh" -> { requireConversationReader(args); controller.refreshConversationReader() }
             "conversation.reader.position" -> {
                 val page = requireConversationReader(args)
@@ -3550,10 +3585,17 @@ internal class PocketWebBridge(
         }
         return source
     }
-    private fun visibleMessageAttachment(source: JSONObject): dev.pocketengine.ui.UiChatAttachment? {
+    private data class VisibleMessageAttachment(val file: UiChatAttachment, val original: PhoneDraftMessagePin?)
+    private fun visibleMessageAttachment(source: JSONObject): UiChatAttachment? = visibleMessageAttachmentSelection(source)?.file
+    private fun visibleMessageAttachmentSelection(source: JSONObject,ordinaryPdf:Boolean=false,inOwnPdf:Boolean=false): VisibleMessageAttachment? {
         val task = source.optString("taskId").takeIf { it.isNotEmpty() }
-        if (section != null || taskViewId != task || controller.attachmentOutcomes.state.open || !controller.webPrivateOwnerVisible()) return null
+        val files=controller.attachmentOutcomes.state
+        if (section != null || taskViewId != task || files.open&&!(ordinaryPdf&&inOwnPdf&&files.messagePdfOnly) ||
+            !controller.webPrivateOwnerVisible()) return null
         val conversation = source.getString("conversationId")
+        if(ordinaryPdf&&(task!=null||source.has("window")||controller.state.filePath!=null||
+            controller.queuedInputsPage!=null||phoneComposer.intent||controller.hasChannelPhoneOrigin||controller.state.chatAttachmentPickerOpen||
+            controller.composerDraft?.let{it.key=="conversation:$conversation"&&it.conversationId==conversation}!=true))return null
         val page = controller.conversationReader
         val rows = if (source.has("window")) {
             if (page == null || page.window != source.getLong("window") || page.conversation != conversation || !controller.canReadConversationWindow(page)) return null
@@ -3564,7 +3606,26 @@ internal class PocketWebBridge(
         }
         val row = rows.singleOrNull { it.id == source.getString("messageId") && it.sourceRevision == source.getLong("sourceRevision") } ?: return null
         if (task != null && (row.role != "assistant" || (row.taskId?.takeIf(String::isNotEmpty) ?: row.submission?.optString("taskId")) != task)) return null
-        return row.attachments.singleOrNull { it.id == source.getString("id") && it.sha256 == source.getString("sha256") }
+        val file=row.attachments.singleOrNull { it.id == source.getString("id") && it.sha256 == source.getString("sha256") }?:return null
+        val original = if (ordinaryPdf) {
+            PhoneDraftMessagePin.from(row.ownerOriginalLocator)?.takeIf {
+                it.conversation == conversation && it.message == row.id && it.version == row.sourceRevision
+            } ?: return null
+        } else null
+        if(ordinaryPdf){
+            if(row.role!="user"||row.sourceRevision<=0||file.mimeType!="application/pdf"||file.size<=0||
+                row.attachments.count{it.id==file.id}!=1||
+                !inOwnPdf&&row.attachmentFilesSourceRevision!=controller.messageAttachmentSourceRevision)return null
+            val projected=row.attachmentFiles.filter{it.opt("id")==file.id}
+            // A conversation refresh can briefly replace the metadata parallel to the exact
+            // stored message pin. Never enter on absence; a scoped, SHA-checked reader already held may wait for it.
+            if(!inOwnPdf||projected.isNotEmpty()){
+                val ready=projected.singleOrNull()?:return null
+                if(ready.opt("role")!="source"||ready.opt("availability")!="available"||ready.opt("contentReadConfirmed")!=false||
+                    ready.opt("sha256")!=file.sha256||ready.opt("mimeType")!=file.mimeType||ready.optLong("size",-1L)!=file.size)return null
+            }
+        }
+        return VisibleMessageAttachment(file,original)
     }
     private fun visibleChatTaskResult(args: JSONObject): UiTaskResult? {
         val history = args.has("resultReaderWindow")
@@ -3683,9 +3744,11 @@ internal class PocketWebBridge(
         val state = controller.state
         require(state.projectId == requiredString(args, "projectId") && state.filePath == checkedPath(args) && state.fileVersion == requiredInt(args, "version")) { "原项目文件或版本已变化，编辑草稿仍保留，请重新核对" }
     }
-    private fun requireConversationReader(args: JSONObject, closing: Boolean = false): dev.pocketengine.ui.ConversationReadPage {
+    private fun requireConversationReader(args: JSONObject, closing: Boolean = false, earlier: Boolean = false): dev.pocketengine.ui.ConversationReadPage {
         val page = controller.conversationReader ?: error("原历史阅读窗口已关闭")
-        require(page.window == requiredLong(args, "window") && page.conversation == requiredString(args, "conversationId") && (closing || controller.canReadConversationWindow(page))) { "原历史阅读窗口已变化，请重新打开" }
+        require(page.window == requiredLong(args, "window") && page.conversation == requiredString(args, "conversationId") &&
+            (closing || controller.canReadConversationWindow(page) ||
+                earlier && section == null && taskViewId == null && !phoneComposer.intent && controller.canPageSearchConversationWindow(page))) { "原历史阅读窗口已变化，请重新打开" }
         return page
     }
     /** A delayed click can never edit or close the next queue/editor window. */

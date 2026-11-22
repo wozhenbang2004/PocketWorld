@@ -1,12 +1,13 @@
 import {useId,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import {bridge} from './bridge';
-import {Button} from './forms-library';
-import {IconChevronRight,IconFile} from './icons';
+import {Button,IconButton} from './forms-library';
+import {IconChevronRight,IconExternalLink,IconFile} from './icons';
 import './message-attachment.css';
 
 type Origin={conversationId:string;messageId?:string|null;sourceRevision?:number;window?:number;taskId?:string};
 type Props={origin:Origin;file:Record<string,unknown>;view:string;enabled:boolean;canLocate:boolean;
- history?:boolean;workCopy?:ReactNode;beforeOpen?:()=>void};
+ history?:boolean;workCopy?:ReactNode;beforeOpen?:()=>void;
+ onLocalPdf?:(source:MessageAttachmentSource,trigger:HTMLButtonElement)=>Promise<void>};
 const messages={
  checking:'正在核对这份原附件…',
  locating:'正在前往文件库核对原件…',
@@ -17,9 +18,11 @@ const messages={
  scope_changed:'原附件或窗口已变化。请在原消息重新核对。',
  unconfirmed:'没有收到这次打开的结果。请先检查查看应用是否已打开。',
  library_unavailable:'手机没有找到查看应用，文件库也未能打开这份原件。',
+ pdf_unavailable:'本机预览尚未确认。可从原消息重试；没有请求其他应用打开。',
 };
 type Phase=keyof typeof messages;
-type Source=Origin&{messageId:string;sourceRevision:number;id:string;sha256:string};
+export type MessageAttachmentSource=Origin&{messageId:string;sourceRevision:number;id:string;sha256:string};
+type Source=MessageAttachmentSource;
 type Result=Partial<Source>&{status?:string};
 const nativePhases=new Set<Phase>(['viewer_requested','no_reader','not_prepared','launch_unknown','scope_changed']);
 
@@ -36,7 +39,7 @@ function isVisibleSource(source:Source) {
 }
 
 /** This window displays only the native response to this explicit click, not a file-level history. */
-export function MessageAttachment({origin,file,view,enabled,canLocate,history,workCopy,beforeOpen}:Props){
+export function MessageAttachment({origin,file,view,enabled,canLocate,history,workCopy,beforeOpen,onLocalPdf}:Props){
  const expected=origin.messageId&&origin.conversationId&&typeof origin.sourceRevision==='number'&&Number.isSafeInteger(origin.sourceRevision)&&origin.sourceRevision>=0&&
   typeof file.id==='string'&&file.id&&typeof file.sha256==='string'&&/^[a-f0-9]{64}$/.test(file.sha256)
   ? {...origin,messageId:origin.messageId,sourceRevision:origin.sourceRevision,id:file.id,sha256:file.sha256}:null;
@@ -49,8 +52,8 @@ export function MessageAttachment({origin,file,view,enabled,canLocate,history,wo
  const busy=phase==='checking'||phase==='locating';
  const stillPresented=()=>enabled&&!document.hidden&&epoch===bridge.getDocumentEpoch()&&
   !!trigger.current?.isConnected&&!trigger.current.closest('[hidden],[inert],[aria-hidden="true"]');
- const open=async(library=false)=>{
-  const source=expected;
+ const open=async(place:'local'|'external'|'library'='external')=>{
+  const source=expected,library=place==='library',local=place==='local';
   if(!source||!stillPresented()||running.current?.identity===identity)return;
   const update=(phase:Phase)=>setFeedback({identity,phase});
   if(!isVisibleSource(source)){update(library?'library_unavailable':'scope_changed');return}
@@ -60,7 +63,9 @@ export function MessageAttachment({origin,file,view,enabled,canLocate,history,wo
   update(library?'locating':'checking');
   try{
    beforeOpen?.();
-   if(library){
+   if(local){
+    if(onLocalPdf&&trigger.current)await onLocalPdf(source,trigger.current);
+   }else if(library){
     const reply=await bridge.command<{opened?:boolean}>('attachmentWorkspace.open',{messageAttachment:source});
     if(current())update(reply?.opened===true?'no_reader':'library_unavailable');
    }else{
@@ -71,7 +76,7 @@ export function MessageAttachment({origin,file,view,enabled,canLocate,history,wo
      ? reply.status as Phase : 'unconfirmed');
    }
   }catch(error){
-   if(current())update(library?'library_unavailable':
+   if(current())update(local?'pdf_unavailable':library?'library_unavailable':
     error instanceof Error&&'code' in error&&['invalid_request','not_accepted','not_sent'].includes(String(error.code))?'scope_changed':'unconfirmed');
   }finally{
    if(running.current===request){
@@ -80,13 +85,16 @@ export function MessageAttachment({origin,file,view,enabled,canLocate,history,wo
    }
   }
  };
+ const primary=<Button ref={trigger} variant={history?'ghost':'secondary'} size={!history&&!workCopy?'small':'medium'} leadingIcon={IconFile}
+  trailingIcon={workCopy?IconChevronRight:undefined} className={workCopy?'pw-outcome-file':undefined}
+  disabled={!enabled||!expected||busy} aria-busy={busy||undefined} aria-describedby={phase?statusId:undefined}
+  aria-label={onLocalPdf?`在本机查看 ${name}`:undefined}
+  onClick={()=>void open(onLocalPdf?'local':'external')}>{workCopy??name}</Button>;
  return <div className="pw-message-file" data-motion-key={workCopy?`file:${origin.messageId}:${file.id}`:undefined}>
-  <Button ref={trigger} variant={history?'ghost':'secondary'} size={!history&&!workCopy?'small':'medium'} leadingIcon={IconFile}
-   trailingIcon={workCopy?IconChevronRight:undefined} className={workCopy?'pw-outcome-file':undefined}
-   disabled={!enabled||!expected||busy} aria-busy={busy||undefined} aria-describedby={phase?statusId:undefined}
-   onClick={()=>void open()}>{workCopy??name}</Button>
+  {onLocalPdf?<div className="pw-message-pdf-actions">{primary}<IconButton icon={IconExternalLink} size="small"
+   aria-label={`用其他应用打开 ${name}`} title="用其他应用打开" disabled={!enabled||!expected||busy} onClick={()=>void open('external')}/></div>:primary}
   {phase&&<p id={statusId} className="pw-field-hint pw-message-file-feedback" role="status">{messages[phase]}</p>}
-  {(phase==='no_reader'||phase==='library_unavailable')&&canLocate&&
-   <Button variant="ghost" size="small" className="pw-message-file-next" onClick={()=>void open(true)}>在文件库核对原件</Button>}
+  {(phase==='no_reader'||phase==='library_unavailable')&&canLocate&&!onLocalPdf&&
+   <Button variant="ghost" size="small" className="pw-message-file-next" onClick={()=>void open('library')}>在文件库核对原件</Button>}
  </div>;
 }

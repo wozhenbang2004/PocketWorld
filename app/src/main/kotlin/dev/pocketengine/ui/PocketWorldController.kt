@@ -390,8 +390,33 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openAttachmentOutcome(meta:JSONObject) = attachmentOutcomes.openFile(meta)
     private fun resolveOriginalMessageAttachments(conversation:String){
         if(conversation.isBlank())return
-        io.execute{try{val actual=app.ownerConversationAttachments(conversation);main.post{if(!closed&&state.conversationId==conversation)state=state.copy(messages=state.messages.map{message->val row=message.id?.let(actual::optJSONObject);if(row!=null&&row.optLong("revision")==message.sourceRevision)message.copy(attachmentFiles=row.optJSONArray("files").objects())else message})}}
-            catch(_:Exception){/* Retain count/unavailable state; no name is borrowed from the current draft. */}}
+        val opening = latestChatGet
+        val composer = chatViewEpoch
+        val source = messageAttachmentSourceRevision
+        fun current() = !closed && state.conversationId == conversation && chatViewEpoch == composer && latestChatGet == opening
+        io.execute {
+            val result = runCatching { app.ownerConversationAttachments(conversation) }
+            main.post {
+                if (!current()) return@post
+                val actual = result.getOrNull()
+                if (actual == null) {
+                    // This exact native metadata read is unknown; do not adopt a prior ready projection.
+                    if (source == messageAttachmentSourceRevision) messageAttachmentSourceRevision++
+                    return@post
+                }
+                state = state.copy(messages = state.messages.map { message ->
+                    val row = message.id?.let(actual::optJSONObject)
+                    if (row == null || row.optLong("revision") != message.sourceRevision) message else {
+                        val original = message.ownerOriginalLocator
+                        val sameNative = source == messageAttachmentSourceRevision && message.role == "user" &&
+                            original?.opt("kind") == "owner_native_original" &&
+                            row.optJSONObject("ownerOriginalLocator")?.toString() == original.toString()
+                        message.copy(attachmentFiles = row.optJSONArray("files").objects(),
+                            attachmentFilesSourceRevision = source.takeIf { sameNative })
+                    }
+                })
+            }
+        }
     }
 
     private fun outcomeOwnerWindow():String = groupTaskWindow ?: groupOwnerWindow ?: app.groupOwnerWorkflows.open(activity).also { groupOwnerWindow=it }
@@ -2747,9 +2772,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 // These original-source mutations can succeed even when the source
                 // was never indexed as formal memory, so no memory_changed event is
                 // guaranteed. Retire already-visible trace bodies before the reply.
-                if (error == null && domain == "taskMemory" && command in setOf("deleteOriginalMessage", "deleteOriginalConversation", "deleteOriginalImportedRecord")) {
-                    ++conversationSourceRevision
-                    invalidateTaskMemoryReadings()
+                if (domain == "taskMemory" && command in setOf("deleteOriginalMessage", "deleteOriginalConversation", "deleteOriginalImportedRecord")) {
+                    if (error == null) {
+                        changeConversationSources()
+                        invalidateTaskMemoryReadings()
+                    } else messageAttachmentSourceRevision++ // A late failure need not mean the original write did not commit.
                 }
                 if (closed || request.epoch != (ownerEpochs[domain] ?: 0) || ownerRequests[key]?.id != request.id) {
                     completeWebOwnerReceipt(request.id, null, "原管理窗口已变化，请重新查询原回执")
@@ -3537,7 +3564,17 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal val conversationReaderRevision get() = conversationReadSequence
     // The one-row request view is not a regular conversation reader authority.
     // Only the existing exact-window close action can consume that reader handle.
-    fun canReadConversationWindow(page:ConversationReadPage)=!closed&&page.workRequestAnchor==null&&privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
+    fun canReadConversationWindow(page:ConversationReadPage)=!closed&&page.workRequestAnchor==null&&page.searchAnchor==null&&
+        privateWorkspaceView()&&conversationReader?.window==page.window&&conversationReader?.conversation==page.conversation
+
+    /** Only the ordinary earlier-page action may use a contextual search window. It is not a resolver for other history operations. */
+    internal fun canPageSearchConversationWindow(page:ConversationReadPage):Boolean {
+        val anchor=page.searchAnchor?:return false
+        return webPrivateOwnerVisible()&&!hasChannelPhoneOrigin&&webTaskViewId==null&&state.filePath==null&&
+            page.conversation==state.conversationId&&composerViewEpoch==anchor.composerEpoch&&
+            composerDraft?.key=="conversation:${page.conversation}"&&composerDraft?.conversationId==page.conversation&&
+            conversationReader?.window==page.window&&conversationReader?.searchAnchor==anchor
+    }
     private fun workRequestWindowCurrent(task:String,run:String,epoch:Int)=webPrivateOwnerVisible()&&webTaskViewId==task&&
         state.tasks.singleOrNull { it.id==task }?.raw?.let {
             it.opt("executionRole")=="owner_work"&&it.opt("actorId")=="owner"&&it.opt("spaceId")=="private"&&
@@ -3618,6 +3655,45 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }
     }
+    /** A search detour opens the existing read-only page without selecting or writing the composer. */
+    internal fun openOriginalSearchHistory(conversation:String,locator:JSONObject,request:String,shown:()->Boolean,done:(JSONObject?,String?)->Unit) {
+        val atRequest=conversationReadSequence
+        val sourceRevision=conversationSourceRevision
+        val key=composerDraft?.key
+        val epoch=composerViewEpoch
+        val deadline=android.os.SystemClock.elapsedRealtime()+10_000
+        val control=dev.pocketengine.core.RunControl()
+        fun current()=shown()&&webPrivateOwnerVisible()&&conversationReader==null&&
+            conversationReadSequence==atRequest&&conversationSourceRevision==sourceRevision&&
+            conversation==state.conversationId&&composerDraft?.conversationId==conversation&&
+            key=="conversation:$conversation"&&key==composerDraft?.key&&epoch==composerViewEpoch&&
+            android.os.SystemClock.elapsedRealtime()<deadline
+        check(current()) { "请在同一私聊查看搜索命中的上下文" }
+        io.execute {
+            val original=runCatching {
+                check(current()) { "原私聊窗口已变化" }
+                val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule
+                    ?: error("私人历史宿主尚未准备")
+                assistant.readOriginalSearchHistory(conversation,locator,control)
+            }
+            main.post {
+                if(!current()){done(null,"原私聊或搜索消息已变化，没有打开其他记录");return@post}
+                original.fold({ native ->
+                    runCatching {
+                        val pin=OwnerSearchHistoryAnchor(request,locator.getString("recordId"),locator.getLong("recordVersion"),epoch)
+                        val page=ConversationReadPage(Math.addExact(atRequest,1L),conversation,native.optString("title"),null,
+                            anchor=pin.message,searchAnchor=pin).accept(native,false)
+                        require(page.initialized&&!page.limited&&page.messages.singleOrNull { it.id==pin.message }?.sourceRevision==pin.revision) {
+                            "未在有界历史中核对到原消息，未打开另一处"
+                        }
+                        conversationReadSequence=page.window;conversationReader=page
+                        JSONObject().put("window",page.window).put("conversationId",conversation).put("requestId",pin.request)
+                            .put("messageId",pin.message).put("revision",pin.revision).put("readOnly",true)
+                    }.fold({done(it,null)},{done(null,message(it))})
+                },{done(null,message(it))})
+            }
+        }
+    }
     fun openConversationReader(id:String) {
         if(id.isBlank()||id.length>240||!privateWorkspaceView())return
         // Reading the active conversation is independent of its live composer anchor.
@@ -3627,11 +3703,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         persistOwnerComposer();readConversationWindow(false)
     }
     private fun readConversationWindow(older:Boolean) {
-        val page=conversationReader?:return;if(!canReadConversationWindow(page)||older&&(!page.hasMore||page.limited))return
+        val page=conversationReader?:return
+        fun inWindow()=canReadConversationWindow(page)||older&&canPageSearchConversationWindow(page)
+        if(!inWindow()||older&&(!page.hasMore||page.limited))return
         val requested=if(older)page.cursor else "";conversationReader=page.copy(loading=true,error=null)
         io.execute {
             val report=page.reportAnchor
             val result=runCatching {
+                if(page.searchAnchor!=null)check(inWindow()) { "原私聊已变化，未翻到其他历史" }
                 if(report!=null&&!older)app.tasks.ownerWorkReportHistoryForOwner(report.task,report.run,report.epoch,report.message,
                     report.revision,report.fingerprint,dev.pocketengine.core.RunControl())
                 else {
@@ -3639,7 +3718,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     assistant.readOriginalConversation(page.conversation,requested,40)
                 }
             }
-            main.post {val current=conversationReader?:return@post;if(!canReadConversationWindow(page))return@post
+            main.post {val current=conversationReader?:return@post;if(!inWindow())return@post
                 fun failed(failure:Throwable) {
                     val preserved=if(report!=null&&!older)current.copy(messages=emptyList(),rowBytes=emptyMap(),bytes=0,hasMore=false,cursor="") else current
                     conversationReader=preserved.copy(loading=false,error=message(failure))
@@ -6011,6 +6090,27 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var conversationSourceRevision by mutableStateOf(0L)
         private set
+    internal var messageAttachmentSourceRevision by mutableStateOf(0L)
+        private set
+    private fun changeConversationSources(keepMessageAttachments: Boolean = false) {
+        if (!keepMessageAttachments) messageAttachmentSourceRevision++
+        conversationSourceRevision++
+    }
+    // Only these native private-chat updates leave already committed ordinary user
+    // attachment references untouched. Other events and uncertain reads retire them.
+    private fun savedMessageAttachmentsUnaffected(payload: JSONObject): Boolean {
+        fun id(key: String) = (payload.opt(key) as? String)?.isNotBlank() == true
+        return id("conversationId") && when (payload.opt("phase")) {
+            "idle" -> true
+            "resource_state" -> payload.opt("resourceType") == "assistant_text" &&
+                payload.opt("resourceState") in setOf("queued", "running")
+            "consumed" -> payload.opt("status") == "consumed" && id("messageId")
+            "completed", "turn_reply" -> id("messageId")
+            "owner_work_result", "phone_handoff_result" -> payload.opt("accepted") == true &&
+                payload.opt("duplicate") == false && payload.opt("available") == true && id("messageId")
+            else -> false
+        }
+    }
     internal fun hasCurrentOriginalOwnerWorkQuestion(task: UiTask): Boolean {
         if (!webPrivateOwnerVisible() || webTaskViewId != task.id) return false
         val current = state.tasks.firstOrNull { it.id == task.id } ?: return false
@@ -6300,10 +6400,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
             "feature_event" -> {
                 val payload = event.optJSONObject("payload") ?: return
-                if (event.optString("feature") in setOf("memory", "assistant", "attachments")) ++conversationSourceRevision
-                if (event.optString("feature") == "skills" && payload.optString("event") == "skills_changed" ||
-                    event.optString("feature") == "workspace" && payload.optString("event") == "workspace_changed" ||
-                    event.optString("feature") == "teams" && payload.optString("event") == "material_scope_changed") ++conversationSourceRevision
+                val sourceFeature = event.optString("feature")
+                if (sourceFeature in setOf("memory", "assistant", "attachments"))
+                    changeConversationSources(keepMessageAttachments = sourceFeature == "assistant" && savedMessageAttachmentsUnaffected(payload))
+                if (sourceFeature == "skills" && payload.optString("event") == "skills_changed" ||
+                    sourceFeature == "workspace" && payload.optString("event") == "workspace_changed" ||
+                    sourceFeature == "teams" && payload.optString("event") == "material_scope_changed") changeConversationSources()
                 if (event.optString("feature") == "notifications") ++notificationPreviewsSourceRevision
                 if (event.optString("feature") == "memory" && payload.optString("event") == "memory_changed") { invalidateTaskMemoryReadings(); invalidateCognitionReadings(); ownerArchives.invalidateExperienceReadings() }
                 if (event.optString("feature") in setOf("assistant", "attachments")) { ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
@@ -6385,7 +6487,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 return // A late Web receipt must not write global errors/results for another conversation.
             }
         }
-        if (failure == null && (feature == "assistant" && command in setOf("editMessage", "deleteMessage", "deleteConversation", "delete") || feature == "attachments" && command in setOf("delete", "remove"))) { ++conversationSourceRevision; ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
+        if (feature == "assistant" && command in setOf("editMessage", "deleteMessage", "deleteConversation", "delete") ||
+            feature == "attachments" && command in setOf("delete", "remove")) {
+            if (failure == null) { changeConversationSources(); ownerArchives.invalidateExperienceReadings(); invalidateCognitionReadings() }
+            else messageAttachmentSourceRevision++
+        }
+        if (failure != null && feature == "assistant" && command == "get" && latestChatGet == requestId &&
+            meta.second.opt("conversationId") == state.conversationId) messageAttachmentSourceRevision++
         if (feature == "teams") {
             if (event.opt("ok") !is Boolean) failure = "团队操作未返回有效确认"
             if (failure == null && command in setOf("get", "pause", "resume", "feedback", "cancel", "continueMessages", "reviseAssignment", "continueOutcome", "sendMessage") && meta.second.optString("runId") != result.optString("id")) failure = "团队回执与原任务不匹配，请刷新后核对"
