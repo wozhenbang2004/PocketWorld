@@ -265,12 +265,14 @@ function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:J
     !Number.isSafeInteger(original.coordinatorEpoch)||original.coordinatorEpoch<1||original.coordinatorEpoch!==catalog.coordinatorEpoch)return;
  return excerptPdfSource(view,taskId);
 }
+const isLiveMessageOriginal=(view:Json)=>view.messagePdfOnly===true||view.messageInputDocumentOnly===true||view.messageReplyDocumentOnly===true;
+
 /** One file surface for conversation attachments, task outcomes and the private library. */
 export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,replyAttachmentDraft,readWorkTextVisit,quotedDraftArrival}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  const lastLiveMessageFileWindow=useRef<string|undefined>(undefined);
  if(incoming.open===true&&incoming.ready===true)
-  lastLiveMessageFileWindow.current=(incoming.messagePdfOnly===true||incoming.messageReplyDocumentOnly===true)&&typeof incoming.windowId==='string'?incoming.windowId:undefined;
+  lastLiveMessageFileWindow.current=isLiveMessageOriginal(incoming)&&typeof incoming.windowId==='string'?incoming.windowId:undefined;
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
  const view=incoming.open&&!incoming.ready&&retained.current?{...retained.current,ready:false}:incoming,file=obj(view.file),snapshot=obj(view.snapshot);
@@ -329,7 +331,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   wordRead.chunks.every((block:Json,index:number)=>block.unit===wordExcerpt.unit&&block.chunk===wordExcerpt.chunk+index);
  const mode=draftDesk?'drafts':view.documentDraft?'edit':view.comparison?'compare':view.processingOpen?'process':
   pdfPageText||wordExcerpt?'read':hasOriginal?'original':view.documentOpen?'read':file.id?'detail':'list';
- const replyDocumentOnly=view.messageReplyDocumentOnly===true, liveMessageOriginalOnly=view.messagePdfOnly===true||replyDocumentOnly;
+ const replyDocumentOnly=view.messageReplyDocumentOnly===true, liveMessageOriginalOnly=isLiveMessageOriginal(view);
  const reportOnly=view.reportResultOnly===true,scopedResultOnly=reportOnly||view.historyResultOnly===true||liveMessageOriginalOnly;
  const privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly;
  const listScope=privateFiles&&!view.choosingSource?JSON.stringify([view.taskId||'',snapshot.taskRunId||'',snapshot.coordinatorEpoch||0,
@@ -587,7 +589,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   if(!current.open)return false;
   if(current.ready&&readerActionMenu===readerActionScope){setReaderActionMenu('');return true}
   if(draftDesk){draftDeskExit.current?.(draftDesk.visit.entry==='quoted');return true}
-  if(current.messagePdfOnly===true||current.messageReplyDocumentOnly===true){
+  if(isLiveMessageOriginal(current)){
    if(current.ready&&!backFlight.current){
     backFlight.current=true;void act('close').catch(()=>{}).finally(()=>{backFlight.current=false});
    }
@@ -629,7 +631,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const canStage=!localOnlyFile&&!scopedResultOnly&&!workOutput&&privateFiles&&!!selection&&!!draftTarget&&!!onStageFile&&!!onOpenDraft;
  const focusedDraft=view.focusedStandaloneDraft===true;
  const title=focusedDraft?'本机文档草稿':draftDesk?'私人文件库 · 本机草稿':view.documentDraft?'编辑文档':pdfPageText?`第 ${pdfPageText} 页的文字`:
-  wordExcerpt?'核对 Word 摘录':replyDocumentOnly?'原答复文档':liveMessageOriginalOnly?'原消息 PDF':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
+  wordExcerpt?'核对 Word 摘录':replyDocumentOnly?'原答复文档':view.messageInputDocumentOnly===true?
+  (pairedOriginal.kind==='office'&&pairedOriginal.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'?'提问所附 Word':
+   pairedOriginal.kind==='text'&&pairedOriginal.mimeType==='text/plain'?'提问所附 TXT':'提问所附原件'):
+  view.messagePdfOnly===true?'原消息 PDF':hasOriginal?'查看原件':view.comparison?'原图对照':view.processingOpen?'处理原件':view.documentOpen?'按来源读取':hasFile?'文件来源':view.team?'成员文件成果':view.taskId?'原任务的文件与成果':'文件与成果';
  const close=()=>{
   if(draftDesk){draftDeskExit.current?.(true);return}
   if(!view.ready||draftFlight.current)return;

@@ -25,6 +25,7 @@ import dev.pocketengine.store.OwnerWorkTask
 import dev.pocketengine.store.TaskExecutionScope
 import dev.pocketengine.store.TaskStore
 import dev.pocketengine.features.teams.TeamCoordinator
+import dev.pocketengine.ui.AttachmentMessageInput
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
 import dev.pocketengine.ui.MediaOwnerUi
@@ -1145,10 +1146,14 @@ internal class PocketWebBridge(
                 // but does not start or restore a draft lease.
                 val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0 ||
                     action == "attachmentWorkspace.action" && draftCommand == "queryDocument") freshLibraryEntry() else null
-                if (action == "attachmentWorkspace.open" && args.has("messagePdf")) {
-                    checkedPayload(args,setOf("messagePdf"))
-                    val source=checkedMessageAttachmentSource(args.getJSONObject("messagePdf"))
-                    val original=visibleMessageAttachmentSelection(source,ordinaryPdf=true)?:error("原消息 PDF 或版本已变化，请返回原消息")
+                if (action == "attachmentWorkspace.open" && (args.has("messagePdf") || args.has("messageInputDocument"))) {
+                    val key=if(args.has("messagePdf"))"messagePdf" else "messageInputDocument"
+                    val kind=if(key=="messagePdf")AttachmentMessageInput.PDF else AttachmentMessageInput.WORD_OR_TEXT
+                    checkedPayload(args,setOf(key))
+                    val source=checkedMessageAttachmentSource(args.getJSONObject(key))
+                    val unavailable=if(kind==AttachmentMessageInput.PDF)"原消息 PDF 或版本已变化，请返回原消息"
+                        else "提问所附原件或原答复已变化，请返回原消息"
+                    val original=visibleMessageAttachmentSelection(source,localInput=kind)?:error(unavailable)
                     val originalDocument=documentId?:error("原消息页面已关闭")
                     // Unlike the generic ticket, this existing navigation-only ticket never follows a sibling Phone execution.
                     val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
@@ -1160,8 +1165,8 @@ internal class PocketWebBridge(
                     fun current()=!closed&&documentId==originalDocument&&ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())&&
                         controller.conversationReaderRevision==reader&&controller.messageAttachmentSourceRevision==sourceRevision&&
                         controller.composerViewEpoch==composerEpoch&&controller.composerDraft?.key==composerKey&&
-                        visibleMessageAttachmentSelection(source,ordinaryPdf=true,inOwnPdf=true)==original
-                    complete(id,attachmentPages.openMessagePdf(original.file,ticket,::current),null,retainValue=false)
+                        visibleMessageAttachmentSelection(source,localInput=kind,inOwnReader=true)==original
+                    complete(id,attachmentPages.openMessageInput(original.file,kind,ticket,::current),null,retainValue=false)
                     publishState();return
                 }
                 if (action == "attachmentWorkspace.open" && args.has("replyDocument")) {
@@ -2228,6 +2233,37 @@ internal class PocketWebBridge(
                 projectWorkPages.dispatch(action, args) { result, error -> complete(id, result, error, "outcome_unknown"); publishState() }; return
             }
             if (action in PocketWebPlans.COMMANDS) {
+                if (action == "plans.read" && args.has("originalStep")) {
+                    checkedPayload(args, setOf("originalStep"))
+                    require(args.opt("originalStep") == true)
+                    val task = requireNotNull(taskViewId)
+                    val doc = requireNotNull(documentId)
+                    val window = captureWindow()
+                    val foreground = controller.displayedPhoneWindowVersion()
+                    fun bodyCurrent() = !closed && documentId == doc && commandFence.accepts(window.bridge) &&
+                        taskViewId == task && controller.displayedPhoneWindowAlive(foreground)
+                    fun shown(): TaskStore.OriginalPrivatePlanStep? {
+                        val state = controller.state
+                        if (!bodyCurrent() || !acceptsWindow(window) || section != null || taskReturnSection != null ||
+                            !controller.webPrivateOwnerVisible() || controller.conversationReader != null ||
+                            controller.queuedInputsPage != null || state.filePath != null || state.chatAttachmentPickerOpen ||
+                            controller.attachmentOutcomes.state.open) return null
+                        val raw = state.tasks.singleOrNull { it.id == task }?.raw ?: return null
+                        if (raw.opt("taskProjection") != "detail_window" || raw.opt("auditBodyIncluded") != true ||
+                            raw.opt("taskCoreReadLimited") != false) return null
+                        return TaskStore.originalPrivatePlanStep(raw)?.takeIf { it.taskId() == task }
+                    }
+                    val original = shown() ?: error("请在原私人工作中核对所属目标")
+                    controller.runPluginCatalogWork(Runnable {
+                        val result = runCatching { controller.nativeButlerHost().readOriginalPlanStepContext(original) { bodyCurrent() } }.getOrNull()
+                        main.post {
+                            if (documentId != doc) return@post
+                            if (shown() != original || result == null) complete(id, null, "暂未核对到这一步所属的原目标。", retainValue = false)
+                            else complete(id, PocketWebState.publicValue(result) as JSONObject, null, retainValue = false)
+                        }
+                    })
+                    return
+                }
                 val originalReminderRead = action == "plans.reviewSchedule" && args.has("messageId")
                 val originalReminderConfirm = action == "plans.confirm" && args.has("originalChatReminder")
                 if (originalReminderRead || originalReminderConfirm) {
@@ -3921,15 +3957,38 @@ internal class PocketWebBridge(
         }
         return source
     }
-    private data class VisibleMessageAttachment(val file: UiChatAttachment, val original: PhoneDraftMessagePin?)
+    private data class ConsumedAttachmentAnswer(val locator:PhoneDraftMessagePin,val task:String,val run:String,val epoch:Int,val reply:String)
+    private data class VisibleMessageAttachment(val file:UiChatAttachment,val original:PhoneDraftMessagePin?,val answer:ConsumedAttachmentAnswer?)
+    /** A saved answer consumed this exact question; that does not prove the model read the file body. */
+    private fun consumedAttachmentAnswer(rows:List<UiMessage>,input:UiMessage,original:PhoneDraftMessagePin):ConsumedAttachmentAnswer? {
+        if(input.attachmentCount!=1||input.attachments.size!=1||input.hostGoalTaskId!=null||input.content.isEmpty())return null
+        val receipt=input.submission?:return null
+        if(receipt.opt("status")!="consumed"||receipt.opt("queueState")!="materialized"||receipt.opt("reconciliationRequired")!=false||
+            receipt.opt("messageId")!=original.message||receipt.opt("conversationId")!=original.conversation)return null
+        fun number(key:String):Long? = when(val n=receipt.opt(key)){is Int->n.toLong();is Long->n;else->null}
+        if(number("ownerMessageRevision")!=original.version)return null
+        val replyMessage=receipt.opt("replyMessageId") as? String?:return null
+        val answer=rows.singleOrNull{it.id==replyMessage}?:return null
+        if(answer.role!="assistant"||answer.sourceRevision!=1L||answer.content.isEmpty()||answer.phoneResult!=null||
+            answer.taskResult!=null||answer.hostGoalTaskId!=null||answer.originalHostFinal!=null)return null
+        val reply=answer.replyContext?:return null
+        val replyId=reply.replyId?:return null
+        if(reply.deliveryId!=null||reply.replyToMessageIds.singleOrNull()!=original.message||
+            receipt.opt("taskId")!=reply.taskId||receipt.opt("runId")!=reply.runId||receipt.opt("consumedRunId")!=reply.runId||
+            number("epoch")!=reply.epoch.toLong()||number("consumedEpoch")!=reply.epoch.toLong())return null
+        val pin=PhoneDraftMessagePin.from(answer.ownerOriginalLocator)?.takeIf {
+            it.generation==original.generation&&it.conversation==original.conversation&&it.message==replyMessage&&it.version==1L
+        }?:return null
+        return ConsumedAttachmentAnswer(pin,reply.taskId,reply.runId,reply.epoch,replyId)
+    }
     private fun visibleMessageAttachment(source: JSONObject): UiChatAttachment? = visibleMessageAttachmentSelection(source)?.file
-    private fun visibleMessageAttachmentSelection(source: JSONObject,ordinaryPdf:Boolean=false,inOwnPdf:Boolean=false): VisibleMessageAttachment? {
+    private fun visibleMessageAttachmentSelection(source:JSONObject,localInput:AttachmentMessageInput?=null,inOwnReader:Boolean=false):VisibleMessageAttachment? {
         val task = source.optString("taskId").takeIf { it.isNotEmpty() }
         val files=controller.attachmentOutcomes.state
-        if (section != null || taskViewId != task || files.open&&!(ordinaryPdf&&inOwnPdf&&files.messagePdfOnly) ||
+        if (section != null || taskViewId != task || files.open&&!(localInput!=null&&inOwnReader&&files.messageInput==localInput) ||
             !controller.webPrivateOwnerVisible()) return null
         val conversation = source.getString("conversationId")
-        if(ordinaryPdf&&(task!=null||source.has("window")||controller.state.filePath!=null||
+        if(localInput!=null&&(task!=null||source.has("window")||controller.state.filePath!=null||
             controller.queuedInputsPage!=null||phoneComposer.intent||controller.hasChannelPhoneOrigin||controller.state.chatAttachmentPickerOpen||
             controller.composerDraft?.let{it.key=="conversation:$conversation"&&it.conversationId==conversation}!=true))return null
         val page = controller.conversationReader
@@ -3943,25 +4002,29 @@ internal class PocketWebBridge(
         val row = rows.singleOrNull { it.id == source.getString("messageId") && it.sourceRevision == source.getLong("sourceRevision") } ?: return null
         if (task != null && (row.role != "assistant" || (row.taskId?.takeIf(String::isNotEmpty) ?: row.submission?.optString("taskId")) != task)) return null
         val file=row.attachments.singleOrNull { it.id == source.getString("id") && it.sha256 == source.getString("sha256") }?:return null
-        val original = if (ordinaryPdf) {
+        val original = if (localInput!=null) {
             PhoneDraftMessagePin.from(row.ownerOriginalLocator)?.takeIf {
                 it.conversation == conversation && it.message == row.id && it.version == row.sourceRevision
             } ?: return null
         } else null
-        if(ordinaryPdf){
-            if(row.role!="user"||row.sourceRevision<=0||file.mimeType!="application/pdf"||file.size<=0||
+        if(localInput!=null){
+            if(row.role!="user"||row.sourceRevision<=0||!localInput.supports(file.mimeType,file.name)||file.size<=0||
                 row.attachments.count{it.id==file.id}!=1||
-                !inOwnPdf&&row.attachmentFilesSourceRevision!=controller.messageAttachmentSourceRevision)return null
+                !inOwnReader&&row.attachmentFilesSourceRevision!=controller.messageAttachmentSourceRevision)return null
             val projected=row.attachmentFiles.filter{it.opt("id")==file.id}
             // A conversation refresh can briefly replace the metadata parallel to the exact
             // stored message pin. Never enter on absence; a scoped, SHA-checked reader already held may wait for it.
-            if(!inOwnPdf||projected.isNotEmpty()){
+            if(!inOwnReader||projected.isNotEmpty()){
                 val ready=projected.singleOrNull()?:return null
                 if(ready.opt("role")!="source"||ready.opt("availability")!="available"||ready.opt("contentReadConfirmed")!=false||
-                    ready.opt("sha256")!=file.sha256||ready.opt("mimeType")!=file.mimeType||ready.optLong("size",-1L)!=file.size)return null
+                    ready.opt("sha256")!=file.sha256||ready.opt("mimeType")!=file.mimeType||ready.optLong("size",-1L)!=file.size||
+                    !localInput.supports(file.mimeType,ready.opt("name") as? String?:""))return null
             }
         }
-        return VisibleMessageAttachment(file,original)
+        val answer=if(localInput==AttachmentMessageInput.WORD_OR_TEXT){
+            consumedAttachmentAnswer(rows,row,checkNotNull(original))?:return null
+        }else null
+        return VisibleMessageAttachment(file,original,answer)
     }
     private data class ReplyPicker(val request:String,val key:String,val epoch:Int,val sourceWindow:String,val file:UiChatAttachment,
         val target:OriginalReplyDocument.Target,val current:()->Boolean)

@@ -193,6 +193,43 @@ public final class AutomationPlanHost implements AutomationBook.GoalTaskResolver
     public JSONObject handle(AutomationModule module,String command,JSONObject payload)throws Exception{
         return handle(module,command,payload,false);
     }
+    /** A single existing Book read, no progress resolver, review handle or scheduler. */
+    public JSONObject readOriginalPlanStepContext(AutomationModule module,TaskStore.OriginalPrivatePlanStep original,
+                                                  java.util.function.BooleanSupplier current)throws Exception{
+        if(!current.getAsBoolean()||!tasks.originalPrivatePlanStepCurrent(original))
+            throw new SecurityException("原工作已变化");
+        // No Tasks monitor is held while reading the Book; it owns this reciprocal link.
+        JSONObject plan=module.handle("getPlan",new JSONObject().put("scope",scope()).put("id",original.planId())).getJSONObject("plan");
+        JSONArray steps=plan.getJSONArray("steps");
+        if(!original.planId().equals(plan.opt("id"))||!"owner".equals(plan.opt("ownerId"))||!"private".equals(plan.opt("spaceId"))||
+                !Boolean.TRUE.equals(plan.opt("referenceOnly"))||!Boolean.FALSE.equals(plan.opt("executionAuthorized"))||
+                steps.length()<1||steps.length()>50)throw new SecurityException("原目标身份不可核对");
+        JSONObject step=null;int index=-1;
+        for(int i=0;i<steps.length();i++){
+            JSONObject row=steps.getJSONObject(i);
+            if(!original.stepId().equals(row.opt("id"))&&!original.taskId().equals(row.opt("taskId")))continue;
+            if(step!=null)throw new SecurityException("原目标步骤关联不唯一");
+            step=row;index=i;
+        }
+        JSONObject admitted=step==null?null:step.optJSONObject("taskAdmission"),seen=step==null?null:step.optJSONObject("taskObservation");
+        if(step==null||admitted==null||seen==null||!original.planId().equals(step.opt("planId"))||
+                !original.stepId().equals(step.opt("id"))||!original.taskId().equals(step.opt("taskId"))||step.optInt("planIndex",-1)!=index||
+                !"bound".equals(admitted.opt("state"))||!original.planId().equals(admitted.opt("ruleId"))||
+                admitted.optLong("ruleRevision")!=original.ruleRevision()||!original.occurrenceId().equals(admitted.opt("occurrenceId"))||
+                !original.goal().equals(admitted.opt("goal"))||!original.mode().equals(admitted.opt("executionMode"))||
+                !"TaskStore".equals(seen.opt("authority"))||!original.occurrenceId().equals(seen.opt("occurrenceId"))||
+                !original.taskId().equals(seen.opt("taskId"))||!original.runId().equals(seen.opt("runId"))||
+                original.epoch()!=seen.optInt("coordinatorEpoch"))
+            throw new SecurityException("原工作不再对应这一步");
+        String title=plan.getString("title"),goal=plan.optString("goal"),stepTitle=step.getString("title");
+        if(title.isBlank()||title.length()>200||goal.length()>4000||stepTitle.isBlank()||stepTitle.length()>200||
+                !tasks.originalPrivatePlanStepCurrent(original)||!current.getAsBoolean())throw new SecurityException("原目标暂不可核对");
+        return new JSONObject().put("format","pocketworld.original-plan-step-context.v1")
+                .put("taskId",original.taskId()).put("runId",original.runId()).put("epoch",original.epoch())
+                .put("planId",original.planId()).put("stepId",original.stepId()).put("occurrenceId",original.occurrenceId())
+                .put("title",title).put("goal",goal.isBlank()?title:goal).put("stepTitle",stepTitle)
+                .put("stepNumber",index+1).put("stepCount",steps.length()).put("referenceOnly",true).put("executionAuthorized",false);
+    }
     private JSONObject handle(AutomationModule module,String command,JSONObject payload,boolean nativeOwner)throws Exception{
         if(!handles(command))throw new IllegalArgumentException("不是承诺或计划宿主命令");
         JSONObject input=new JSONObject(payload.toString()).put("scope",scope());

@@ -6697,6 +6697,35 @@ public final class TaskStore {
             write(task);db.setTransactionSuccessful();return copy(task,false).put("created",true);
         }finally{db.endTransaction();}
     }
+    /** Original local Plan step identity only. A saved plan is not a Worker or a permission. */
+    public record OriginalPrivatePlanStep(String taskId,String runId,int epoch,String planId,String stepId,
+                                          String occurrenceId,long ruleRevision,String goal,String mode){}
+    private static boolean originalPlanStepId(String id){
+        return id.matches("[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}");
+    }
+    public static OriginalPrivatePlanStep originalPrivatePlanStep(JSONObject task){
+        if(task==null||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||
+                Boolean.FALSE.equals(task.opt("contextAvailable"))||task.optBoolean("contextWithdrawn")||
+                task.optBoolean("sourceCurrentReadRequired")||!task.optString("conversationId").isEmpty())return null;
+        JSONObject origin=task.optJSONObject("origin"),scope=task.optJSONObject("automationScope");
+        if(origin==null||scope==null||!"automation".equals(origin.opt("kind"))||origin.has("nativeOrigin")||
+                scope.has("remoteWait")||scope.has("businessWait"))return null;
+        String kind=task.optString("kind"),mode=task.optString("executionMode");
+        if(!("assistant".equals(kind)&&"capabilities".equals(mode)||
+                "phone".equals(kind)&&("background".equals(mode)||"main_screen".equals(mode))))return null;
+        String id=task.optString("id"),run=task.optString("runId"),plan=origin.optString("planId"),
+                step=origin.optString("commitmentId"),occurrence=origin.optString("occurrenceId"),goal=task.optString("goal");
+        int epoch=task.optInt("coordinatorEpoch");
+        long revision=origin.optLong("ruleRevision");
+        if(!originalPlanStepId(id)||!originalPlanStepId(run)||!originalPlanStepId(plan)||!originalPlanStepId(step)||
+                !originalPlanStepId(occurrence)||epoch<1||revision<1||goal.isBlank()||goal.length()>4000||
+                !plan.equals(origin.opt("ruleId"))||!plan.equals(task.opt("automationRuleId"))||
+                task.optLong("automationRevision")!=revision||!plan.equals(scope.opt("planId"))||!step.equals(scope.opt("commitmentId")))return null;
+        return new OriginalPrivatePlanStep(id,run,epoch,plan,step,occurrence,revision,goal,mode);
+    }
+    public synchronized boolean originalPrivatePlanStepCurrent(OriginalPrivatePlanStep expected)throws Exception{
+        return expected!=null&&expected.equals(originalPrivatePlanStep(boundedHostWorkCore(expected.taskId(),false)));
+    }
     /** A native proposal's original conversation is provenance, never ambient private tools.
      * Old proposals without a fixed source run must be reviewed again instead of rebound. */
     private String checkedScheduledConversation(JSONObject origin)throws Exception {

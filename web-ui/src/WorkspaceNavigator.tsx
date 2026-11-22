@@ -76,7 +76,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
   const ongoing = recent.filter(activity).sort((a, b) => (activity(b)?.priority || 0) - (activity(a)?.priority || 0));
   const other = recent.filter(c => !activity(c));
   const pinned = other.filter(c => Number(c.pinOrder) > 0), unpinned = other.filter(c => !(Number(c.pinOrder) > 0));
-  const chatFirst = !!conversationFirst && !desktop && !!selectedConversation && recent.length > 0;
+  const chatFirst = !!conversationFirst && !desktop && recent.length > 0;
   const homePosition = chatFirst ? 'conversationHomeY' : 'homeY';
   const remember = () => { if (scroll.current && face !== 'records') memory[face === 'home' ? homePosition : 'directoryY'] = scroll.current.scrollTop; };
   const enter = (to: 'records' | 'directory') => {

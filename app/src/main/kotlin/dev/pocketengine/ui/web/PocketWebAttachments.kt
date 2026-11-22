@@ -14,6 +14,7 @@ import dev.pocketengine.features.attachments.documents.DocumentContent
 import dev.pocketengine.features.attachments.processing.NativeFileProcess
 import dev.pocketengine.features.attachments.processing.NativeMediaTrim
 import dev.pocketengine.features.local.project.ProjectApkInstallActivity
+import dev.pocketengine.ui.AttachmentMessageInput
 import dev.pocketengine.ui.AttachmentOriginalReturn
 import dev.pocketengine.ui.AttachmentPdfPageText
 import dev.pocketengine.ui.AttachmentWordExcerpt
@@ -408,8 +409,8 @@ internal class PocketWebAttachments(
         flow.openReceivedOriginal(file,current);changed()
     }
     /** Only the original live message may hold this read-only viewer window. */
-    fun openMessagePdf(file:dev.pocketengine.ui.UiChatAttachment,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
-        openMessageOriginal(ticket,current){flow.openMessagePdf(file,it)}
+    fun openMessageInput(file:UiChatAttachment,kind:AttachmentMessageInput,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
+        openMessageOriginal(ticket,current){flow.openMessageInput(file,kind,it)}
     fun openReplyDocument(file:UiChatAttachment,
         target:OriginalReplyDocument.Target,ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject {
         val opened=openMessageOriginal(ticket,current){flow.openReplyDocument(file,target,it)}
@@ -568,7 +569,9 @@ internal class PocketWebAttachments(
         val exposeDocument=(state.pdfPageText==null||shownPdfPageText!=null)&&(state.wordExcerpt==null||shownWord!=null)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("historyResultOnly", scoped != null && !report && !state.liveMessageOriginalOnly).put("reportResultOnly", report)
-            .put("messagePdfOnly",state.messagePdfOnly).put("messageReplyDocumentOnly",state.messageReplyDocumentOnly)
+            .put("messagePdfOnly",state.messageInput==AttachmentMessageInput.PDF)
+            .put("messageInputDocumentOnly",state.messageInput==AttachmentMessageInput.WORD_OR_TEXT)
+            .put("messageReplyDocumentOnly",state.messageReplyDocumentOnly)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
             .put("focusedStandaloneDraft", state.focusedStandaloneDraft)
             .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)

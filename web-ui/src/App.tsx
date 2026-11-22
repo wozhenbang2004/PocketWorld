@@ -120,6 +120,7 @@ import {TaskPackageProjectContext} from './PrepareTaskPackageProject';
 import {useProjectPackageHandoff} from './useProjectPackageHandoff';
 import {TaskOutcome,originalBackgroundPhoneOutcome} from './TaskOutcome';
 import {OwnerWorkFacts,WorkGoal} from './OwnerWorkFacts';
+import {OriginalPlanStepContext} from './OriginalPlanStepContext';
 import {OwnerWorkTeamReportReview,linkedTeamReportChoice,sameTeamReportChoice,teamReportDecisionSaved,teamReportParent,teamReportRead,
  type TeamReportChoice,type TeamReportParent,type TeamReportRead} from './OwnerWorkTeamReportReview';
 import {WorkExecutionPlace} from './WorkExecutionPlace';
@@ -190,7 +191,7 @@ type Task={id:string;goal:string;status:string;summary?:string;executionMode?:st
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
@@ -207,9 +208,10 @@ type OriginalOwnerRequest={work:WorkIdentity;draftEpoch:number;resume:number;nat
 type ChatReportLink={target:ReportTarget;deliveryId:string;revision:number;writer:WorkIdentity;replyId:string};
 type ChatReportReturn={link:ChatReportLink;draftEpoch:number;resume:number;nativeTaskRequest:number};
 type ChatWorkReturn={document:number;conversation:string;message:string;revision:number;top:number;offset:number;trigger:HTMLButtonElement;hostTaskId?:string;replyRun?:WorkIdentity;result?:{work:TaskResult;navigation:number};phoneDelivery?:{result:PhoneResult;resume:number};ownerRequest?:OriginalOwnerRequest;reportReply?:ChatReportReturn};
-type ChatMessageOriginalKind='messagePdf'|'replyDocument';
-type OriginalAnswerInputPdf={answerId:string;revision:1;replyId:string;work:WorkIdentity;source:MessageAttachmentSource};
-type ChatMessageOriginalVisit={kind:ChatMessageOriginalKind;source:MessageAttachmentSource;input:ModelSetupInput;anchor?:ChatWorkReturn;navigation:number;resume:number;windowId:string;shelf?:PreferredReplyDocument;answerPdf?:OriginalAnswerInputPdf};
+type ChatMessageOriginalKind='messagePdf'|'messageInputDocument'|'replyDocument';
+type AnswerInputFormat='PDF'|'Word'|'TXT';
+type OriginalAnswerInput={answerId:string;revision:1;replyId:string;work:WorkIdentity;source:MessageAttachmentSource;format:AnswerInputFormat};
+type ChatMessageOriginalVisit={kind:ChatMessageOriginalKind;source:MessageAttachmentSource;input:ModelSetupInput;anchor?:ChatWorkReturn;navigation:number;resume:number;windowId:string;shelf?:PreferredReplyDocument;answerInput?:OriginalAnswerInput};
 type ChatWorkRowOrigin={work:WorkIdentity;conversation:string;draftEpoch:number;documentEpoch:number;resumeRevision:number;navigation:number;nativeTaskRequest:number;trigger:HTMLButtonElement;question?:true;composerRail?:true};
 type ChatWorkTaskOpen={beforeTaskRequest:number;navigation:number}&({returnTo:ChatWorkReturn;row?:never}|{row:ChatWorkRowOrigin;returnTo?:never});
 type AcknowledgedWorkVisit=TaskReviewWindow&{chatRow?:ChatWorkRowOrigin;chatReturnRequest?:number};
@@ -488,9 +490,19 @@ function savedOwnerAttachmentChoices(message:Message):OriginalAttachmentChoice[]
    ?[{...pin,name:file.name}]:[];
  });
 }
-/** A submitted input, not a citation or proof the model read the PDF's contents. */
-function originalAnswerInputPdfs(rows:readonly Message[],conversation:string,requireReady=true){
- const links=new Map<string,OriginalAnswerInputPdf>();
+function answerInputFormat(mime:unknown,name:unknown):AnswerInputFormat|undefined{
+ if(mime==='application/pdf')return 'PDF';
+ const filename=typeof name==='string'?name.toLowerCase():'';
+ if(mime==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'&&filename.endsWith('.docx'))return 'Word';
+ if(mime==='text/plain'&&filename.endsWith('.txt'))return 'TXT';
+}
+const answerInputKind=(format:AnswerInputFormat):Exclude<ChatMessageOriginalKind,'replyDocument'>=>format==='PDF'?'messagePdf':'messageInputDocument';
+const currentInputAttachment=(input:Message,format:AnswerInputFormat,id:string,sha256:string,mime:unknown)=>
+ (format==='PDF'?input.localMessagePdfSourceCurrent:input.localMessageInputDocumentSourceCurrent)===true&&
+ savedOwnerAttachmentChoices(input).some(choice=>choice.fileId===id&&choice.sha256===sha256&&answerInputFormat(mime,choice.name)===format);
+/** The original question's attachment, not a citation or proof the model read its contents. */
+function originalAnswerInputs(rows:readonly Message[],conversation:string,requireReady=true){
+ const links=new Map<string,OriginalAnswerInput>();
  if(!conversation)return links;
  const byId=new Map<string,Message|null>();
  for(const row of rows)if(row.id)byId.set(row.id,byId.has(row.id)?null:row);
@@ -504,16 +516,17 @@ function originalAnswerInputPdfs(rows:readonly Message[],conversation:string,req
      receipt.messageId!==id||receipt.conversationId!==conversation||receipt.replyMessageId!==row.id||receipt.ownerMessageRevision!==revision||
      receipt.taskId!==reply.taskId||receipt.runId!==reply.runId||receipt.consumedRunId!==reply.runId||receipt.epoch!==reply.epoch||receipt.consumedEpoch!==reply.epoch)continue;
   const refs=asArray<Json>(input.attachments),file=refs.length===1?obj(refs[0]):null,pin=file&&exactFileTarget(file);
-  if(!file||!pin||file.mimeType!=='application/pdf'||!Number.isSafeInteger(file.size)||file.size<1||
-     requireReady&&(input.localMessagePdfSourceCurrent!==true||!savedOwnerAttachmentChoices(input).some(choice=>choice.fileId===pin.fileId&&choice.sha256===pin.sha256)))continue;
+  const format=answerInputFormat(file?.mimeType,file?.name);
+  if(!file||!pin||!format||!Number.isSafeInteger(file.size)||file.size<1||
+     requireReady&&!currentInputAttachment(input,format,pin.fileId,pin.sha256,file.mimeType))continue;
   const {taskId,runId,epoch,replyId}=reply;
-  links.set(row.id,{answerId:row.id,revision:1,replyId,work:{taskId,runId,epoch},source:{conversationId:conversation,messageId:id,sourceRevision:revision,id:pin.fileId,sha256:pin.sha256}});
+  links.set(row.id,{answerId:row.id,revision:1,replyId,work:{taskId,runId,epoch},format,source:{conversationId:conversation,messageId:id,sourceRevision:revision,id:pin.fileId,sha256:pin.sha256}});
  }
  return links;
 }
-function exactAnswerInputPdf(rows:unknown,pin:OriginalAnswerInputPdf,requireReady:boolean){
- const prior=pin.source,current=originalAnswerInputPdfs(asArray<Message>(rows),prior.conversationId,requireReady).get(pin.answerId);
- return !!current&&current.revision===pin.revision&&current.replyId===pin.replyId&&workIdentityKey(current.work)===workIdentityKey(pin.work)&&
+function exactAnswerInput(rows:unknown,pin:OriginalAnswerInput,requireReady:boolean){
+ const prior=pin.source,current=originalAnswerInputs(asArray<Message>(rows),prior.conversationId,requireReady).get(pin.answerId);
+ return !!current&&current.format===pin.format&&current.revision===pin.revision&&current.replyId===pin.replyId&&workIdentityKey(current.work)===workIdentityKey(pin.work)&&
   current.source.messageId===prior.messageId&&current.source.sourceRevision===prior.sourceRevision&&current.source.id===prior.id&&current.source.sha256===prior.sha256;
 }
 function openedRetainedDraftCopyKey({state,view}:ReturnType<typeof bridge.getState>){
@@ -3824,7 +3837,7 @@ export default function App(){
   composer.conversationId===state.conversationId&&messageOriginalView.section===null&&messageOriginalView.taskId===null&&
   Number.isSafeInteger(messageOriginalView.resumeRevision)&&can('attachmentWorkspace.open');
  const mayOpenChatMessagePdf=mayOpenChatMessageOriginal&&can('attachments.open');
- const answerInputPdfs=useMemo(()=>originalAnswerInputPdfs(mayOpenChatMessagePdf?asArray<Message>(state.messages):[],String(state.conversationId||'')),
+ const answerInputs=useMemo(()=>originalAnswerInputs(mayOpenChatMessagePdf?asArray<Message>(state.messages):[],String(state.conversationId||'')),
   [mayOpenChatMessagePdf,state.messages,state.conversationId]);
  const currentChatMessageOriginal=(source:MessageAttachmentSource,input:ModelSetupInput,resume:number,navigation:number,
   kind:ChatMessageOriginalKind,requireReady=true)=>{
@@ -3840,20 +3853,21 @@ export default function App(){
    const fixed=obj(message?.originalGeneratedDocument??message?.originalGeneratedDocumentCheck);
    return message?.role==='assistant'&&message.sourceRevision===source.sourceRevision&&fixed.id===source.id&&fixed.sha256===source.sha256;
   }
-  return message?.role==='user'&&message.sourceRevision===source.sourceRevision&&
-   (!requireReady||message.localMessagePdfSourceCurrent===true&&savedOwnerAttachmentChoices(message).some(file=>file.fileId===source.id&&file.sha256===source.sha256))&&
-   asArray<Json>(message.attachments).filter(file=>file.id===source.id).length===1&&asArray<Json>(message.attachments).some(file=>
-    file.id===source.id&&file.sha256===source.sha256&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0);
+  if(message?.role!=='user'||message.sourceRevision!==source.sourceRevision)return false;
+  const selected=asArray<Json>(message.attachments).filter(file=>file.id===source.id),file=selected[0];
+  const format=answerInputFormat(file?.mimeType,file?.name);
+  return selected.length===1&&!!format&&answerInputKind(format)===kind&&file.sha256===source.sha256&&Number.isSafeInteger(file.size)&&file.size>0&&
+   (!requireReady||currentInputAttachment(message,format,source.id,source.sha256,file.mimeType));
  };
- const openChatMessageOriginal=async(source:MessageAttachmentSource,trigger:HTMLButtonElement,kind:ChatMessageOriginalKind='messagePdf',shelf?:PreferredReplyDocument,answerPdf?:OriginalAnswerInputPdf)=>{
+ const openChatMessageOriginal=async(source:MessageAttachmentSource,trigger:HTMLButtonElement,kind:ChatMessageOriginalKind='messagePdf',shelf?:PreferredReplyDocument,answerInput?:OriginalAnswerInput)=>{
   const native=bridge.getState(),input=modelSetupInput(native,bridge.getDocumentEpoch()),resume=obj(native.view).resumeRevision;
   const navigation=navigationWindow.current,node=scroll.current;
-  const anchorMessage=answerPdf?.answerId??source.messageId,anchorRevision=answerPdf?.revision??source.sourceRevision;
+  const anchorMessage=answerInput?.answerId??source.messageId,anchorRevision=answerInput?.revision??source.sourceRevision;
   const article=shelf?Array.from(chatMessageList.current?.children||[]).find((row):row is HTMLElement=>
    row instanceof HTMLElement&&row.dataset.messageId===source.messageId):trigger.closest<HTMLElement>('[data-message-id]');
   const anchored=!!node&&!!article&&article.dataset.messageId===anchorMessage&&node.contains(article);
-  const answerCurrent=(requireReady:boolean)=>!answerPdf||kind==='messagePdf'&&!shelf&&answerPdf.source===source&&
-   exactAnswerInputPdf(bridge.getState().state.messages,answerPdf,requireReady);
+  const answerCurrent=(requireReady:boolean)=>answerInput?answerInputKind(answerInput.format)===kind&&!shelf&&answerInput.source===source&&
+   exactAnswerInput(bridge.getState().state.messages,answerInput,requireReady):kind!=='messageInputDocument';
   if(!(kind==='replyDocument'?mayOpenChatMessageOriginal:mayOpenChatMessagePdf)||openingMessageOriginal.current||native.state.attachmentWorkspace?.open!==false||
      !input||!Number.isSafeInteger(resume)||!currentChatMessageOriginal(source,input,resume,navigation,kind)||!answerCurrent(true)||
      !node||node.dataset.conversationId!==source.conversationId||!trigger.isConnected||
@@ -3862,21 +3876,21 @@ export default function App(){
       shelf.reply.file.id!==source.id||shelf.reply.file.sha256!==source.sha256||
       !trigger.closest('.pw-settings-dialog-content')||!currentDeliveredReplyDocument(native.state.messages,shelf.reply)||
       openingChatResult.current||resultFileReturnFocus.current:!anchored))
-   throw new Error(kind==='replyDocument'?'请从原答复查看这份文档。':'请从原消息查看这份 PDF。');
+   throw new Error(kind==='replyDocument'?'请从原答复查看这份文档。':kind==='messagePdf'?'请从原消息查看这份 PDF。':'请从这条答复核对原问题的附件。');
   const returnTrigger=shelf?article?.querySelector<HTMLButtonElement>('[data-original-reply-document]')||trigger:trigger;
   const anchor=anchored&&article?{document:input.document,conversation:source.conversationId,message:anchorMessage,revision:anchorRevision,
-   top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger:returnTrigger,replyRun:answerPdf?.work}:undefined;
+   top:node.scrollTop,offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger:returnTrigger,replyRun:answerInput?.work}:undefined;
   openingMessageOriginal.current=true;stopFollowing();
   if(shelf)setDeliveredFileReader(shelf);
   let arrived=false;
   try{
    const opened=await bridge.command('attachmentWorkspace.open',{[kind]:source});
    if(opened?.opened!==true||opened.reading!==true||opened.readOnly!==true||typeof opened.windowId!=='string'||!opened.windowId)
-    throw new Error(kind==='replyDocument'?'尚未打开原答复文档。可在原工作核对。':'原消息 PDF 尚未打开。');
+    throw new Error(kind==='replyDocument'?'尚未打开原答复文档。可在原工作核对。':kind==='messagePdf'?'原消息 PDF 尚未打开。':'提问所附原件尚未打开。');
    if(currentChatMessageOriginal(source,input,resume,navigation,kind,false)&&answerCurrent(false)){
     const bound=shelf&&deliveredFileRef.current===shelf.visit&&deliveredFilesWindow(shelf.visit)?{...shelf,windowId:opened.windowId}:undefined;
     if(shelf&&!bound)return;
-    messageOriginalReturn.current={kind,source,input,anchor,navigation,resume,windowId:opened.windowId,shelf:bound,answerPdf};
+    messageOriginalReturn.current={kind,source,input,anchor,navigation,resume,windowId:opened.windowId,shelf:bound,answerInput};
     if(bound){arrived=true;setDeliveredFileReader(reader=>reader===shelf?bound:reader);}
    }
   }finally{
@@ -3901,7 +3915,7 @@ export default function App(){
      bridge.getState().state.attachmentWorkspace?.open!==false||
      document.querySelector('[role="dialog"][data-state="open"]')||
      !currentChatMessageOriginal(visit.source,visit.input,visit.resume,visit.navigation,visit.kind,false)||!visit.anchor||
-     visit.answerPdf&&!exactAnswerInputPdf(bridge.getState().state.messages,visit.answerPdf,false)||
+     visit.answerInput&&!exactAnswerInput(bridge.getState().state.messages,visit.answerInput,false)||
      !chatWorkLocation(visit.anchor,undefined,true))return;
   if(restoreChatWorkAt(visit.anchor))event.preventDefault();
  };
@@ -6427,6 +6441,8 @@ export default function App(){
     <p className="pw-reading-note" role="status">这项工作已换轮或原执行暂不可核对。没有用另一轮的记录代替这条回复。</p>:<TaskHistory key={`${state.conversationId}:${taskHistoryIdentity(task)}`} task={task} canRead={can('history.read')} canReadTrace={can('trace.read')} active={taskLayer==='process' && taskOpen && !taskOpening && openedTaskId.current===task.id} registerTransientBack={registerTaskBack} registerOriginalPhoneTool={registerOriginalPhoneTool} registerMainPhoneRead={registerMainPhoneRead} renderOperation={renderOperation}/>}</TabPanel>
    <TabPanel id="goal" shouldForceMount hidden={taskLayer!=='goal'&&taskLayer!=='scope'}>
     <div hidden={taskLayer==='scope'} className="pw-work-goal-panel"><WorkGoal task={task}/>
+     {route==='tasks'&&taskLayer==='goal'&&taskOpen&&!taskOpening&&openedTaskId.current===task.id&&task.raw?.origin?.kind==='automation'&&can('plans.read')&&
+       <OriginalPlanStepContext key={taskHistoryIdentity(task)} task={task}/>}
      {phoneConversationId(task)&&can('phone.request.original')?<PhoneTaskOriginalRequest key={taskHistoryIdentity(task)} task={task} active={taskOpen&&!taskOpening&&taskLayer==='goal'&&openedTaskId.current===task.id&&obj(snapshot?.view).taskId===task.id}/>
       :ordinaryWork?<Button variant="ghost" leadingIcon={IconChat} aria-busy={openingWorkRequest===task.id||undefined}
         disabled={!requestWork||requestWork.epoch<1||task.raw?.contextAvailable!==true||taskOpening||!!openingWorkRequest||!!historyPage||
@@ -6819,9 +6835,13 @@ export default function App(){
  const conversationAttention=intent==='chat'?tasks.reduce<Task|undefined>((latest,task)=>{const anchor=messageTaskAnchors.get(task.id);if(!conversationInlineAttention(task)||linkedProjectAction(task)||anchor===undefined)return latest;return !latest||anchor>messageTaskAnchors.get(latest.id)!?task:latest;},undefined):undefined;
  const navigationTrigger=desktopNavigation?<span className="pw-header-spacer" aria-hidden="true"/>:<Drawer.Trigger asChild><IconButton ref={isPrimaryRoute?navigationMenuGlass:undefined} icon={IconMenu} className={isChatSurface?'pw-chat-glass-trigger':undefined} aria-label="打开导航" data-testid="all_work" onClick={event=>{navigationReturnFocus.current=event.currentTarget}}/></Drawer.Trigger>;
  const openUnreadMessages=()=>{void openNotifications(()=>{notificationMemory.current.externalUnreadRequest=(notificationMemory.current.externalUnreadRequest||0)+1})};
+ // Home already offers direct work. Its ordinary phone drawer can lead with
+ // the same published conversations as Chat, without selecting one on arrival.
+ const homeConversationNav=route==='butler'&&state.attachmentWorkspace?.open===false&&
+  !state.filePath&&!state.queuedInputsPage&&!state.chatAttachmentPickerOpen;
  const navigationContent=<WorkspaceNavigator items={workNav} selected={navigationSelection} recent={recentWork}
   selectedConversation={route==='chat'?String(state.conversationId||''):undefined}
-  conversationFirst={showNavigationActivity&&route==='chat'&&!!conversation}
+  conversationFirst={showNavigationActivity&&(homeConversationNav||route==='chat'&&!!conversation)}
   conversationActivity={navigationConversationActivity}
   desktop={desktopNavigation} compact={effectiveCompact} onToggleCompact={()=>setNavigationCompact(value=>!value)}
   directoryOpen={navigationMoreOpen} setDirectoryOpen={setNavigationMoreOpen} searchOpen={commandOpen} openSearch={showWorkSearch}
@@ -7810,7 +7830,7 @@ export default function App(){
     const linkedFeedback=linked&&!linkedProjectAction(linked)&&!m.hostGoalTaskId&&!phoneResult&&!taskResult&&!representedPhoneTaskIds.has(linked.id)&&linked.id!==chatAttention?.id&&!conversationWorkIds.has(linked.id)&&messageTaskAnchors.get(linked.id)===index?linked:null;
     const completedFeedback=linkedFeedback&&conversationTaskCompact(linkedFeedback);
     const chatReport=m.id?chatReports.get(m.id):undefined;
-    const answerInputPdf=!chatReport&&m.id&&m.role==='assistant'&&m.sourceRevision===1?answerInputPdfs.get(m.id):undefined;
+    const answerInput=!chatReport&&m.id&&m.role==='assistant'&&m.sourceRevision===1?answerInputs.get(m.id):undefined;
     const returnedWork=phoneResult||(taskResult?.noticeKind?null:taskResult);
     const earlierRun=returnedWork&&linked?.raw?.runId&&(linked.raw.runId!==returnedWork.runId||linked.raw.coordinatorEpoch!==returnedWork.epoch);
     const readPhone=!!m.id&&m.sourceRevision===1&&can('phone.result.original');
@@ -7894,15 +7914,15 @@ export default function App(){
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
      {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||delivery||m.role==='assistant'||canQuote||savedAttachmentChoices.length>0||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
-       {answerInputPdf&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFile}
+       {answerInput&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFile}
         onClick={(event:{currentTarget:HTMLButtonElement})=>{
          if(openingMessageOriginal.current)return;
          const target=event.currentTarget,documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
-         void openChatMessageOriginal(answerInputPdf.source,target,'messagePdf',undefined,answerInputPdf).catch(error=>{
+         void openChatMessageOriginal(answerInput.source,target,answerInputKind(answerInput.format),undefined,answerInput).catch(error=>{
           if(!document.hidden&&target.isConnected&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation)
            setLocalError(error instanceof Error?error.message:'未打开提问所附原件。');
          });
-        }}>查看提问所附 PDF</Button>}
+        }}>查看提问所附 {answerInput.format}</Button>}
        {chatReport&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
         disabled={taskOpen||taskOpening||chatWorkReading||!!preparationTarget}
         onClick={event=>openReportFromChat(chatReport,event.currentTarget)}>查看原工作成果</Button>}

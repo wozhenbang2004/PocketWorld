@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.ui.AttachmentMessageInput
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiChatAttachment
 import dev.pocketengine.ui.UiMessage
@@ -164,9 +165,13 @@ internal object PocketWebState {
             .put("conversationId", state.conversationId ?: JSONObject.NULL)
             .put("messages", JSONArray().also { out -> state.messages.forEach { row ->
                 val visible = message(row)
-                if (row.attachmentFilesSourceRevision == controller.messageAttachmentSourceRevision &&
-                    row.attachments.any { it.mimeType == "application/pdf" })
-                    visible.put("localMessagePdfSourceCurrent", true)
+                if (row.attachmentFilesSourceRevision == controller.messageAttachmentSourceRevision) {
+                    if(row.attachments.any { AttachmentMessageInput.PDF.supports(it.mimeType,it.name) })
+                        visible.put("localMessagePdfSourceCurrent", true)
+                    if(row.attachmentCount==1 && row.attachments.singleOrNull()?.let {
+                            AttachmentMessageInput.WORD_OR_TEXT.supports(it.mimeType,it.name)
+                        }==true) visible.put("localMessageInputDocumentSourceCurrent", true)
+                }
                 originalReplyDocument(row)?.let {
                     if(it.checkFirst) visible.put("originalGeneratedDocumentCheck",JSONObject().put("id",it.file.id).put("sha256",it.file.sha256))
                     else visible.put("originalGeneratedDocument",attachment(it.file))

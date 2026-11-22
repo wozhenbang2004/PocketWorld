@@ -2451,6 +2451,11 @@ public final class EngineApplication extends Application implements dev.pocketen
                                                            java.util.function.BooleanSupplier current)throws Exception{
         return automationPlans.approveOriginalConversationReminder(automationModule(),reply,selected,current);
     }
+    public JSONObject readOriginalPlanStepContext(TaskStore.OriginalPrivatePlanStep original,java.util.function.BooleanSupplier current)throws Exception{
+        var host=automationPlans;
+        if(host==null||!current.getAsBoolean())throw new SecurityException("原目标读取窗口已关闭");
+        return host.readOriginalPlanStepContext(automationModule(),original,()->automationPlans==host&&current.getAsBoolean());
+    }
     private static boolean automationPlanTask(JSONObject task){JSONObject origin=task==null?null:task.optJSONObject("origin");return origin!=null&&origin.optString("kind").equals("automation")&&!origin.optString("planId").isEmpty();}
     private JSONObject reviewedAutomationRequest(JSONObject task)throws Exception{
         JSONObject origin=task.getJSONObject("origin"),request=automationModule().planTaskRequest(json("ownerId","owner","spaceId","private"),origin.getString("planId"),origin.getString("commitmentId"),origin.getString("occurrenceId"));

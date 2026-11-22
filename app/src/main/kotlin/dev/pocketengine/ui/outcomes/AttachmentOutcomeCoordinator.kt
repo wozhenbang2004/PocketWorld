@@ -85,6 +85,18 @@ internal data class OwnerAttachmentCopyReceipt(val requestId:String,val taskId:S
 }
 
 internal enum class AttachmentOriginalReturn(val value:String) { DETAILS("details"), LIST("list"), ENTRY("entry") }
+
+internal enum class AttachmentMessageInput {
+    PDF, WORD_OR_TEXT;
+    fun supports(mime: String, name: String): Boolean = when (this) {
+        PDF -> mime == "application/pdf"
+        WORD_OR_TEXT -> when (mime) {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> name.lowercase().endsWith(".docx")
+            "text/plain" -> name.lowercase().endsWith(".txt")
+            else -> false
+        }
+    }
+}
 internal data class AttachmentPdfPageText(val viewerId: String, val rasterId: String, val page: Int)
 internal data class AttachmentWordExcerpt(val viewerId:String,val unit:Int,val chunk:Int,val original:JSONObject,
                                           val blocks:List<JSONObject>) {
@@ -225,10 +237,10 @@ internal data class AttachmentOutcomeState(
     val wordExcerpt:AttachmentWordExcerpt?=null,val wordSaveAttempted:Boolean=false,
     val wordSourceVisit:AttachmentWordSourceVisit?=null, // One explicit origin lookup; never restored from Bundle.
     val focusedStandaloneDraft:Boolean=false, // In-session exact draft editor, not an attachment catalogue.
-    val messagePdfOnly:Boolean=false, // Exact live private user attachment, never a Library visit.
+    val messageInput:AttachmentMessageInput?=null, // Exact live private user attachment, never a Library visit.
     val messageReplyDocumentOnly:Boolean=false
 ){
-    val liveMessageOriginalOnly get()=messagePdfOnly||messageReplyDocumentOnly
+    val liveMessageOriginalOnly get()=messageInput!=null||messageReplyDocumentOnly
 }
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -365,24 +377,27 @@ internal class AttachmentOutcomeCoordinator(
             JSONObject().put("kind","only_this_device_file").put("taskId",selected.task) to row
         }
     }
-    fun openMessagePdf(file:dev.pocketengine.ui.UiChatAttachment,current:()->Boolean){
-        check(file.mimeType=="application/pdf")
-        openMessageOriginal(file,false,current){control->app.attachmentOutcomes.originalFile(null,file.id,file.sha256,control)}
+    fun openMessageInput(file:UiChatAttachment,kind:AttachmentMessageInput,current:()->Boolean){
+        check(kind.supports(file.mimeType,file.name))
+        openMessageOriginal(file,kind,current){control->app.attachmentOutcomes.originalFile(null,file.id,file.sha256,control)}
     }
-    fun openReplyDocument(file:dev.pocketengine.ui.UiChatAttachment,
+    fun openReplyDocument(file:UiChatAttachment,
         target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,current:()->Boolean){
-        openMessageOriginal(file,true,current){control->app.attachmentOutcomes.originalReplyDocument(target,control)}
+        openMessageOriginal(file,null,current){control->app.attachmentOutcomes.originalReplyDocument(target,control)}
     }
     /** A live message proves one private native Book reference, not an attachment inventory. */
-    private fun openMessageOriginal(file:dev.pocketengine.ui.UiChatAttachment,generated:Boolean,current:()->Boolean,
+    private fun openMessageOriginal(file:UiChatAttachment,input:AttachmentMessageInput?,current:()->Boolean,
         read:(RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource){
         check(!state.open&&!exportPending&&current())
         check(file.size in 1L..AttachmentBook.MAX_FILE_BYTES)
         cancel();restoreFile=null;restoredDocumentDraft=null
-        state=AttachmentOutcomeState(open=true,messagePdfOnly=!generated,messageReplyDocumentOnly=generated,originalReturn=AttachmentOriginalReturn.ENTRY)
+        state=AttachmentOutcomeState(open=true,messageInput=input,messageReplyDocumentOnly=input==null,originalReturn=AttachmentOriginalReturn.ENTRY)
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
-        val unavailable=if(generated)"未能核对这条原答复的文档。原工作仍可查看，没有打开其他文件。" else
-            "未能核对这份原消息 PDF。请返回原消息，不会打开其他文件或应用。"
+        val unavailable=when(input){
+            null->"未能核对这条原答复的文档。原工作仍可查看，没有打开其他文件。"
+            AttachmentMessageInput.PDF->"未能核对这份原消息 PDF。请返回原消息，不会打开其他文件或应用。"
+            AttachmentMessageInput.WORD_OR_TEXT->"未能核对提问所附原件。没有打开其他文件或应用。"
+        }
         work(completionFailure=unavailable,onSuccess={
             if(current())state=state.copy(originalFile=checkNotNull(original))else close()
         }){control,_->
@@ -392,7 +407,7 @@ internal class AttachmentOutcomeCoordinator(
             val meta=source.metadata()
             check(meta.opt("id")==file.id&&meta.opt("principalId")=="owner"&&meta.opt("spaceId")=="private"&&
                 !meta.optBoolean("outputSourceRetired")&&source.sha256==file.sha256&&source.mimeType==file.mimeType&&
-                source.sizeBytes==file.size){"原消息附件或版本已变化"}
+                source.sizeBytes==file.size&&input?.supports(source.mimeType,source.name)!=false){"原消息附件或版本已变化"}
             control.check()
             original=source
             JSONObject() to JSONObject().put("id",file.id).put("sha256",source.sha256).put("name",source.name)
