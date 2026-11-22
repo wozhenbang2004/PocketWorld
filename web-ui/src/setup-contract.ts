@@ -39,6 +39,37 @@ export type SetupRuntimeReview = {
 export function setupObject(value: unknown): Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
+export type OwnerPythonRepairObservation = { runtimeIdentity: string; catalogIdentity: string; interpreterSha256: string };
+const runtimeSha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+/** Positive observation of the sealed interpreter, not an inference from another tool or a missing row. */
+export function ownerPythonRepairObservation(value: unknown): OwnerPythonRepairObservation | undefined {
+  const runtime = setupObject(value), health = setupObject(runtime.health);
+  const runtimeIdentity = runtime.identity, catalogIdentity = runtime.catalogIdentity;
+  if (runtime.runtimeId !== 'managed_process_v1' || runtime.status !== 'repair_required' ||
+      runtime.installed !== true || runtime.canExecute !== false || runtime.preparationAvailable !== true ||
+      !runtimeSha(runtimeIdentity) || runtime.generationIdentity !== runtimeIdentity || !runtimeSha(catalogIdentity) ||
+      health.format !== 'pocketworld.runtime-health.v1' || health.runtimeIdentity !== runtimeIdentity ||
+      health.activeGenerationIdentity !== runtimeIdentity || health.releaseCatalogIdentity !== catalogIdentity ||
+      health.activeCatalogIdentity !== catalogIdentity || health.catalogMatchesActive !== true ||
+      health.executionReady !== false || health.nativeSupervisorAvailable !== true) return;
+  const interpreter = '/usr/bin/python3';
+  const tools = Array.isArray(runtime.tools) ? runtime.tools.map(setupObject).filter(tool => tool.name === 'python3' || tool.path === interpreter) : [];
+  const observed = Array.isArray(health.tools) ? health.tools.map(setupObject).filter(tool => tool.name === 'python3') : [];
+  if (tools.length !== 1 || observed.length !== 1) return;
+  const [tool] = tools, [row] = observed, interpreterSha256 = tool.sha256;
+  if (tool.name !== 'python3' || tool.path !== interpreter || !runtimeSha(interpreterSha256) ||
+      tool.installationHashVerified !== true || tool.hashVerified !== false || tool.probeVerified !== false || tool.installed !== false ||
+      row.sealedSha256 !== interpreterSha256 || row.installed !== false || row.metadataUnchanged !== false) return;
+  return { runtimeIdentity, catalogIdentity, interpreterSha256 };
+}
+
+export function sameOwnerPythonRepair(expected: OwnerPythonRepairObservation, value: unknown): boolean {
+  const actual = ownerPythonRepairObservation(value);
+  return !!actual && actual.runtimeIdentity === expected.runtimeIdentity && actual.catalogIdentity === expected.catalogIdentity &&
+    actual.interpreterSha256 === expected.interpreterSha256;
+}
+
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 const observed = (value: unknown): boolean | null => typeof value === 'boolean' ? value : null;
 const finiteNonnegative = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;

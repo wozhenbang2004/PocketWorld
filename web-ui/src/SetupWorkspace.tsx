@@ -7,13 +7,15 @@ import { WorkspaceSectionHeading } from './WorkspaceSectionHeading';
 import { PhoneAccessibilitySetupHelp } from './PhoneAccessibilitySetupHelp';
 import { backgroundConnection } from './forms-library/host-contracts';
 import { bridge, type PocketSnapshot } from './bridge';
-import { permissionLabel, readSetup, readSetupRuntime, readSetupRuntimeReview, runtimeCancelInput, runtimeLogText, runtimePreparing, runtimeProgressLabel,
+import { permissionLabel, readSetup, readSetupRuntime, readSetupRuntimeReview, runtimeCancelInput, runtimeLogText, runtimePreparing, runtimeProgressLabel, sameOwnerPythonRepair,
   runtimePhaseLabel, runtimeRecoveryHint, runtimeStatusLabel, runtimeToolSummary, setupBytes, setupCapabilities, setupDetails, setupModelLabel, setupObject, setupSaveConfirmed, setupSaveInput,
-  speechNetworkLabel, type SetupCapability, type SetupPermission, type SetupPreferences, type SetupRead, type SetupRuntime, type SetupRuntimeReview, type SetupStep } from './setup-contract';
+  speechNetworkLabel, type OwnerPythonRepairObservation, type SetupCapability, type SetupPermission, type SetupPreferences, type SetupRead, type SetupRuntime, type SetupRuntimeReview, type SetupStep } from './setup-contract';
 import './shell-library/affect-workflows.css';
 import './setup.css';
 
 export type SetupDestination = 'connections' | 'background' | 'appearance' | 'local';
+type OriginalPythonRepair = { observation: OwnerPythonRepairObservation; current: (foregroundEpoch: number) => boolean };
+type SubmittedPythonRepair = { requestId: string; observation: OwnerPythonRepairObservation };
 export type SetupWorkspaceProps = {
   snapshot: PocketSnapshot;
   mode?: 'onboarding' | 'center';
@@ -26,7 +28,7 @@ export type SetupWorkspaceProps = {
   onViewChange?: (view: SetupView) => void;
   onClose: () => void;
   onReviewOriginalVite?: (runtimeIdentity:string) => void;
-  originalPython?: {path:string; onReturn:(foregroundEpoch:number)=>void};
+  originalPython?: {path:string; onReturn:(foregroundEpoch:number)=>void; repair?:OriginalPythonRepair};
   registerBackHandler?: (handler: (() => boolean) | null) => void;
 };
 
@@ -39,14 +41,23 @@ const capabilityCopy = {
 export type SetupView = 'overview' | 'model' | SetupCapability;
 const viewStep = (view: SetupView): SetupStep => view === 'model' ? 'model' : 'capabilities';
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : String(failure || '操作暂未完成，请刷新后核对。');
-type SetupCommand = (action: string, args?: Record<string, unknown>) => Promise<unknown>;
+type SetupCommand = (action: string, args?: Record<string, unknown>, stillCurrent?: () => boolean) => Promise<unknown>;
+const repairReviewMatches = (review: SetupRuntimeReview, expected: OwnerPythonRepairObservation) =>
+  /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(review.review.requestId) &&
+  review.review.mode === 'repair' && review.review.runtimeIdentity === expected.runtimeIdentity &&
+  review.review.catalogIdentity === expected.catalogIdentity && review.review.existingGenerationRetained;
+const repairOperationMatches = (view: SetupRuntime | null, requestId: string) =>
+  view?.operation?.taskId === requestId && view.operation.runId === requestId &&
+  view.operation.operationId === requestId && view.operation.epoch === 1;
+const originalRepairChanged = '未核对到原脚本离开时的同一工具状态。请刷新，或返回原副本重新核对。';
+const originalRepairUnobserved = '尚未核对到本次修复的原记录。刷新只会查询，不会重复发起修复。';
 
 function SetupRow({ title, status, children, action }: { title: string; status: string; children?: ReactNode; action?: ReactNode }) {
   return <div className="pw-setup-status-row"><div><strong>{title}</strong><span>{status}</span>{children && <p>{children}</p>}</div>{action}</div>;
 }
 
 /** One native preparation operation; polling observes it and never starts one. */
-function useRuntimePreparation(enabled: boolean, can: (action: string) => boolean, resumeRevision: unknown, run: SetupCommand, runtimeTaskId?: string, pythonEpoch?:number) {
+function useRuntimePreparation(enabled: boolean, can: (action: string) => boolean, resumeRevision: unknown, run: SetupCommand, runtimeTaskId?: string, pythonEpoch?:number, pythonRepair?:OriginalPythonRepair) {
   const [view, setView] = useState<SetupRuntime | null>(null), [review, setReview] = useState<SetupRuntimeReview | null>(null);
   const [reading, setReading] = useState(false), [working, setWorking] = useState(''), [error, setError] = useState('');
   const [log, setLog] = useState(''), [logTrimmed, setLogTrimmed] = useState(false), [needsRead, setNeedsRead] = useState(false);
@@ -55,7 +66,20 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   const currentReview = useRef(review); currentReview.current = review;
   const reviewEpoch = useRef<number|undefined>(undefined), requestedReadEpoch = useRef<number|undefined>(undefined);
   const readProof = useRef<{view:SetupRuntime; epoch:number}|undefined>(undefined);
-  const latest = useRef({ enabled, can, run, pythonEpoch }); latest.current = { enabled, can, run, pythonEpoch };
+  const submittedRepair = useRef<SubmittedPythonRepair|undefined>(undefined);
+  const latest = useRef({ enabled, can, run, pythonEpoch, pythonRepair }); latest.current = { enabled, can, run, pythonEpoch, pythonRepair };
+  const ownsSubmittedRepair = (attempt: SubmittedPythonRepair, epoch: number) => {
+    const repair = latest.current.pythonRepair;
+    return submittedRepair.current === attempt && latest.current.enabled && !!repair &&
+      repair.observation === attempt.observation && repair.current(epoch);
+  };
+  const currentPythonRepair = () => {
+    const repair = latest.current.pythonRepair, fresh = readProof.current, epoch = bridge.getDocumentEpoch();
+    if (!latest.current.enabled || !repair || !fresh || document.hidden || fresh.epoch !== epoch || fresh.view !== current.current ||
+        fresh.view.ready || !fresh.view.canPrepare || runtimePreparing(fresh.view) || !repair.current(epoch) ||
+        !sameOwnerPythonRepair(repair.observation, fresh.view.runtime)) return;
+    return repair.observation;
+  };
   const dismissReview = () => {
     const original = currentReview.current, epoch=reviewEpoch.current;
     currentReview.current = null; reviewEpoch.current=undefined; setReview(null);
@@ -64,6 +88,7 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   };
   const apply = (value: unknown, requestedTaskId?: string) => {
     const next = readSetupRuntime(value);
+    if (submittedRepair.current && !repairOperationMatches(next, submittedRepair.current.requestId)) throw new Error(originalRepairUnobserved);
     if (requestedTaskId && next.operation?.taskId !== requestedTaskId) throw new Error('没有读取到这条原准备记录，请刷新后核对。');
     const owner = next.operation ? `${next.operation.taskId}:${next.operation.runId}:${next.operation.epoch}` : '';
     const changed = owner !== logOwner.current;
@@ -79,15 +104,19 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   };
   const read = async (preserveActionError = false) => {
     if (!alive.current || !latest.current.can('setup.runtime.read') || readingRef.current || pending.current || document.hidden) return false;
-    const ticket = generation.current, epoch = bridge.getDocumentEpoch(); readingRef.current = true; setReading(true);
+    const ticket = generation.current, epoch = bridge.getDocumentEpoch(), attempt = submittedRepair.current;
+    const ownerCurrent = attempt ? () => ownsSubmittedRepair(attempt, epoch) : undefined;
+    if (ownerCurrent && !ownerCurrent()) return false;
+    readingRef.current = true; setReading(true);
     requestedReadEpoch.current=epoch;
     try {
-      const taskId = current.current?.operation?.taskId || runtimeTaskId;
-      const result = await latest.current.run('setup.runtime.read', { ...(taskId ? { taskId } : {}), afterSequence: cursor.current, maxBytes: 32768 });
-      if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch) return false;
+      const taskId = attempt?.requestId || current.current?.operation?.taskId || runtimeTaskId;
+      const afterSequence = attempt && !repairOperationMatches(current.current, attempt.requestId) ? 0 : cursor.current;
+      const result = await latest.current.run('setup.runtime.read', { ...(taskId ? { taskId } : {}), afterSequence, maxBytes: 32768 }, ownerCurrent);
+      if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch || ownerCurrent && !ownerCurrent()) return false;
       readProof.current={view:apply(result,taskId),epoch};
       if (!preserveActionError) setError(''); return true;
-    } catch (failure) { if (alive.current && generation.current === ticket) { setError(failureText(failure)); setNeedsRead(true); } return false; }
+    } catch (failure) { if (alive.current && generation.current === ticket) { setError(attempt ? originalRepairUnobserved : failureText(failure)); setNeedsRead(true); } return false; }
     finally { if (generation.current === ticket) { readingRef.current = false; if (alive.current) setReading(false); } }
   };
   const readRef = useRef(read); readRef.current = read;
@@ -111,47 +140,88 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
     const timer = window.setTimeout(() => { void readRef.current(); }, 1500);
     return () => window.clearTimeout(timer);
   }, [enabled, view, reading, working, needsRead]);
-  const action = async (command: string, args: Record<string, unknown> = {}) => {
+  const action = async (command: string, args: Record<string, unknown> = {}, expectedRepair?:OwnerPythonRepairObservation, repairStartId?: string) => {
     if (!alive.current || pending.current || readingRef.current || !can(command) || document.hidden) return;
-    const ticket = generation.current, epoch = bridge.getDocumentEpoch(); pending.current = true; setWorking(command); setError('');
+    const ticket = generation.current, epoch = bridge.getDocumentEpoch();
+    if (repairStartId) {
+      if (submittedRepair.current || !expectedRepair || currentPythonRepair() !== expectedRepair) return;
+      // Native uses this reviewed requestId as its TaskStore task/run/operation ID.
+      // Retain a read locator, not an approval handle, before the single explicit Start.
+      submittedRepair.current = { requestId: repairStartId, observation: expectedRepair };
+    }
+    const attempt = submittedRepair.current;
+    if (attempt && (!ownsSubmittedRepair(attempt, epoch) ||
+        !repairStartId && (command !== 'setup.runtime.cancel' || !repairOperationMatches(current.current, attempt.requestId)))) return;
+    const ownerCurrent = attempt ? () => ownsSubmittedRepair(attempt, epoch) && (!expectedRepair || currentPythonRepair() === expectedRepair)
+      : expectedRepair ? () => currentPythonRepair() === expectedRepair : undefined;
+    pending.current = true; setWorking(command); setError('');
     try {
-      const result = await latest.current.run(command, args);
-      if (!alive.current || ticket !== generation.current || bridge.getDocumentEpoch() !== epoch) return;
-      if (command === 'setup.runtime.review') { const next=readSetupRuntimeReview(result); reviewEpoch.current=epoch; setReview(next); }
-      else { reviewEpoch.current=undefined; setReview(null); if (setupObject(result).format === 'pocketworld.runtime-setup-view.v1') apply(result); }
-    } catch (failure) { if (alive.current && ticket === generation.current) { setReview(null); setError(failureText(failure)); setNeedsRead(true); } }
+      const result = await latest.current.run(command, args, ownerCurrent);
+      if (!alive.current || ticket !== generation.current || bridge.getDocumentEpoch() !== epoch || attempt && !ownsSubmittedRepair(attempt, epoch)) return;
+      if (command === 'setup.runtime.review') {
+        const next = readSetupRuntimeReview(result);
+        if (expectedRepair && (currentPythonRepair() !== expectedRepair || !repairReviewMatches(next, expectedRepair))) {
+          if (latest.current.can('setup.runtime.dismiss'))
+            void latest.current.run('setup.runtime.dismiss', { reviewHandle: next.reviewHandle }).catch(() => {});
+          throw new Error(originalRepairChanged);
+        }
+        reviewEpoch.current=epoch; setReview(next);
+      } else {
+        reviewEpoch.current=undefined; setReview(null);
+        if (attempt || setupObject(result).format === 'pocketworld.runtime-setup-view.v1') apply(result);
+      }
+    } catch (failure) { if (alive.current && ticket === generation.current) { setReview(null); setError(repairStartId ? originalRepairUnobserved : failureText(failure)); setNeedsRead(true); } }
     finally {
-      if (ticket === generation.current) { pending.current = false; if (alive.current) { setWorking(''); if (command !== 'setup.runtime.review') void readRef.current(true); } }
+      if (ticket === generation.current) { pending.current = false; if (alive.current) { setWorking(''); if (command !== 'setup.runtime.review') void readRef.current(!repairStartId); } }
     }
   };
-  const liveReview=pythonEpoch===undefined||reviewEpoch.current===pythonEpoch?review:null;
+  const attempt = submittedRepair.current;
+  const repairUnobserved = !!attempt && !repairOperationMatches(view, attempt.requestId);
+  const repairCurrent = !!pythonRepair && !attempt && !needsRead && currentPythonRepair() === pythonRepair.observation;
+  const liveReview = (pythonEpoch===undefined||reviewEpoch.current===pythonEpoch) &&
+    (!pythonRepair || repairCurrent && review && repairReviewMatches(review, pythonRepair.observation)) ? review : null;
   const readEpoch=readProof.current?.view===view?readProof.current?.epoch:undefined;
   const needsForegroundRead=()=>pythonEpoch!==undefined&&readEpoch!==bridge.getDocumentEpoch();
-  return { view, review:liveReview, readEpoch, reading, working, error, log, logTrimmed, needsRead, read, dismissReview,
-    reviewPreparation: () => needsForegroundRead()?read():action('setup.runtime.review', { mode: view?.ready ? 'repair' : 'prepare' }),
+  return { view:repairUnobserved?null:view, review:liveReview, readEpoch, reading, working, error,
+    log:repairUnobserved?'':log, logTrimmed:!repairUnobserved&&logTrimmed, needsRead, read, dismissReview,
+    repairVisit:!!pythonRepair, repairCurrent, repairAttempted:!!attempt, repairUnobserved,
+    reviewPreparation: async () => {
+      if (!pythonRepair) return needsForegroundRead()?read():action('setup.runtime.review', { mode: view?.ready ? 'repair' : 'prepare' });
+      const epoch = bridge.getDocumentEpoch(), expected = pythonRepair.observation;
+      // Re-read the installed generation on this explicit click before requesting its native consent sheet.
+      if (submittedRepair.current || !repairCurrent || !(await read())) return;
+      if (bridge.getDocumentEpoch() !== epoch || !alive.current) return;
+      if (currentPythonRepair() !== expected) { setError(originalRepairChanged); return; }
+      return action('setup.runtime.review', { mode: 'repair' }, expected);
+    },
     start: () => {
+      if (submittedRepair.current) return;
       if (!liveReview || liveReview.review.expiresAt <= Date.now() ||
           pythonEpoch!==undefined&&reviewEpoch.current!==bridge.getDocumentEpoch()) {
         dismissReview(); setError('这份准备说明已过期，请重新查看后开始。'); return;
       }
-      return action('setup.runtime.start', { reviewHandle: liveReview.reviewHandle });
+      if (pythonRepair && (currentPythonRepair() !== pythonRepair.observation || !repairReviewMatches(liveReview, pythonRepair.observation))) {
+        dismissReview(); setError(originalRepairChanged); return;
+      }
+      return action('setup.runtime.start', { reviewHandle: liveReview.reviewHandle }, pythonRepair?.observation,
+        pythonRepair ? liveReview.review.requestId : undefined);
     },
     cancel: () => {
       if(needsForegroundRead())return read();
-      if (view) { try { return action('setup.runtime.cancel', runtimeCancelInput(view)); } catch (failure) { setError(failureText(failure)); } }
+      if (view && !repairUnobserved) { try { return action('setup.runtime.cancel', runtimeCancelInput(view)); } catch (failure) { setError(failureText(failure)); } }
     },
   };
 }
 
 function RuntimePreparation({ preparation, can, blocked, projectReview }: { preparation: ReturnType<typeof useRuntimePreparation>; can: (action: string) => boolean; blocked: boolean; projectReview: boolean }) {
-  const { view, review, reading, working, error, log, logTrimmed, needsRead } = preparation;
+  const { view, review, reading, working, error, log, logTrimmed, needsRead, repairVisit, repairCurrent, repairAttempted, repairUnobserved } = preparation;
   const locked = blocked || reading || !!working, running = runtimePreparing(view), operation = view?.operation;
   const reviewDetails = review ? { effects: review.review.effects, runtime: review.review.runtimeIdentity, catalog: review.review.catalogIdentity } : null;
   const originalError = operation?.error;
   const recoveryHint = view ? runtimeRecoveryHint(view) : '';
   const failedPhase = setupObject(originalError?.details).failedPreparationPhase;
   return <section className="pw-setup-runtime" aria-label="开发工具准备" aria-busy={reading || !!working}>
-    <div className="pw-setup-section-title"><div><h3>手机开发工具</h3><p role="status">{view ? runtimeStatusLabel(view) : reading ? '正在检查' : '尚未检查'}</p></div>
+    <div className="pw-setup-section-title"><div><h3>手机开发工具</h3><p role="status">{repairUnobserved ? locked ? '正在核对本次修复' : '本次修复待核对' : repairCurrent ? 'Python 工具需要修复' : view ? runtimeStatusLabel(view) : reading ? '正在检查' : '尚未检查'}</p></div>
       <Button variant="ghost" leadingIcon={IconRefresh} disabled={locked || !can('setup.runtime.read')} onClick={() => void preparation.read()}>刷新</Button></div>
     {view?.message && <p className="pw-setup-copy">{view.message}</p>}
     <p className="pw-setup-copy">用于 Web / Node.js 项目、Python 与本机命令。普通对话不需要安装，也不需要先开放手机控制权限。</p>
@@ -169,6 +239,8 @@ function RuntimePreparation({ preparation, can, blocked, projectReview }: { prep
     {originalError?.message && <p className="pw-setup-error" role="alert">{originalError.message}</p>}
     {recoveryHint && <p className="pw-setup-copy" role="status">{recoveryHint}</p>}
     {view?.status === 'interrupted' && <p className="pw-setup-copy">上一次准备未确认完成。先刷新检查，再按当前状态继续。</p>}
+    {repairVisit && !repairAttempted && view?.canPrepare && !view.ready && !repairCurrent && !locked && !running && !error &&
+      <p className="pw-setup-copy" role="status">{originalRepairChanged}</p>}
     {review ? <section className="pw-setup-install-review" aria-label="确认工具准备">
       <h4>{review.review.title || '准备这些开发工具'}</h4><p>{review.review.summary}</p>
       <p className="pw-setup-download">{review.review.downloadBytes == null ? '下载大小尚未确认' : `基础下载约 ${setupBytes(review.review.downloadBytes)}`}{review.review.additionalDownloads ? '，安装过程中还会下载依赖。' : '。'}</p>
@@ -176,12 +248,12 @@ function RuntimePreparation({ preparation, can, blocked, projectReview }: { prep
       <p>首次准备需要联网下载工具与系统依赖。网络中断后不会自动重试；返回本页可查看同一次准备和原日志。</p>
       {review.review.existingGenerationRetained && <p>已有工具版本和项目文件保留；修复会核对当前工具，必要时准备新版本，不清空原环境。</p>}
       <Accordion><AccordionItem id="setup-install-effects" title="查看安装内容"><pre>{setupDetails(reviewDetails)}</pre></AccordionItem></Accordion>
-      <div className="pw-setup-actions"><Button variant="ghost" disabled={!!working} onClick={preparation.dismissReview}>暂不安装</Button>
-        <Button disabled={locked || !can('setup.runtime.start')} onClick={() => void preparation.start()}>{working === 'setup.runtime.start' ? '正在开始…' : '开始准备'}</Button></div>
+      <div className="pw-setup-actions"><Button variant="ghost" disabled={!!working} onClick={preparation.dismissReview}>{repairVisit?'暂不修复':'暂不安装'}</Button>
+        <Button disabled={locked || !can('setup.runtime.start')} onClick={() => void preparation.start()}>{working === 'setup.runtime.start' ? '正在开始…' : repairVisit?'开始修复':'开始准备'}</Button></div>
     </section> : <div className="pw-setup-actions">
-      {view && (view.canPrepare || view.canRetry) && !running && <Button variant={projectReview?'ghost':undefined}
+      {view && (view.canPrepare || view.canRetry) && !running && (!repairVisit || repairCurrent) && <Button variant={projectReview?'ghost':undefined}
         disabled={locked || needsRead || !can('setup.runtime.review')} onClick={() => void preparation.reviewPreparation()}>
-        {working === 'setup.runtime.review' ? '正在读取安装内容…' : view.ready ? '检查与修复工具' : view.canRetry ? '重新准备' : '准备开发工具'}
+        {working === 'setup.runtime.review' ? '正在读取安装内容…' : repairVisit || view.ready ? '检查与修复工具' : view.canRetry ? '重新准备' : '准备开发工具'}
       </Button>}
       {view?.canCancel && <Button variant="secondary" disabled={locked || !can('setup.runtime.cancel')} onClick={() => void preparation.cancel()}>{view.status === 'cancel_requested' ? '已请求停止' : '停止准备'}</Button>}
     </div>}
@@ -214,10 +286,11 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   // The native setup surface has one operation slot. A system-return refresh and
   // runtime polling share it; only still-visible, original-page requests dispatch.
-  const run: SetupCommand = (action, args = {}) => {
+  const run: SetupCommand = (action, args = {}, stillCurrent) => {
     const ticket = generation.current, epoch = bridge.getDocumentEpoch();
     const request = queue.current.then(() => {
       if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch || !latest.current.entered || document.hidden) throw new Error('准备页面已变化，返回后请重新读取状态。');
+      if (stillCurrent && !stillCurrent()) throw new Error(originalRepairChanged);
       return bridge.command(action, args);
     });
     queue.current = request.then(() => undefined, () => undefined);
@@ -243,7 +316,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const focused = !!initialCapability, onboarding = mode === 'onboarding';
   const resumeRevision = setupObject(snapshot.view).resumeRevision;
   const pythonEpoch=originalPython?bridge.getDocumentEpoch():undefined;
-  const preparation = useRuntimePreparation(entered && !!data && (view === 'tools' || view === 'overview'), can, resumeRevision, run, runtimeTaskId, pythonEpoch);
+  const preparation = useRuntimePreparation(entered && !!data && (view === 'tools' || view === 'overview'), can, resumeRevision, run, runtimeTaskId, pythonEpoch, originalPython?.repair);
   const readyRuntime = preparation.view;
   const runtime = setupObject(readyRuntime?.runtime), tools = Array.isArray(runtime.tools)?runtime.tools.map(setupObject):[];
   const python=tools.filter(tool=>tool.name==='python3'), preparationReceipt=setupObject(readyRuntime?.operation?.receipt);
@@ -411,7 +484,7 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const capabilityBody = (id: SetupCapability) => {
     if (!data) return null;
     if (id === 'tools') return <>
-      {originalPython && <p className="pw-setup-copy">准备完成后可返回 <bdi>{originalPython.path}</bdi>。不会自动运行。</p>}
+      {originalPython && <p className="pw-setup-copy">{originalPython.repair?'修复会核对整套手机开发工具。工具就绪后可返回':'准备完成后可返回'} <bdi>{originalPython.path}</bdi>。不会自动运行。</p>}
       <RuntimePreparation preparation={preparation} can={can} blocked={locked} projectReview={!!viteReady || pythonReadyEpoch!==undefined}/>
     </>;
     if (id === 'phone') return <>

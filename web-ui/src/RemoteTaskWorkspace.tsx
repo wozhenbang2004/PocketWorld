@@ -2,7 +2,7 @@ import type {HostSourcePin} from './HostSavedProjectPreparation';
 import { useEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, CheckboxField, RadioOptions, SelectField, StretchSwitch, TextAreaField } from './forms-library';
 import { bridge } from './bridge';
-import { appendRemoteClipboard, managedRemoteRows, remoteApprovalClaim, remoteDraftState, remoteEditor, remoteObject as object, remoteProgress, remoteReadsPaused, remoteRows as rows, sameRemoteEditor, savedRemoteEditor, type RemoteData as Data, type RemoteEditor } from './remote-task-workspace';
+import { appendRemoteClipboard, managedRemoteGroups, managedRemoteRows, remoteApprovalClaim, remoteDraftState, remoteEditor, remoteObject as object, remoteProgress, remoteReadsPaused, remoteRows as rows, sameRemoteEditor, savedRemoteEditor, type RemoteData as Data, type RemoteEditor } from './remote-task-workspace';
 import './remote-task-workspace.css';
 import './collaboration-depth.css';
 import {originalHostReceipt,originalSeenHostEnd} from './original-seen-host-end';
@@ -307,6 +307,10 @@ function LiveRemoteTask({taskId,runId,coordinatorEpoch,follow}:{taskId:string;ru
   </section>;
 }
 
+function managedLocalUpdate(at: unknown): string {
+  if (typeof at !== 'number' || !Number.isSafeInteger(at) || at <= 0 || at > 8_640_000_000_000_000) return '';
+  return new Date(at).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 export function RemoteManagedSessionsWorkspace() {
   const [data, setData] = useState<Data | null>(null), [pending, setPending] = useState(false), [error, setError] = useState('');
   const alive = useRef(true), generation = useRef(0), busy = useRef(false), live = useRef<Data | null>(null), identity = useRef(windowIdentity());
@@ -327,19 +331,26 @@ export function RemoteManagedSessionsWorkspace() {
   }, []);
   if (!supported('remoteSessions.read')) return null;
   const listing = data?.listingHandle, sessionRows = data ? managedRemoteRows(data) : [];
-  const sessionGroups = Array.from(new Set(sessionRows.map(row => JSON.stringify([row.connectionLabel, row.environmentLabel]))));
+  const sessionGroups = managedRemoteGroups(sessionRows);
   return <section className="pw-remote-sessions pw-depth-collaboration" aria-label="本机电脑会话清单"><div className="pw-section-heading"><h3>本机电脑会话</h3><Button variant="ghost" disabled={pending} onClick={read}>{pending ? '正在读取…' : '刷新本机原任务清单'}</Button></div>
     <p className="pw-muted">仅最后保存的本机原任务元数据，不探测外部 CLI。打开只导航到原任务，不新增执行或授权。</p>
     {error && <p className="pw-field-error" role="alert">{error}</p>}
     {data && <><p className="pw-field-hint">外部已认领会话：不可用；外部会话发现：不可用。{data.olderLocalTasksNotScanned ? '更早的本机任务未在本次窗口扫描。' : ''}</p>
-      <div className="pw-remote-session-list">{sessionGroups.map(group => { const [connection, environment] = JSON.parse(group); return <section className="pw-remote-session-group" key={group}><h4>{connection} · {environment}</h4>{sessionRows.filter(row => JSON.stringify([row.connectionLabel, row.environmentLabel]) === group).map(row => <Button variant="ghost" key={`${row.taskId}:${row.rowIdentity}`} className="pw-remote-session" disabled={pending || !row.rowIdentity || !supported('remoteSessions.open')} onClick={async () => {
-        if (!alive.current || busy.current || document.visibilityState !== 'visible' || !live.current || live.current.listingHandle !== listing || !managedRemoteRows(live.current).some(actual => actual.taskId === row.taskId && actual.rowIdentity === row.rowIdentity)) return;
-        const epoch = generation.current; busy.current = true; setPending(true); setError('');
-        try { await bridge.command('remoteSessions.open', { listingHandle: listing, taskId: row.taskId, rowIdentity: row.rowIdentity }); }
-        catch (failure) { if (alive.current && epoch === generation.current) setError(message(failure)); }
-        finally { busy.current = false; if (alive.current) setPending(false); }
-      }}><span className="pw-remote-session-copy"><strong>{row.title || row.goal || row.taskId}</strong><small>{workerLabel(row.worker || row.protocol || '原执行器')} · {row.sessionEvidence === 'native_protocol_observed' ? '原协议会话已观察' : '原会话身份待核对'}</small></span><span className="pw-remote-session-action">打开原任务</span></Button>)}</section>; })}</div>
-      {!managedRemoteRows(data).length && <p className="pw-muted">本次窗口没有可核对的原电脑会话。</p>}
+      <div className="pw-remote-session-list">{sessionGroups.map(group => <section className="pw-remote-session-group" key={group.key}><h4>{group.connection} · {group.environment}</h4>
+        {group.detail && <p className="pw-field-hint"><bdi>{group.detail}</bdi></p>}
+        {group.rows.map(row => {
+          const updated = group.detail ? managedLocalUpdate(row.lastLocalUpdateAt) : '';
+          const worker = group.detail && !['codex_app_server','pi','claude_code'].includes(row.worker) ? '原执行器' : workerLabel(row.worker || row.protocol || '原执行器');
+          return <Button variant="ghost" key={`${row.taskId}:${row.rowIdentity}`} className="pw-remote-session" disabled={pending || !row.rowIdentity || !supported('remoteSessions.open')} onClick={async () => {
+            if (!alive.current || busy.current || document.visibilityState !== 'visible' || !live.current || live.current.listingHandle !== listing || !managedRemoteRows(live.current).some(actual => actual.taskId === row.taskId && actual.rowIdentity === row.rowIdentity)) return;
+            const epoch = generation.current; busy.current = true; setPending(true); setError('');
+            try { await bridge.command('remoteSessions.open', { listingHandle: listing, taskId: row.taskId, rowIdentity: row.rowIdentity }); }
+            catch (failure) { if (alive.current && epoch === generation.current) setError(message(failure)); }
+            finally { busy.current = false; if (alive.current) setPending(false); }
+          }}><span className="pw-remote-session-copy"><strong>{row.title || row.goal || (group.detail ? '原工作' : row.taskId)}</strong><small>{worker} · {row.sessionEvidence === 'native_protocol_observed' ? '原协议会话已观察' : '原会话身份待核对'}{updated && ` · 本机记录更新 ${updated}`}</small></span><span className="pw-remote-session-action">打开原任务</span></Button>;
+        })}
+      </section>)}</div>
+      {!sessionRows.length && <p className="pw-muted">本次窗口没有可核对的原电脑会话。</p>}
       {rows(data.unconfirmedLocalTasks).length > 0 && <p className="pw-field-hint">另有 {rows(data.unconfirmedLocalTasks).length} 项本机任务身份不完整，仅保留记录，不能猜测会话。</p>}
     </>}
   </section>;

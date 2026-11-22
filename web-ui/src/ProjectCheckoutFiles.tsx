@@ -38,6 +38,7 @@ type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (
   onClose: (saved?: CheckoutSavedPosition) => void;
   onOpenPythonWork?: (work: OriginalPythonRun) => void;
   onPreparePythonTools?: (source: CheckoutPythonToolsDeparture) => Promise<void>;
+  preparePythonToolsLabel?: string;
   onPrepareBuild?: (saved: CheckoutSaveForBuild) => Promise<void>; prepareBuildAfterPath?: string; prepareBuildLabel?: string;
   registerBack: (handler: (() => boolean) | null) => void };
 const command = 'projects.development.files.';
@@ -83,7 +84,7 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume }: Props) {
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -1007,7 +1008,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           <Button variant="secondary" disabled={locked || orphan !== null} onClick={() => void readFile(file.path)}>读取同一文件核对</Button>
           {file.conflict && <><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('keep_mine')}>保留我的修改…</Button><Button variant="secondary" disabled={locked || orphan !== null} onClick={() => setChoice('use_latest')}>采用当前副本…</Button></>}
           {canReviewPython && !pythonRunReview && (canPreparePythonTools
-            ? <Button disabled={locked} onClick={preparePythonTools}>查看手机工具准备</Button>
+            ? <Button disabled={locked} onClick={preparePythonTools}>{preparePythonToolsLabel || '查看手机工具准备'}</Button>
             : <Button disabled={locked} onClick={()=>readPythonReview()}>运行已保存的脚本…</Button>)}
           {canReviewPythonDirectory && !pythonRunReview &&
             <Button variant="ghost" disabled={locked} onClick={()=>readPythonReview(true)}>核对同目录 Python 程序…</Button>}

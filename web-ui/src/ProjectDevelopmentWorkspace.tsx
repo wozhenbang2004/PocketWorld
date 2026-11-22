@@ -6,6 +6,7 @@ import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextArea
 import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
 import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
+import { ownerPythonRepairObservation, type OwnerPythonRepairObservation } from './setup-contract';
 import type {DirectNodeDependencyPin} from './project-execution';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
@@ -52,7 +53,7 @@ type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
   dependencyBuildReturn?:ProjectDependencyBuildReturn;
   viteToolsReturn?:ProjectViteToolsReturn;
   viteResultLookup?:ProjectViteResultLookup;
-  onPreparePythonTools?: (position: CheckoutSavedPosition) => void;
+  onPreparePythonTools?: (position: CheckoutSavedPosition, repair?: OwnerPythonRepairObservation) => void;
   retainedOriginalVisit?:Data;
   projectId: string; name: string; active: boolean; run: (action: string, args?: Data) => Promise<any>; can: (action: string) => boolean;
   onOpenTask: (id: string, checkoutId?: string, expected?: {runId:string;epoch:number}) => void; onOpenHostOriginal?: (id: string) => void; onOpenPackageOriginal?: (work: TaskPackageOriginalWork) => void; onTaskRegistered: () => void; onPrepareTools: (project?:ProjectViteToolsPosition) => void; onConnectModel: () => void; onOpenTerminal: (checkout?: LocalTerminalCheckout, position?:CheckoutSavedPosition) => void;
@@ -1130,10 +1131,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       view.executionAuthorized===false&&view.draftRecoveryRequired===false&&
       can('connections.enter')&&can('connections.leave')&&sameImportedEditor(original,originalImportedEditor(projectId));
   };
+  const pythonRepair = canReviewToolSetup && view?.projectId===projectId && view.viewHandle===handle.current &&
+    view.executionAuthorized===false && view.commandsAuthorized===false &&
+    selectedCopy?.taskPackageSource===false && selectedCopy.hostSource===false
+    ? ownerPythonRepairObservation(view.runtime) : undefined;
   const pythonToolSetup = !!onPreparePythonTools && samePythonToolsCopy() &&
     checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&!view?.draftRecoveryRequired&&
     selectedCopy?.draftWorkingCopy===false&&view?.runtime?.runtimeId==='managed_process_v1'&&
-    view.runtime.status==='preparation_required'&&view.runtime.canExecute===false&&view.runtime.preparationAvailable===true&&canViewToolSetup;
+    canViewToolSetup&&(!!pythonRepair||view.runtime.status==='preparation_required'&&view.runtime.canExecute===false&&view.runtime.preparationAvailable===true);
   const prepareSavedPythonTools = async ({position,savedHere,closeEditor}:CheckoutPythonToolsDeparture) => {
     const documentWindow=ownerWindow(),viewHandle=handle.current,sequence=generation.current,displayed={...draft.current};
     const stillHere=()=>alive.current&&latest.current.active&&!document.hidden&&generation.current===sequence&&
@@ -1149,7 +1154,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if(!stillHere())return;
     const exactPosition = {projectId,checkoutId:position.checkoutId,path:position.path,savedHash:position.savedHash};
     closeFiles(savedHere?exactPosition:undefined);
-    latest.current.onPreparePythonTools?.(exactPosition);
+    latest.current.onPreparePythonTools?.(exactPosition,pythonRepair);
   };
   const canPrepareSavedBuild=!!((nodeTools||missingRequiredLock||directImportedSave||viteForSave||dependencyForSave)&&checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&
     !view?.draftRecoveryRequired&&can('projects.development.inspect')&&(!!viteForSave||!!dependencyForSave||can('projects.development.reviewDraftBuild')));
@@ -1774,6 +1779,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
       pythonSetupResume={fileWindow.pythonSetupResume} onClose={closeFiles}
       onPreparePythonTools={pythonToolSetup?prepareSavedPythonTools:undefined}
+      preparePythonToolsLabel={pythonRepair?'查看手机工具修复':undefined}
       onOpenPythonWork={!hostEditor&&can('tasks.open')?work=>{
         if (work.projectId!==projectId || work.checkoutId!==fileCheckout || !active) return;
         onTaskRegistered();onOpenTask(work.taskId,work.checkoutId,{runId:work.runId,epoch:work.epoch});
