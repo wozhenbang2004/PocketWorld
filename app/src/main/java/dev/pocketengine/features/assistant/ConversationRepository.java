@@ -1084,7 +1084,11 @@ public final class ConversationRepository {
      * No search rerun, drawn context outside this conversation, or persisted reading position. */
     public JSONObject windowAtOwnerSearchHit(String conversation,JSONObject locator,RunControl control)throws Exception{
         return read(()->{
-            if(control==null||control.hasHostRun()||!locator.keySet().equals(Set.of("kind","generation","conversationId","recordId","recordVersion","fingerprint"))||
+            Set<String> fields=Set.of("kind","generation","conversationId","recordId","recordVersion","fingerprint");
+            if(locator==null||locator.length()!=fields.size())throw new SecurityException("未核对到这段私聊的原生搜索消息");
+            for(var keys=locator.keys();keys.hasNext();)if(!fields.contains(keys.next()))
+                throw new SecurityException("未核对到这段私聊的原生搜索消息");
+            if(control==null||control.hasHostRun()||
                     !"owner_native_original".equals(locator.opt("kind"))||!conversation.equals(locator.opt("conversationId"))||
                     !activeGeneration().equals(locator.opt("generation"))||
                     !(locator.opt("recordId") instanceof String id)||id.isBlank()||id.length()>512||
