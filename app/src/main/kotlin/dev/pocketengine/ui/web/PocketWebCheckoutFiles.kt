@@ -95,7 +95,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     }
     /** Held only by the original editor and its taskless renderer, never returned over the bridge. */
     class SavedStaticPage(val project: String, val checkout: String, val entrySha256: String,
-        val current: () -> Boolean, val read: (() -> Boolean) -> ProjectPreviewBundle.Verified)
+        val current: () -> Boolean, val missingReview: (List<String>) -> JSONObject,
+        val read: (() -> Boolean) -> ProjectPreviewBundle.Verified)
 
     fun savedStaticPage(args: JSONObject, selectedCheckout: (String) -> Boolean): SavedStaticPage {
         require(args.keys().asSequence().toSet() ==
@@ -127,7 +128,16 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         fun sameFile() = current(original) && selectedCheckout(original.checkout) && original.opened === file &&
             file.draft === held && file.sequence == sequence && !file.saveUnknown && file.formal == null
         check(sameFile()) { "原文件已变化，请关闭重开预览" }
-        return SavedStaticPage(original.project, original.checkout, held.baseHash, ::sameFile) { keepReading ->
+        val viewHandle = text(args,"viewHandle")
+        val missingReview: (List<String>) -> JSONObject = { missing ->
+            check(missing.isNotEmpty() && missing.distinct().size == missing.size && paths.containsAll(missing)) { "本次资源核对不属于原选择" }
+            JSONObject().put("kind","saved_static_resource_review").put("opened",false)
+                .put("projectId",original.project).put("checkoutId",original.checkout)
+                .put("viewHandle",viewHandle).put("filesHandle",original.handle).put("fileHandle",file.handle)
+                .put("revision",held.revision).put("editSequence",sequence).put("entrySha256",held.baseHash)
+                .put("resourcePaths",JSONArray(paths)).put("missingPaths",JSONArray(missing))
+        }
+        return SavedStaticPage(original.project, original.checkout, held.baseHash, ::sameFile, missingReview) { keepReading ->
             check(sameFile() && keepReading()) { "原文件预览窗口已关闭" }
             val local=controller.nativeButlerHost().features.module("local") as? LocalModule ?: error("原本机项目不可读取")
             local.readSavedStaticPageForOwner(held,paths) { sameFile() && keepReading() }

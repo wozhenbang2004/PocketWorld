@@ -5,6 +5,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import dev.pocketengine.features.local.preview.ProjectBundleWebView
+import dev.pocketengine.features.local.preview.ProjectPreviewBundle
 import dev.pocketengine.features.local.preview.ProjectPreviewDocument
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.ProjectPackageCoordinator
@@ -144,9 +145,15 @@ internal class PocketWebProjectPreview(
                         previous?.let(::requireInactiveRegistered)
                         mount(Session(ProjectPreviewDocument(bundle), savedStatic = owner))
                         checkNotNull(snapshot()) { "原文件预览已关闭" }
-                    }.fold({ done(it, null) }, {
-                        if (session?.savedStatic === owner) release()
-                        done(null, it.message ?: "没有打开这份已保存页面")
+                    }.fold({ done(it, null) }, { failure ->
+                        if (failure is ProjectPreviewBundle.SavedStaticMissingAssets) {
+                            // No mount or legacy release. This reply is only for the still-current owner review.
+                            runCatching { request.missingReview(failure.paths()) }.fold({ done(it, null) },
+                                { done(null, "未能核对这次所选资源，没有打开页面") })
+                        } else {
+                            if (session?.savedStatic === owner) release()
+                            done(null, failure.message ?: "没有打开这份已保存页面")
+                        }
                     })
                     changed()
                 }

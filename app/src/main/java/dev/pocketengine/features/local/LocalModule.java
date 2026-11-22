@@ -2292,11 +2292,16 @@ public final class LocalModule implements EngineModule {
         if(!savedStaticPhoneFolder(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
             throw new SecurityException("只预览这个项目已登记的手机文件夹副本");
         requireIdle(entry.checkoutId);requireCheckoutWritable(entry.checkoutId);
-        var bundle=ProjectPreviewBundle.captureSavedStaticPage(content(entry.checkoutId),entry.projectId,entry.checkoutId,
-                entry.baseHash,assets,()->!closed&&current.getAsBoolean());
+        ProjectPreviewBundle.Verified bundle=null;
+        ProjectPreviewBundle.SavedStaticMissingAssets missing=null;
+        try{
+            bundle=ProjectPreviewBundle.captureSavedStaticPage(content(entry.checkoutId),entry.projectId,entry.checkoutId,
+                    entry.baseHash,assets,()->!closed&&current.getAsBoolean());
+        }catch(ProjectPreviewBundle.SavedStaticMissingAssets absent){missing=absent;}
         requireCheckoutWritable(entry.checkoutId);
         if(!current.getAsBoolean()||!savedStaticPhoneFolder(selected,editorSaveOrigin(selected,entry.projectId,entry.checkoutId)))
             throw new SecurityException("原文件窗口或项目登记已变化，未打开其他页面");
+        if(missing!=null)throw missing;
         return bundle;
     }
 

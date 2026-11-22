@@ -10,7 +10,9 @@ import java.io.File;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,6 +32,15 @@ public final class ProjectPreviewBundle {
     private static final int MAX_SAVED_STATIC_BYTES=4*1024*1024;
     private static final Set<String> SAVED_STATIC_ASSETS=Set.of("css","js","mjs","png","jpg","jpeg","webp","gif","ico");
     private ProjectPreviewBundle(){}
+    /** A non-render outcome: only paths already requested by this exact owner visit. */
+    public static final class SavedStaticMissingAssets extends Exception {
+        private final List<String> paths;
+        private SavedStaticMissingAssets(List<String> paths){
+            super("本次核对没有找到部分所选网页资源");
+            this.paths=List.copyOf(paths);
+        }
+        public List<String> paths(){return paths;}
+    }
     public static final class Resource {
         public final String path,mimeType,sha256;private final byte[] bytes;
         private Resource(String path,byte[] bytes)throws Exception {this.path=path;this.bytes=bytes.clone();mimeType=mime(path);sha256=ProjectSources.sha256(bytes);}
@@ -167,6 +178,25 @@ public final class ProjectPreviewBundle {
         Resource initial=new Resource(SAVED_STATIC_ENTRY,entry);
         if(!entrySha.equals(initial.sha256))throw new SecurityException("index.html 的已保存字节已变化，请先重新读取原文件");
         resources.put(SAVED_STATIC_ENTRY,initial);total+=entry.length;
+        // The entry is proven current before probing any auxiliary path. A definite missing
+        // selection returns to review before any auxiliary bytes are read or renderer is created.
+        var missing=new ArrayList<String>();
+        for(String path:paths)if(!SAVED_STATIC_ENTRY.equals(path)){
+            requireSavedStaticCurrent(ownerCurrent);
+            File file=savedStaticPath(root,rootKey,path);
+            BasicFileAttributes attrs;
+            try{attrs=Files.readAttributes(file.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);}
+            catch(NoSuchFileException absent){
+                // Never confuse a vanished root, excluded link, denied or otherwise unknown lookup with absence.
+                savedStaticPath(root,rootKey,path);
+                missing.add(path);
+                continue;
+            }
+            requireSavedStaticRegularFile(file,attrs);
+        }
+        requireSavedStaticCurrent(ownerCurrent);
+        if(!rootKey.equals(savedStaticRoot(root)))throw new SecurityException("原私人副本目录已变化");
+        if(!missing.isEmpty())throw new SavedStaticMissingAssets(missing);
         for(String path:paths)if(!SAVED_STATIC_ENTRY.equals(path)){
             requireSavedStaticCurrent(ownerCurrent);
             byte[] bytes=savedStaticBytes(root,rootKey,path,Math.min(ProjectSources.MAX_FILE_BYTES,MAX_SAVED_STATIC_BYTES-total));
@@ -194,13 +224,19 @@ public final class ProjectPreviewBundle {
             throw new SecurityException("原私人副本目录已变化，没有打开页面");
         return attributes.fileKey();
     }
-    private static byte[] savedStaticBytes(File root,Object rootKey,String path,int limit)throws Exception{
+    private static File savedStaticPath(File root,Object rootKey,String path)throws Exception{
         if(!rootKey.equals(savedStaticRoot(root)))throw new SecurityException("原私人副本目录已变化");
-        File file=NativeCommandExecutor.within(root,path);
-        var attrs=Files.readAttributes(file.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        return NativeCommandExecutor.within(root,path);
+    }
+    private static void requireSavedStaticRegularFile(File file,BasicFileAttributes attrs)throws Exception{
         if(!attrs.isRegularFile()||attrs.isSymbolicLink()||attrs.fileKey()==null||
                 !(Files.getAttribute(file.toPath(),"unix:nlink",LinkOption.NOFOLLOW_LINKS) instanceof Number links)||
                 links.longValue()!=1)throw new SecurityException("预览只读取所选普通文件，不跟随链接");
+    }
+    private static byte[] savedStaticBytes(File root,Object rootKey,String path,int limit)throws Exception{
+        File file=savedStaticPath(root,rootKey,path);
+        var attrs=Files.readAttributes(file.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        requireSavedStaticRegularFile(file,attrs);
         byte[] observed=ProjectFileBytes.read(file.toPath(),attrs,limit);
         NativeCommandExecutor.within(root,path);
         if(!rootKey.equals(savedStaticRoot(root)))throw new SecurityException("原私人副本目录已变化");

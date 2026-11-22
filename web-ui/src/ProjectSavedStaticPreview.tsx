@@ -68,6 +68,17 @@ export type SavedStaticEditor={projectId:string;checkoutId:string;viewHandle:str
   revision:number;editSequence:number;entrySha256:string;documentEpoch:number;html:string;listedPaths:readonly string[]};
 type Snapshot={sessionId:string;manifestIdentity:string;resourceIdentity:string;ready:boolean;visible:boolean;generation:number;error:string|null};
 type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;published:boolean;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
+function missingResourceReview(value:unknown,editor:SavedStaticEditor,paths:readonly string[]):string[]|null {
+  const review=row(value), sent=review.resourcePaths, missing=review.missingPaths;
+  if(review.kind!=='saved_static_resource_review'||review.opened!==false||Object.hasOwn(review,'sessionId')||
+    review.projectId!==editor.projectId||review.checkoutId!==editor.checkoutId||review.entrySha256!==editor.entrySha256||
+    review.viewHandle!==editor.viewHandle||review.filesHandle!==editor.filesHandle||review.fileHandle!==editor.fileHandle||
+    review.revision!==editor.revision||review.editSequence!==editor.editSequence||
+    !Array.isArray(sent)||sent.length!==paths.length||!paths.every((path,i)=>sent[i]===path)||
+    !Array.isArray(missing)||!missing.length||missing.length>paths.length||new Set(missing).size!==missing.length||
+    !missing.every(path=>assetPath(path)&&paths.includes(path))) return null;
+  return missing;
+}
 function clearPublicationTimer(original:Visit) {
   if(original.publicationTimer!==undefined)window.clearTimeout(original.publicationTimer);
   original.publicationTimer=undefined;
@@ -103,6 +114,8 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
   const suggestions=useMemo(()=>directAssets(editor.html),[editor]);
   const other=useMemo(()=>Array.from(new Set(editor.listedPaths.filter(path=>assetPath(path)&&!suggestions.includes(path)))).slice(0,40),[editor,suggestions]);
   const [selected,setSelected]=useState<string[]>(()=>suggestions);
+  const [missing,setMissing]=useState<string[]>([]);
+  const hasSelectedMissing=selected.some(path=>missing.includes(path));
   const [stage,setStage]=useState<'review'|'opening'|'preview'|'closing'|'error'>('review');
   const [shown,setShown]=useState<Snapshot|null>(null), [error,setError]=useState('');
   const visit=useRef<Visit|null>(null), mounted=useRef(false), heading=useRef<HTMLHeadingElement>(null);
@@ -156,6 +169,9 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
   };
   const closeNow=useRef(dismiss);closeNow.current=dismiss;
   useLayoutEffect(()=>{
+    if(stage==='review'&&missing.length)heading.current?.focus({preventScroll:true});
+  },[stage,missing]);
+  useLayoutEffect(()=>{
     mounted.current=true;registerBack(()=>closeNow.current());
     const drawer=heading.current?.closest<HTMLElement>('.pw-settings-dialog-content');
     if(drawer)drawer.scrollTop=0;
@@ -171,11 +187,16 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
     };
   },[editor]);
   const show=()=>{
-    if(!owns()||stage!=='review'||visit.current||!canOpenSavedStaticPreview()||selected.length>maximumResources)return;
+    if(!owns()||stage!=='review'||visit.current||!canOpenSavedStaticPreview()||hasSelectedMissing||selected.length>maximumResources)return;
     const original:Visit={paths:[...selected],published:false,returning:false,closing:false,dismissed:false,closed:false};
     visit.current=original;setStage('opening');setError('');
     const {viewHandle,filesHandle,fileHandle,revision,editSequence}=editor;
     void bridge.command(openPreview,{viewHandle,filesHandle,fileHandle,revision,editSequence,resourcePaths:original.paths}).then(value=>{
+      const unavailable=missingResourceReview(value,editor,original.paths);
+      if(unavailable){
+        if(!live(original))return;
+        visit.current=null;setMissing(unavailable);setStage('review');return;
+      }
       const ack=nativeSnapshot(value,editor,original.paths);
       if(!ack)throw Error('未取得所选文件的预览回执，没有打开其他副本。');
       original.ack=ack;
@@ -201,18 +222,21 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,registerBack}:
     isDisabled={!selected.includes(path)&&selected.length>=maximumResources}
     onChange={checked=>setSelected(previous=>checked?(previous.length<maximumResources&&!previous.includes(path)?[...previous,path]:previous):previous.filter(p=>p!==path))}>
     <bdi className="pw-preview-entry-path">{path}</bdi>
+    {missing.includes(path)&&<span className="pw-field-hint"> · 本次未找到</span>}
   </CheckboxField>);
   return stage==='review'?<section className="pw-form-flow" aria-label="核对本机网页预览">
     <h3 ref={heading} tabIndex={-1}>index.html</h3>
     <p>用当前已保存的入口和你选中的资源。预览只在本机打开，不联网、不构建，也不改动文件。</p>
     {suggestions.length>0&&<div className="pw-form-flow" role="group" aria-label="入口直接引用的文件">{options(suggestions)}</div>}
-    {other.length>0&&<Accordion><AccordionItem title="从已读取的文件清单再选" headingLevel={4}>
+    {other.length>0&&<Accordion defaultExpandedKeys={other.some(path=>missing.includes(path))?['static-listed-resources']:undefined}>
+      <AccordionItem id="static-listed-resources" title="从已读取的文件清单再选" headingLevel={4}>
       <div className="pw-form-flow" role="group" aria-label="清单中的其他可选资源">{options(other)}</div>
     </AccordionItem></Accordion>}
     {(suggestions.length>0||other.length>0)&&<p className="pw-field-hint" role="status">已选 {selected.length} 项，最多 {maximumResources} 项。</p>}
+    {hasSelectedMissing&&<p className="pw-field-hint" role="status">请取消勾选未找到的资源，或者返回补齐文件后再预览。</p>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     <div className="pw-form-actions"><Button variant="secondary" onClick={dismiss}>返回编辑</Button>
-      <Button onClick={show}>打开本机预览</Button></div>
+      <Button disabled={hasSelectedMissing} onClick={show}>打开本机预览</Button></div>
   </section>:<section className="pw-preview-pane pw-original-local-web" aria-label="已保存网页的本机预览" aria-busy={stage==='opening'||stage==='closing'||stage==='preview'&&!shown?.ready&&!shown?.error}>
     <p className="pw-reading-note">index.html · 此次已保存版本</p>
     {stage!=='error'&&<div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={shown?.sessionId}>
