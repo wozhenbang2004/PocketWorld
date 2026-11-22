@@ -3669,7 +3669,15 @@ export default function App(){
   </>;
  };
  useLayoutEffect(()=>{if(route!=='chat'||!butlerSendConversation.current)return;const original=butlerSendConversation.current;butlerSendConversation.current=null;if(original===String(state.conversationId||''))goToLatest();},[route,state.conversationId,goToLatest]);
- const targetWork=async(task:Task,original?:WorkIdentity)=>{const identity=original||ownerWorkIdentity(task),conversationId=privateTaskConversationId(task);if(!identity||!identity.runId||identity.epoch<1||!conversationId||!can('ownerWork.supplement.read'))return;if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current.flush())return;setWorkSupplementTarget({...identity,goal:task.goal,conversationId});if(taskOpen&&taskId===task.id)showTaskLayer('overview');else openTask(task.id);};
+ const targetWork=async(task:Task,original?:WorkIdentity,nearProgress?:()=>boolean)=>{
+  const identity=original||ownerWorkIdentity(task),conversationId=privateTaskConversationId(task);
+  if(!identity||!identity.runId||identity.epoch<1||!conversationId||!can('ownerWork.supplement.read')||nearProgress&&!nearProgress())return;
+  if(workSupplementBeforeLeave.current&&!await workSupplementBeforeLeave.current.flush())return;
+  if(nearProgress&&!nearProgress())return;
+  const keepNearProgress=nearProgress||workSupplementTarget&&workSupplementTarget.taskId===task.id&&workSupplementTarget.overviewPlacement==='progress';
+  setWorkSupplementTarget({...identity,goal:task.goal,conversationId,...(keepNearProgress?{overviewPlacement:'progress' as const}:{})});
+  if(taskOpen&&taskId===task.id)showTaskLayer('overview');else openTask(task.id);
+ };
  const returnToWorkInput=(pending:Json)=>{const identity=obj(pending.originalTarget) as WorkIdentity,task=tasks.find(row=>row.id===identity.taskId);if(task&&identity.runId&&Number.isSafeInteger(identity.epoch))void targetWork(task,identity);else if(can('composer.returnPending'))run('composer.returnPending',{clientMessageId:pending.clientMessageId});};
  const workWaitsForTeamDecision=(task:Task)=>ownerWorkPendingTeamStart(task,
   review?.task&&taskBinding(review.task)===taskBinding(task)&&currentReviewWindow(reviewWindow.current)?review.approvals:undefined);
@@ -5928,7 +5936,7 @@ export default function App(){
    onFiles={task.status==='completed'&&can('attachmentWorkspace.open')?openHomeReportFiles:undefined}
    onConversation={canReadOriginal?()=>{if(openedTaskId.current===task.id&&!taskOpening)void returnToTaskConversation(task)}:undefined}/>;
   const progress=getRecentTaskProgress(task);
-  const stage=workCollectionPresentation(task).group;
+  const presentation=workCollectionPresentation(task),stage=presentation.group;
   const actionNames=asArray<{action:string;label:string}>(review?.actions).map(x=>x.action),approved=asArray<Json>(review?.approvals),unresolved=asArray<Json>(review?.unresolvedOperations);
   const heldProfileApproval=task.raw?.workProfileRef&&originalTaskOverview(task)&&!taskNeedsReconciliation(task)&&savedUnsentProfileProjectApproval(task);
   const protectedDisabled=taskOpening||reviewPending||reviewStale||reviewSubmitted;
@@ -6085,10 +6093,43 @@ export default function App(){
       onOriginalRequest: originatingRequestConversation(task) && can('conversation.select') && !state.chatSubmitting && !returningConversation ? () => void returnToTaskConversation(task) : undefined,
       onBrowse:()=>{void openWorkFiles(task.id).catch(error=>setLocalError(error instanceof Error?error.message:String(error)));}}
    : undefined;
-  const latestProgress=stage==='running'&&running(task)&&<section key="task-current-progress" className="pw-work-current-progress">
+  const plainRunningWork=(row:Task|undefined)=>{
+   if(!row||!['preparing','running'].includes(row.status))return null;
+   const raw=obj(row.raw),work=ordinaryChatWorkRow(row,String(raw.conversationId||''),true);
+   if(!work||work.epoch<1||raw.status!==row.status||raw.cancelRequested!==false||raw.hasUnresolvedOperations!==false||
+      raw.metadataLimited===true||raw.executionScope?.executionPhase==='planning')return null;
+   const {group,handling,reconciliation,pendingApproval}=workCollectionPresentation(row);
+   return group==='running'&&!reconciliation&&!pendingApproval&&!handling?.waitingForChildren&&!handling?.waitingForButler?work:null;
+  };
+  const ordinaryActive=originalToolsWindow&&!inspectResult&&!decisionFirst&&['butler','chat','tasks'].includes(route)?plainRunningWork(task):null;
+  const taskControls=obj(task.raw?.controls);
+  const promoteSupplement=!!ordinaryActive&&taskControls.canInput===true&&taskControls.canContinue===false&&
+   !!privateTaskConversationId(task)&&can('ownerWork.supplement.read');
+  const openProgressSupplement=(trigger:HTMLButtonElement)=>{
+   if(!promoteSupplement||!ordinaryActive)return;
+   const doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,request=reviewRequest.current,resume=taskView.resumeRevision;
+   if(!Number.isSafeInteger(resume)||resume!==openedTaskResumeRevision.current)return;
+   const original=()=>{
+    const live=bridge.getState(),view=obj(live.view),rows=asArray<Task>(live.state.tasks).filter(row=>row.id===task.id);
+    if(document.hidden||bridge.getDocumentEpoch()!==doc||navigationWindow.current!==navigation||reviewRequest.current!==request||
+       !trigger.isConnected||trigger.disabled||trigger.closest('[hidden],[inert],[aria-hidden="true"]')||
+       openedTaskId.current!==task.id||view.section!==null||view.taskId!==task.id||view.resumeRevision!==resume||
+       live.state.conversationReader||live.state.queuedInputsPage||live.state.attachmentWorkspace?.open||live.state.chatSubmitting||
+       !live.capabilities.commands.includes('ownerWork.supplement.read')||rows.length!==1)return;
+    const row=rows[0],work=plainRunningWork(row),controls=obj(row.raw?.controls);
+    if(work&&workIdentityKey(work)===workIdentityKey(ordinaryActive)&&controls.canInput===true&&controls.canContinue===false&&
+       privateTaskConversationId(row)===privateTaskConversationId(task))return row;
+   };
+   const row=original();if(row)void targetWork(row,ordinaryActive,()=>!!original());
+  };
+  // A native status with no further detail already appears beside Stop in
+  // the Work header; keep actual same-run events and distinct reasons here.
+  const stateOnly=progress.source==='task'&&progress.status!=='unknown';
+  const repeatedStatus=ordinaryActive&&stateOnly&&(!progress.detail||progress.detail===progress.title||progress.detail===presentation.label);
+  const latestProgress=stage==='running'&&running(task)&&!repeatedStatus&&<section key="task-current-progress" className="pw-work-current-progress">
    <h3>目前进展</h3>
    <BlurCrossfade identity={`${task.id}:${progress.operationId||progress.position||progress.title}`}>
-    <strong>{progress.source==='task'&&progress.status!=='unknown'?'最近确认的状态':progress.title}</strong>
+    {(!ordinaryActive||!stateOnly)&&<strong>{stateOnly?'最近确认的状态':progress.title}</strong>}
     <p dir="auto">{progress.detail||(progress.source==='task'?progress.title:progress.stateLabel)}</p>
    </BlurCrossfade>
   </section>;
@@ -6181,6 +6222,20 @@ export default function App(){
       {review&&!teamDeclineSettlesReview&&(!reviewStale||!!review.ownerQuestion)&&(inlineDraftDecision?draftOtherOperations:fixedDraft&&!actionNames.includes('tasks.confirm')?null:ordinaryResume?resumeFeedback:hasDecision?<PermissionReview title={originalDraftReview?'验收本轮原独立改稿':legacyBuildHold||pairedReceiptOnly?'原执行记录':project&&!managedProjectHold&&!heldProfileApproval?'继续原项目任务':actionNames.includes('tasks.confirm')?'这份结果是否达到目标？':heldProfileApproval&&project?'原项目与范围':'处理这次任务'} headerAction={legacyBuildHold?undefined:refreshControl}><div className="pw-protected-actions">{originalDraftReview?<p className="pw-field-hint">这里只验收本轮的原固定稿，不会将你另存的改稿当作本次结果。</p>:projectControls}{renderOwnerQuestion(protectedDisabled,canUseColdWorkQuestion)}{resultFeedback}{draftOtherOperations}{actionNames.includes('tasks.approve')&&approvalNavigation}{actionNames.includes('tasks.approve')&&approved.map(p=><TaskApproval key={`${review.reviewHandle}:${p.approvalId||p.id}`} approval={p} reviewTask={teamApprovalWork} executionScope={scope} disabled={protectedDisabled} onDecision={args=>reviewedAction('tasks.approve',args)}/>)}{actionNames.includes('tasks.resolve')&&ordinaryUnknown.filter(op=>!!op.operationId).map(op=><section className="pw-approval-item" key={op.operationId}><h4>{op.title||op.toolName||'动作结果核对'}</h4><p>{op.summary||op.message||'请依据实际观察核对这次动作是否已经发生。'}</p><div className="pw-action-row"><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'occurred'})}>确认已发生</Button><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.resolve',{operationId:op.operationId,outcome:'not_occurred'})}>确认未发生</Button></div></section>)}{!project&&actionNames.includes('tasks.resume')&&<TextAreaField label="本次补充" value={reviewNote} onChange={setReviewNote} placeholder="继续前需要补充什么？"/>}{!review.actions?.length&&<p className="pw-muted">当前没有待作出的新决定。</p>}</div></PermissionReview>:phoneUnknown.length||task.raw?.originalTeamFileEffects?.rows?.length?null:<div className="pw-section-heading pw-task-review-tools">{declinedTeam||waitingManaged.length?<span className="pw-grow"/>:<p className="pw-muted">当前没有待作出的新决定。</p>}{refreshControl}</div>)}
       {declinedTeam&&<DeclinedTeamStart key={declinedTeam.id} decision={declinedTeam}/>}
      </div>;
+  const raisedSupplement=workSupplementTarget&&workSupplementTarget.taskId===task.id&&workSupplementTarget.overviewPlacement==='progress';
+  // This position is latched only by the explicit button. Native phase and
+  // results may change around the one keyed editor without moving its textarea.
+  const supplementEditor=taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&
+   <Fragment key="task-work-supplement"><OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can}
+    registerBeforeLeave={(guard,panel)=>registerWorkSupplementBeforeLeave(workSupplementTarget,panel,guard)}
+    onClose={flush=>{if(!closeCurrentWorkSupplement(true))void flush().then(saved=>{if(saved)dismissWorkSupplement(workSupplementTarget)})}} onSelectOriginal={identity=>void targetWork(task,identity)}/></Fragment>;
+  const workActions=taskLayer==='overview'&&<Fragment key="task-work-actions">
+   {ownerWorkActions(task,currentResultDecision,currentPlanDecision,promoteSupplement?openProgressSupplement:undefined)}
+  </Fragment>;
+  const earlyEditor=raisedSupplement&&supplementEditor;
+  const detailContents=!ordinaryActive||can('deviceTaskScope.open')||!taskToolsInOverview&&can('taskCapabilities.open')||
+   can('usage.task')||can('tokenBudgets.open')||!!task.raw?.evidence?.nativeFinalAnswer&&can('sources.open');
+  const screenshotManagement=review&&(!reviewStale||!!review.ownerQuestion)&&actionNames.includes('tasks.deleteScreenshot');
   return <Tabs className="pw-work-object-tabs" selectedKey={taskLayer==='scope'?'goal':taskLayer} onSelectionChange={key=>showTaskLayer(String(key) as TaskLayer)}>
    <TabList aria-label="查看这件工作"><Tab id="overview">概览</Tab><Tab id="goal">目标</Tab><Tab id="process">过程</Tab></TabList>
    {/* Keep the result document mounted while reading deeper task details. */}
@@ -6200,15 +6255,15 @@ export default function App(){
      {phoneInterrupted&&overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&<InterruptedPhoneRecord
        reviewed={!!review&&!reviewStale&&!readingReview} canStart={actionNames.includes('tasks.resume')} onHistory={can('history.read')?()=>showTaskLayer('process'):undefined}
        onReview={can('tasks.review')&&!readingReview&&!questionPending?showTaskReview:undefined}/>}
-     {inspectResult?[evidence,taskToolsInOverview&&taskTools,decision,workFacts]:decisionFirst?[mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:[latestProgress,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
+     {inspectResult?[earlyEditor,evidence,taskToolsInOverview&&taskTools,decision,workFacts]:
+       decisionFirst?[earlyEditor,mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:
+       [latestProgress,promoteSupplement&&workActions,earlyEditor,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
      {dependencyBuild&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(dependencyBuild)}>核对这版的本机构建</Button></div>}
      {previousDependency&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(previousDependency,true)}>用这次准备记录对照当前锁</Button></div>}
-     {taskLayer==='overview'&&ownerWorkActions(task,currentResultDecision,currentPlanDecision)}
+     {!promoteSupplement&&workActions}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
-     {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&workSupplementTarget?.taskId===task.id&&can('ownerWork.supplement.read')&&<OwnerWorkSupplement key={workIdentityKey(workSupplementTarget)} target={workSupplementTarget} task={task} can={can}
-       registerBeforeLeave={(guard,panel)=>registerWorkSupplementBeforeLeave(workSupplementTarget,panel,guard)}
-       onClose={flush=>{if(!closeCurrentWorkSupplement(true))void flush().then(saved=>{if(saved)dismissWorkSupplement(workSupplementTarget)})}} onSelectOriginal={identity=>void targetWork(task,identity)}/>}
+     {!raisedSupplement&&supplementEditor}
      {workSupplementTarget?.taskId!==task.id&&pendingInputs.some(item=>String(item.draftKey).startsWith('work:')&&item.originalTarget?.taskId===task.id)&&<div className="pw-work-pending-links" aria-label="原工作补充">{pendingInputs.filter(item=>String(item.draftKey).startsWith('work:')&&item.originalTarget?.taskId===task.id).map(item=><Button key={item.clientMessageId} variant="secondary" size="small" onClick={()=>returnToWorkInput(item)}>核对原工作中的补充</Button>)}</div>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.ownerDeviceWork&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} directed={task.raw.ownerDeviceWork.directPhone} directedWorkspace={task.raw.ownerDeviceWork.directWorkspace}
        startedPhone={overviewActive&&!phoneViewerObscured&&!phoneViewerExpanded&&!obj(snapshot?.view).section&&obj(snapshot?.view).taskId===task.id&&!!task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0}
@@ -6247,16 +6302,16 @@ export default function App(){
 
      {openedTaskId.current===task.id&&!taskOpening&&task.raw?.kind==='assistant'&&can('conversation.drafts')&&<ConversationDrafts key={'drafts:'+task.id} taskId={task.id} reviewingMemory={memoryDraftTarget?.taskId===task.id} refreshRevision={Number(state.memoryRefreshRevision||0)} open={openConversationDraft}/>}
 
-     <Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料" onExpandedChange={keys=>{
+     {(detailContents||screenshotManagement)&&<Accordion variant="divided" className="pw-task-disclosures" aria-label="更多任务资料" onExpandedChange={keys=>{
       const view=obj(bridge.getState().view);
       if(keys.has(`${task.id}:details`)&&taskOpen&&!taskOpening&&openedTaskId.current===task.id&&view.taskId===task.id&&view.section==null)
        setTaskToolsPlace(place=>place??{taskId:task.id,overview:false});
      }}>
-      <AccordionItem id={`${task.id}:details`} title="过程与范围">
-     <div className="pw-task-entry-list">
+      {detailContents&&<AccordionItem id={`${task.id}:details`} title={ordinaryActive?'工具与运行资料':'过程与范围'}>
+     {!ordinaryActive&&<div className="pw-task-entry-list">
       <Button variant="ghost" leadingIcon={IconTool} onClick={()=>showTaskLayer('process')}>查看执行轨迹<IconChevronRight size={17}/></Button>
       {can('tasks.review')&&<Button variant="ghost" leadingIcon={IconInfo} disabled={readingReview||questionPending} onClick={()=>{if(openedTaskId.current!==task.id){openTask(task.id,'scope');return}showTaskLayer('scope');if(!review||reviewStale)refreshReview()}}>{review&&!reviewStale&&actionNames.includes('tasks.scope')?'修订本次范围':'本次范围'}<IconChevronRight size={17}/></Button>}
-     </div>
+     </div>}
      {openedTaskId.current===task.id&&!taskOpening&&<>
       {taskLayer==='overview'&&!task.raw?.ownerDeviceWork&&task.raw?.actorId==='owner'&&task.raw?.spaceId==='private'&&['assistant','phone'].includes(String(task.raw?.kind))&&!task.raw?.origin&&can('deviceTaskScope.open')&&<DeviceTaskScopeWorkspace key={'device:'+task.id} taskId={task.id} run={act} onBackChange={registerDeviceScopeBack} onSaved={()=>loadTaskReview(task.id)} onOpenDevices={()=>void openRelatedWorkspace('devices')}/>}
       {!taskToolsInOverview&&taskTools}
@@ -6267,9 +6322,9 @@ export default function App(){
       {task.raw?.kind==='phone'&&!task.raw?.origin&&typeof task.raw.runId==='string'&&task.raw.runId&&Number.isSafeInteger(task.raw.coordinatorEpoch)&&task.raw.coordinatorEpoch>0&&can('routeReference.open')&&<Button variant="ghost" onClick={()=>setRouteReferenceTarget({taskId:task.id,runId:task.raw!.runId,epoch:task.raw!.coordinatorEpoch,namespace:'owner/private'})}>查看路线参考与分享</Button>}
       {task.raw?.evidence?.nativeFinalAnswer&&can('sources.open')&&<Button variant="ghost" onClick={()=>setSourceSelection({taskId:task.id})}>核对原回答来源</Button>}
      </>}
-      </AccordionItem>
-      {review&&(!reviewStale||!!review.ownerQuestion)&&actionNames.includes('tasks.deleteScreenshot')&&<AccordionItem id={`${task.id}:screenshot`} title="截图管理"><section className="pw-approval-item"><h4>删除这份任务截图</h4><p>只删除本次核对的结果截图；已导出的文件和项目成果仍保留。删除后不能恢复。</p><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.deleteScreenshot')}>确认删除这份截图</Button></section></AccordionItem>}
-     </Accordion>
+      </AccordionItem>}
+      {screenshotManagement&&<AccordionItem id={`${task.id}:screenshot`} title="截图管理"><section className="pw-approval-item"><h4>删除这份任务截图</h4><p>只删除本次核对的结果截图；已导出的文件和项目成果仍保留。删除后不能恢复。</p><Button variant="secondary" disabled={protectedDisabled} onClick={()=>reviewedAction('tasks.deleteScreenshot')}>确认删除这份截图</Button></section></AccordionItem>}
+     </Accordion>}
     </section>
    </TabPanel>
    {/* Keep settled audit pages and expanded records while returning to the result.
@@ -6297,11 +6352,12 @@ export default function App(){
    </TabPanel>
   </Tabs>;
  };
- const ownerWorkActions=(task:Task,currentResultDecision:boolean,currentPlanDecision:boolean)=>{
+ const ownerWorkActions=(task:Task,currentResultDecision:boolean,currentPlanDecision:boolean,openProgressSupplement?:(trigger:HTMLButtonElement)=>void)=>{
   const identity=ownerWorkIdentity(task);if(!identity)return null;
   const control=workControls[workIdentityKey(identity)],controls=obj(task.raw?.controls);
   const hasTeamDecision=controls.canContinue===true&&workWaitsForTeamDecision(task);
-  const supplement=identity.epoch>0&&can('ownerWork.supplement.read'),continuing=!hasTeamDecision&&controls.canContinue===true&&can('ownerWork.control');
+  const sameOpenInput=!!openProgressSupplement&&!!workSupplementTarget&&workIdentityKey(workSupplementTarget)===workIdentityKey(identity);
+  const supplement=!sameOpenInput&&identity.epoch>0&&can('ownerWork.supplement.read'),continuing=!hasTeamDecision&&controls.canContinue===true&&can('ownerWork.control');
   const note=hasTeamDecision?null:controls.canContinue===true&&!can('ownerWork.control')?'这个窗口目前不能提交续接，仍可查看原工作。':ownerWorkContinuationNote(task);
   const missingDefault=review?.savedTeamDefaultModel,modelWindow=reviewWindow.current,conversation=String(task.raw?.conversationId||'');
   const defaultSetupCurrent=()=>{
@@ -6350,7 +6406,8 @@ export default function App(){
   const more=foldNewRound||foldSupplement;
   const explanation=!control?.pending&&!control?.unknown&&!control?.usedForContinuation?note:null;
   const newRound=continuing&&<Button variant="secondary" disabled={taskOpening||control?.pending||control?.unknown||control?.usedForContinuation} onClick={()=>controlWork(task,'continue')}>在原任务开新一轮</Button>;
-  const openSupplement=supplement&&<Button variant={continuing||hasTeamDecision?'ghost':'secondary'} disabled={taskOpening||!!state.chatSubmitting} onClick={()=>{void targetWork(task)}}>{controls.canInput===true?'补充这件工作':'查看补充草稿'}</Button>;
+  const openSupplement=supplement&&<Button variant={continuing||hasTeamDecision?'ghost':'secondary'} disabled={taskOpening||!!state.chatSubmitting}
+   onClick={event=>{if(openProgressSupplement)openProgressSupplement(event.currentTarget);else void targetWork(task)}}>{controls.canInput===true?'补充这件工作':'查看补充草稿'}</Button>;
   return <section className="pw-owner-work-actions" aria-label={more?'这件工作的其他操作':'继续这件工作'}>
    {inspectTeamMismatch&&<>
     <Button variant="secondary" leadingIcon={IconChat} aria-busy={openingWorkRequest===task.id||undefined}

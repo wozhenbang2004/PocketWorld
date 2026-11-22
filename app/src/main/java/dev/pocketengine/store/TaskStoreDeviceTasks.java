@@ -1525,6 +1525,60 @@ public final class TaskStoreDeviceTasks {
             result.put("closed",true).put("ownerVerified",completed).put("reviewedAt",System.currentTimeMillis());task.put("deviceGoalResult",result);access.write(task);JSONObject evidence=duplicate(result.getJSONObject("evidence")).put("nativeDeviceGoalOwnerReview",new JSONObject().put("resultDigest",review.digest).put("ownerOnlyText",keepTextLocal?Boolean.TRUE:null).put("completed",completed).put("sameRun",true).put("remoteAuthorizationRevoked",false));String status=task.optBoolean("cancelRequested")?"cancelled":completed?"completed":"cancelled";
             owner.endAttempt(review.id,review.run,status,completed?"B主人已核对原run结果；仅关闭本任务，不表示远端授权已撤销":"B主人已关闭原run，未确认业务完成；已有远端效果与授权保留",evidence);review.used=true;db.setTransactionSuccessful();return task(review.id).put("resultReviewed",true).put("newRun",false).put("newEffectsAllowed",false).put("remoteAuthorizationRevoked",false);
         }finally{db.endTransaction();}}}
+    /** Called only by the original cold-process recovery. A durable acceptance is enough
+     * to prove the same never-started row, never to reconstruct an authenticated Admission. */
+    boolean untouchedColdAndroidTextPickup(JSONObject current)throws Exception{
+        if(!db.inTransaction())throw new SecurityException("仅可在原启动恢复事务核对未开始目标");
+        if(!"awaiting_user".equals(current.opt("status"))||!"assistant".equals(current.opt("kind"))||
+                !"capabilities".equals(current.opt("executionMode"))||!"".equals(current.opt("conversationId"))||
+                !Boolean.FALSE.equals(current.opt("cancelRequested"))||current.has("runId")&&!"".equals(current.opt("runId"))||
+                current.has("deviceFirstPickupDependency")||current.has("deviceAcceptedRunId")||
+                current.has("deviceAcceptedExecutorEpoch")||current.has("deviceModelSelection")||current.has("deviceGoalResult"))return false;
+        final JSONObject origin,scope;
+        try{
+            if(!DeviceProtocol.acceptedTextReturn(current))return false;
+            origin=current.getJSONObject("origin");scope=current.getJSONObject("deviceExecutionScope");
+            if(!DeviceProtocol.ANDROID_TEXT_RETURN.equals(origin.opt("textReturnContract"))||
+                    !"pocketworld.device-execution-scope.v1".equals(scope.opt("format"))||
+                    !DeviceProtocol.VERSION.equals(scope.opt("capabilityVersion"))||
+                    !DeviceProtocol.canonical(origin).equals(DeviceProtocol.canonical(scope.optJSONObject("origin"))))return false;
+        }catch(DeviceProtocol.ProtocolException|org.json.JSONException unavailable){return false;}
+        if(!(current.opt("id") instanceof String id)||id.isEmpty())return false;
+        // This row was inserted only by authenticated task.submitGoal, atomically with its
+        // original task. No run, tool, cancel or second ingress row may have used it.
+        String sql="SELECT i.caller_device_id,i.remote_operation_id,i.arguments_digest,i.grant_id,i.authorization_epoch,i.accepted_at,"+
+                "CASE WHEN length(CAST(i.envelope_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN i.envelope_json END"+
+                " FROM device_inbound i WHERE i.local_task_id=? AND i.method='task.submitGoal' AND i.local_operation_id IS NULL"+
+                " AND NOT EXISTS(SELECT 1 FROM runs WHERE task_id=i.local_task_id)"+
+                " AND NOT EXISTS(SELECT 1 FROM operations WHERE task_id=i.local_task_id)"+
+                " AND NOT EXISTS(SELECT 1 FROM device_inbound other WHERE other.local_task_id=i.local_task_id AND other.rowid<>i.rowid)";
+        try(Cursor row=db.rawQuery(sql,new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(6)||row.getLong(5)<=0)return false;
+            DeviceProtocol.integer(current.opt("coordinatorEpoch"),"originalEpoch",0,0);
+            DeviceProtocol.integer(scope.opt("revision"),"originalScopeRevision",1,1);
+            DeviceProtocol.integer(scope.opt("toolsUsed"),"originalToolsUsed",0,0);
+            DeviceProtocol.integer(scope.opt("modelCallsUsed"),"originalModelsUsed",0,0);
+            DeviceTaskEnvelope request=DeviceProtocol.parseRequest(row.getString(6).getBytes(StandardCharsets.UTF_8));
+            JSONObject wire=request.json();
+            if(!DeviceProtocol.isAndroidTextReturn(wire)||!id.equals(DeviceProtocol.receiverTaskId(request))||
+                    !request.callerDeviceId().equals(row.getString(0))||!request.operationId().equals(row.getString(1))||
+                    !request.argumentsDigest().equals(row.getString(2))||!request.grantId().equals(row.getString(3))||
+                    request.authorizationEpoch()!=row.getLong(4)||!request.instanceId().equals(current.opt("deviceNativeInstanceId"))||
+                    !("paired_device:"+request.originDeviceId()).equals(current.opt("actorId"))||
+                    !("device:"+request.callerDeviceId()).equals(current.opt("spaceId")))return false;
+            for(String field:new String[]{"callerDeviceId","originDeviceId","targetDeviceId","rootTaskId","parentTaskId","grantId","authorizationEpoch","traceId"})
+                if(!DeviceProtocol.canonical(wire.opt(field)).equals(DeviceProtocol.canonical(origin.opt(field))))return false;
+            long deadline=DeviceProtocol.integer(scope.opt("deadline"),"originalPickupDeadline",1,DeviceProtocol.MAX_SAFE_INTEGER);
+            return request.operationId().equals(origin.opt("remoteOperationId"))&&request.localTaskId().equals(origin.opt("remoteLocalTaskId"))&&
+                    request.rootTaskId().equals(current.opt("rootTaskId"))&&request.parentTaskId().equals(current.opt("remoteParentTaskId"))&&
+                    request.arguments().getString("goal").equals(current.opt("goal"))&&
+                    request.budget().getString("allocationId").equals(scope.opt("allocationId"))&&
+                    request.budget().getLong("modelCalls")==scope.getLong("modelCallLimit")&&
+                    DeviceProtocol.resourceEquals(request.resourceBinding(),scope.getJSONObject("resourceBinding"))&&
+                    row.getLong(5)<deadline&&deadline<=request.deadline();
+        }catch(DeviceProtocol.ProtocolException|org.json.JSONException unavailable){return false;}
+    }
+
     /** Local reducing-authority review over ORIGINAL accepted SQL, usable after process death.
      * This is deliberately NOT an Admission/Permission and cannot start or resume anything. */
     public static final class PendingGoalCancellation {

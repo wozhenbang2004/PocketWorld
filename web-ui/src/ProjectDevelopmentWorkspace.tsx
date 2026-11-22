@@ -1115,7 +1115,18 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const shownDependencyEditor=useRef<Data|null>(null);shownDependencyEditor.current=selectedDependencyEditor;
   const dependencyForSave=selectedDependencyEditor&&fileCheckout===checkout&&nativeDirectBuild?selectedDependencyEditor:null;
   const showViteSaveLabel=!!starterForSave||!!(importedViteForSave||dependencyForSave)&&importedViteEntry;
-  const pythonToolSetup = !!onPreparePythonTools && !!fileWindow && !fileWindow.originalImport && !fileWindow.unselectedImport &&
+  // The native editor already admits saved Python from an original phone ZIP/folder.
+  // Its directory shortcut should reach the same tool preparation as the normal editor.
+  const samePythonToolsCopy=()=>{
+    if(!fileWindow||fileWindow.unselectedImport)return false;
+    const original=fileWindow.originalImport;
+    return !original||original.exactPhoneSource===true&&original.openDirectory===true&&original.checkoutId===fileCheckout&&
+      selectedCopy?.taskPackageSource===false&&selectedCopy.hostSource===false&&
+      view?.projectId===projectId&&view.viewHandle===handle.current&&view.commandsAuthorized===false&&
+      view.executionAuthorized===false&&view.draftRecoveryRequired===false&&
+      can('connections.enter')&&can('connections.leave')&&sameImportedEditor(original,originalImportedEditor(projectId));
+  };
+  const pythonToolSetup = !!onPreparePythonTools && samePythonToolsCopy() &&
     checkout===fileCheckout&&!hostEditor&&!pending&&!sourceConflict&&!buildCopyMissing&&!view?.draftRecoveryRequired&&
     selectedCopy?.draftWorkingCopy===false&&view?.runtime?.runtimeId==='managed_process_v1'&&
     view.runtime.status==='preparation_required'&&view.runtime.canExecute===false&&view.runtime.preparationAvailable===true&&canViewToolSetup;
@@ -1123,7 +1134,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const documentWindow=ownerWindow(),viewHandle=handle.current,sequence=generation.current,displayed={...draft.current};
     const stillHere=()=>alive.current&&latest.current.active&&!document.hidden&&generation.current===sequence&&
       handle.current===viewHandle&&ownerWindow()===documentWindow&&!activeReview.current&&!previewOpen.current&&
-      bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath&&sameDraft(draft.current,displayed);
+      bridge.getState().state.projectId===projectId&&!bridge.getState().state.filePath&&sameDraft(draft.current,displayed)&&
+      samePythonToolsCopy();
     if(!pythonToolSetup||!stillHere()||position.projectId!==projectId||position.checkoutId!==fileCheckout||
       displayed.checkoutId!==position.checkoutId||!savedPythonPath(position.path)||!sourceHash(position.savedHash))return;
     let verified=false;

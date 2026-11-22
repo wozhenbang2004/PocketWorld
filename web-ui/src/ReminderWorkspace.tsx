@@ -25,6 +25,18 @@ export type OriginalChatReminderRuleVisit = {
 };
 export type ReminderNoticeVisit = { connection: number; navigation: number; documentEpoch: number; resume: number; warm: boolean };
 type ReminderNotice = { id: string; ruleId: string; revision: number; occurrenceAt: number; connectionRevision: number };
+type NoticeSchedule = { visit: ReminderNoticeVisit; pin: ReminderNotice; fromRule: string } & (
+  { kind: 'reading'; previousRead: unknown; requestId?: string } | { kind: 'opened' } | { kind: 'unavailable'; message: string }
+);
+const sameOccurrence = (receipt: Data, pin: ReminderNotice) => receipt.kind === 'reminder' && receipt.id === pin.id &&
+  receipt.ruleId === pin.ruleId && receipt.revision === pin.revision && receipt.occurrenceAt === pin.occurrenceAt;
+const localReminderSource = (source: Data | undefined) => source === undefined ||
+  source?.kind === undefined && source?.ownerId === 'owner' && source.spaceId === 'private' &&
+  typeof source.conversationId === 'string' && !!source.conversationId && typeof source.taskId === 'string' && !!source.taskId &&
+  typeof source.runId === 'string' && !!source.runId && Number.isSafeInteger(source.epoch) && source.epoch > 0;
+const sameReminderSource = (receipt: Data, rule: Data) => localReminderSource(receipt.nativeOrigin) &&
+  (receipt.nativeOrigin === undefined ? rule.nativeOrigin === undefined : !!rule.nativeOrigin &&
+    ['ownerId', 'spaceId', 'conversationId', 'taskId', 'runId', 'epoch', 'kind'].every(key => receipt.nativeOrigin[key] === rule.nativeOrigin[key]));
 function reminderNotice(state: Data, visit: ReminderNoticeVisit): ReminderNotice | null {
   const pin = state.requestedReminderNotice;
   return state.requestedConnectionSection === 'automation' && state.requestedConnectionRevision === visit.connection &&
@@ -52,13 +64,16 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const [submission, setSubmission] = useState<ReminderSubmission | null>(null), [uncertain, setUncertain] = useState(false);
   const [checkRequests, setCheckRequests] = useState<{ list: string; receipts: string } | null>(null);
   const [selectedId, setSelectedId] = useState('');
+  const [noticeSchedule, setNoticeSchedule] = useState<NoticeSchedule>();
+  const scheduleFlight = useRef<NoticeSchedule | undefined>(undefined), scheduleBackFocus = useRef<ReminderNoticeVisit | undefined>(undefined);
+  const keepSchedule = (next?: NoticeSchedule) => { scheduleFlight.current = next; setNoticeSchedule(next); };
   const [occurrenceBusy, setOccurrenceBusy] = useState(false), [occurrenceFeedback, setOccurrenceFeedback] = useState<OccurrenceFeedback | null>(null);
   const occurrenceLock = useRef(false), occurrenceReturn = useRef<{ location: string; id: string; ruleId: string; selected: string; entered: boolean } | null>(null);
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const selectedRule = rules.find(rule => rule.id === selectedId) || null;
   const root = useRef<HTMLDivElement | null>(null), heading = useRef<HTMLHeadingElement | null>(null);
   const listPosition = useRef(0), returnRule = useRef(''), returnIndex = useRef(0), previousRule = useRef<string | undefined>(undefined);
-  const chooseRule = (id: string) => { listPosition.current = root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; returnRule.current = id; returnIndex.current = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-reminder-id]') || []).findIndex(row => row.dataset.reminderId === id); setSelectedId(id); };
+  const chooseRule = (id: string) => { keepSchedule(); scheduleBackFocus.current = undefined; listPosition.current = root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; returnRule.current = id; returnIndex.current = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-reminder-id]') || []).findIndex(row => row.dataset.reminderId === id); setSelectedId(id); };
   useSurfaceEnter(root, selectedRule ? `rule:${selectedRule.id}` : 'list', { selector: ':scope > .pw-settings-section', depth: selectedRule ? 1 : 0, active: hasRules });
   const [advanced, setAdvanced] = useState(false), [receiptLimit, setReceiptLimit] = useState(10);
   const generation = useRef(0), mounted = useRef(true), locked = useRef(false);
@@ -95,10 +110,6 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   }, [selectedRule?.id, reading]);
   const close = () => { generation.current++; setEditor(null); setReview(null); setError(''); setAdvanced(false); };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; }; }, []);
-  useEffect(() => {
-    registerTransientBack(occurrenceBusy ? () => true : review ? () => { generation.current++; setReview(null); return true; } : editor ? () => { formDraft.guard(close); return true; } : selectedRule ? () => { setSelectedId(''); return true; } : null);
-    return () => registerTransientBack(null);
-  }, [occurrenceBusy, Boolean(review), Boolean(editor), selectedRule?.id, registerTransientBack]);
   useEffect(() => {
     if (!submission) return;
     const result = reminderSubmissionResult(state, submission);
@@ -191,12 +202,13 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   }, [visit, openedNotice?.connectionRevision, receiptsBusy, receiptRead, canReadReceipts]);
   const readHere = warmRead?.visit === visit ? warmRead : undefined;
   const matchingRead = !visit?.warm || !!readHere?.requestId && readHere.requestId === receiptRead;
-  const noticeReady = !!openedNotice && !reading && !receiptsBusy &&
+  const scheduleHere = noticeSchedule?.visit === visit ? noticeSchedule : undefined;
+  const scheduleReading = scheduleHere?.kind === 'reading';
+  const noticeReady = !!openedNotice && (!reading || scheduleReading) && !receiptsBusy &&
     (matchingRead || !!readHere && (readHere.requestId === null || receiptRead !== readHere.previous));
   const noticeRows = noticeReady && matchingRead && hasRules && !readingError && receiptsReady && !receiptsError
     ? rows.filter(({ receipt }) => receipt.id === openedNotice.id) : [];
-  const exactNotice = openedNotice && noticeRows.length === 1 ? noticeRows.find(({ receipt, view }) => !view.sourceHeld && receipt.kind === 'reminder' &&
-    receipt.ruleId === openedNotice.ruleId && receipt.revision === openedNotice.revision && receipt.occurrenceAt === openedNotice.occurrenceAt) : undefined;
+  const exactNotice = openedNotice && noticeRows.length === 1 ? noticeRows.find(({ receipt, view }) => !view.sourceHeld && sameOccurrence(receipt, openedNotice)) : undefined;
   const noticeRegion = useRef<HTMLElement | null>(null), focusedNotice = useRef(0);
   useEffect(() => {
     const region = noticeRegion.current;
@@ -204,6 +216,77 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     focusedNotice.current = visit.connection;
     region.scrollIntoView({ block: 'nearest' }); region.focus({ preventScroll: true });
   }, [openedNotice?.connectionRevision, noticeReady, visit]);
+  const scheduleOpened = scheduleHere?.kind === 'opened' && selectedId === scheduleHere.pin.ruleId;
+  const returnFromRule = () => {
+    if (scheduleOpened && scheduleFlight.current === scheduleHere && currentReminderVisit(scheduleHere.visit)) {
+      scheduleBackFocus.current = scheduleHere.visit; setSelectedId(scheduleHere.fromRule);
+    } else setSelectedId('');
+    keepSchedule();
+  };
+  useEffect(() => {
+    registerTransientBack(occurrenceBusy ? () => true : review ? () => { generation.current++; setReview(null); return true; } : editor ? () => { formDraft.guard(close); return true; } :
+      scheduleHere?.kind === 'reading' ? () => { keepSchedule(); return true; } :
+      scheduleOpened || selectedRule ? () => { returnFromRule(); return true; } : null);
+    return () => registerTransientBack(null);
+  }, [occurrenceBusy, Boolean(review), Boolean(editor), selectedId, selectedRule?.id, scheduleHere, scheduleOpened, registerTransientBack]);
+  useLayoutEffect(() => {
+    if (scheduleOpened && selectedRule && currentReminderVisit(scheduleHere.visit)) {
+      heading.current?.scrollIntoView({ block: 'nearest' }); heading.current?.focus({ preventScroll: true });
+    }
+    const back = scheduleBackFocus.current;
+    scheduleBackFocus.current = undefined;
+    if (back && back === visit && currentReminderVisit(back)) {
+      noticeRegion.current?.scrollIntoView({ block: 'nearest' }); noticeRegion.current?.focus({ preventScroll: true });
+    }
+  }, [scheduleHere, scheduleOpened, selectedRule?.id, visit]);
+  const openNoticeSchedule = () => {
+    if (!visit || !openedNotice || !exactNotice || !localReminderSource(exactNotice.receipt.nativeOrigin) || !currentReminderVisit(visit) || reading || pending ||
+        scheduleFlight.current?.kind === 'reading' && scheduleFlight.current.visit === visit) return;
+    const attempt: NoticeSchedule = { kind: 'reading', visit, pin: openedNotice, fromRule: selectedId, previousRead: ruleListResult?._requestId };
+    const waitingHere = () => scheduleFlight.current === attempt && currentVisit.current === visit && currentReminderVisit(visit);
+    const failed = () => { if (waitingHere()) keepSchedule({ ...attempt, kind: 'unavailable', message: '暂未能核对这条提醒的安排，请重试。' }); };
+    keepSchedule(attempt);
+    // Firing a reminder can advance the next time without changing its revision.
+    // Only this explicit action reads the current list; do not borrow a cached schedule.
+    void bridge.command('automation.list').then(reply => {
+      if (!waitingHere()) return;
+      if (reply?.accepted === true && typeof reply.requestId === 'string' && reply.requestId) keepSchedule({ ...attempt, requestId: reply.requestId });
+      else failed();
+    }, failed);
+  };
+  useEffect(() => {
+    if (!noticeSchedule || scheduleFlight.current !== noticeSchedule) return;
+    const attempt = noticeSchedule;
+    if (attempt.visit !== visit || !currentReminderVisit(attempt.visit)) { keepSchedule(); return; }
+    if (attempt.kind !== 'reading' || !attempt.requestId || reading) return;
+    if (editor || review || pending || selectedId !== attempt.fromRule) { keepSchedule(); return; }
+    const live = bridge.getState().state, meta = live.moduleResultInputs?.['automation.list'];
+    const unavailable = (message: string) => keepSchedule({ ...attempt, kind: 'unavailable', message });
+    if (meta?._requestId !== attempt.requestId) {
+      if (meta?._requestId && meta._requestId !== attempt.previousRead) unavailable('暂未能核对这条提醒的安排，请重试。');
+      return;
+    }
+    const result = live.moduleResults?.['automation.list'], actual = live.features?.automation;
+    if (meta._failed === true || !Array.isArray(result?.rules) || !Array.isArray(actual?.rules) ||
+        typeof result.observationGeneration !== 'string' || actual.observationGeneration !== result.observationGeneration ||
+        !Number.isSafeInteger(result.observationSequence) || !Number.isSafeInteger(actual.observationSequence) ||
+        actual.observationSequence < result.observationSequence) {
+      unavailable('暂未能核对这条提醒的安排，请重试。'); return;
+    }
+    // The screen's existing rule detail must have received that read too.
+    if (data.observationGeneration !== actual.observationGeneration || data.observationSequence !== actual.observationSequence) return;
+    const matches = array(actual.rules).filter(rule => rule.id === attempt.pin.ruleId);
+    if (!matches.length) { unavailable('这条提醒已不在当前清单，可能已被删除。没有打开其他提醒。'); return; }
+    const occurrences = array(live.moduleResults?.['automation.receipts']?.receipts).filter(row => row.id === attempt.pin.id);
+    const rule = matches[0], receipt = occurrences[0];
+    if (matches.length !== 1 || rule.kind !== 'reminder' || !Number.isSafeInteger(rule.revision) || rule.revision < attempt.pin.revision ||
+        occurrences.length !== 1 || !sameOccurrence(receipt, attempt.pin) || !sameReminderSource(receipt, rule) ||
+        !Number.isSafeInteger(rule.createdAt) || !Number.isSafeInteger(receipt.claimedAt) || rule.createdAt > receipt.claimedAt ||
+        reminderOccurrence(receipt, rule, Date.now()).sourceHeld) {
+      unavailable('未能确认这次发生对应的提醒安排。没有打开其他提醒。'); return;
+    }
+    keepSchedule({ ...attempt, kind: 'opened' }); setSelectedId(rule.id);
+  }, [noticeSchedule, visit, reading, ruleListResult, data.observationGeneration, data.observationSequence, selectedId, editor, review, pending]);
   const selectedRows = selectedRule ? rows.filter(row => row.receipt.ruleId === selectedRule.id) : rows;
   const latest = selectedRule ? selectedRows[0] : undefined, historyRows = (selectedRule ? selectedRows.slice(1) : rows).filter(row => row !== exactNotice);
   const attentionReceipts = rows.filter(row => row.view.attention && row !== exactNotice);
@@ -299,13 +382,20 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   return <div ref={root} className="pw-reminder-workspace pw-knowledge-workspace" tabIndex={-1}>
     {openedNotice && <section ref={noticeRegion} tabIndex={-1} className="pw-settings-section" aria-label="通知对应的发生记录">
       <header className="pw-section-heading"><h2>这次提醒</h2></header>
-      {exactNotice ? receiptRow(exactNotice, 'notification') : <p role="status" className="pw-field-hint">
-        {noticeReady ? '未在本次读取中定位到这次提醒。请用本页刷新核对原记录。' : '正在核对通知对应的发生记录…'}
+      {exactNotice ? receiptRow(exactNotice, 'notification') : scheduleHere?.kind !== 'unavailable' && <p role="status" className="pw-field-hint">
+        {scheduleReading ? '正在核对这条提醒的安排…' : noticeReady ? '未在本次读取中定位到这次提醒。请用本页刷新核对原记录。' : '正在核对通知对应的发生记录…'}
       </p>}
+      {exactNotice && localReminderSource(exactNotice.receipt.nativeOrigin) && !scheduleOpened && supported('automation.list') && <div className="pw-form-actions">
+        <Button variant="secondary" disabled={occurrenceBlocked || scheduleReading} onClick={openNoticeSchedule}>
+          {scheduleReading ? '正在核对提醒安排…' : '查看这条提醒的安排'}
+        </Button>
+      </div>}
+      {scheduleHere?.kind === 'unavailable' && <p role="status" className="pw-field-hint">{scheduleHere.message}</p>}
     </section>}
     <section className="pw-settings-section" aria-label="提醒规则">
-      {selectedRule && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={pending} onClick={() => setSelectedId('')}>返回提醒列表</Button>}
+      {(selectedRule || scheduleOpened) && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={pending} onClick={returnFromRule}>{scheduleOpened ? '返回这次提醒' : '返回提醒列表'}</Button>}
       {selectedRule ? <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule.title || '未命名提醒'}</h2></div>{refreshButton}</header> : !emptyDirectory && <div className="pw-reminder-directory-toolbar">{hasRules && rules.length > 0 && <p>{rules.length} 条提醒</p>}<div className="pw-reminder-directory-actions">{refreshButton}{newReminder}</div></div>}
+      {scheduleOpened && selectedRule && <p className="pw-field-hint">这里是提醒现在的安排。修改不会重放上面这次发生记录。</p>}
       {!editor && <FormDraftNotice draft={formDraft} />}
     {notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
       {unknownControls}

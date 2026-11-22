@@ -293,7 +293,7 @@ public final class EngineApplication extends Application implements dev.pocketen
                     if(!maintenance.originalRetryAvailable()||previous!=bootstrap.generation()||!bootstrap.snapshot().getBoolean("retryAvailable"))throw new SecurityException("原维护状态不允许再次初始化，请读取同一记录");
                     permit=maintenance.prepareOriginalRetry(payload,currentOwnerWindow,Math.addExact(previous,1));
                 }else if(payload.has("repairId"))throw new SecurityException("原数据库重试记录不再等待该授权，请读取原结果");
-                try{long generation=bootstrap.retry(previous,request);if(generation!=0)queueBootstrap(generation,permit);}
+                try{long generation=bootstrap.retry(previous,request);if(generation!=0)queueBootstrap(generation,permit,false);}
                 catch(Exception failure){if(permit!=null){try{maintenance.failOriginalRetry(permit,"original_retry_not_queued");}catch(Exception unavailable){failure.addSuppressed(unavailable);}bootstrap.maintenance("database_maintenance","原库重试派发未确认，仅查询原维护记录","不要重复重新打开原库",false);}throw failure;}
                 return bootstrapState();
             }
@@ -1080,7 +1080,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         // Install the one native admission before opening any business store or constructing modules.
         RunControl.installHostAdmission((original,id,run,epoch)->{requireBusinessReady();TaskStore current=tasks;return current.admitExecutionControl(original,id,run,epoch);});
         dev.pocketengine.runtime.usage.InferenceCapture.installBudgetAttribution((capture,identity)->{requireBusinessReady();tasks.requireTokenBudgetAttribution(capture,identity);});
-        queueBootstrap(bootstrap.beginInitial());
+        queueBootstrap(bootstrap.beginInitial(),null,getPackageName().equals(Application.getProcessName()));
     }
     private void requireBusinessReady(){if(!businessReady())throw new SecurityException("原启动恢复或维护尚未完成，没有派发模型或工具");}
     /** Owner app settings only. Search credentials are not exposed to model tools or public state. */
@@ -1091,12 +1091,11 @@ public final class EngineApplication extends Application implements dev.pocketen
         requireBusinessReady();return settings.saveWebSearchSettings(input);
     }
 
-    private void queueBootstrap(long generation){queueBootstrap(generation,null);}
-    private void queueBootstrap(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit){
-        try{bootstrapWorker.execute(()->initializeOriginalBusiness(generation,permit));}
+    private void queueBootstrap(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit,boolean mainProcessStart){
+        try{bootstrapWorker.execute(()->initializeOriginalBusiness(generation,permit,mainProcessStart));}
         catch(java.util.concurrent.RejectedExecutionException stopped){RuntimeDiagnostics.event("bootstrap","rejected","INITIALIZER_CLOSED",null,stopped);if(permit!=null)try{databaseMaintenance.failOriginalRetry(permit,"initializer_closed");}catch(Exception unavailable){bootstrapCleanupConfirmed=false;}bootstrap.failed(generation,"initializer_closed","原初始化队列已关闭","重新打开应用后读取原状态",false);}
     }
-    private void initializeOriginalBusiness(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit){
+    private void initializeOriginalBusiness(long generation,dev.pocketengine.store.TaskDatabaseMaintenance.OriginalReadPermit permit,boolean mainProcessStart){
         if(!bootstrap.current(generation))return;Integer observed=null;
         RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("bootstrap",null);
         try{
@@ -1116,6 +1115,11 @@ public final class EngineApplication extends Application implements dev.pocketen
             tasks=new TaskStore(this,this::businessReady,new TaskStore.OpenObserver(){
                 public void stage(String stage,int schema){bootstrap.stage(generation,stage,schema);}
                 public void corruption(String reason){databaseMaintenance.corruptionObserved();}
+                public boolean coldPairedPickupWithoutAdmission(){
+                    // Only the Application's initial main-process bootstrap, before installing ingress.
+                    return mainProcessStart&&permit==null&&!hasReachedBusinessReady&&features==null&&
+                            deviceWorkspaceOwner==null&&deviceWorkspaceHost==null&&pendingDeviceGoals.isEmpty();
+                }
             },permit);
             deviceOwnerInputs=new dev.pocketengine.features.devices.DeviceOwnerInputs(tasks,id->{var session=deviceGoalSessions.get(id);return session!=null&&session.originalControl()==currentPhoneControl(id)?session:null;});
             assistantTaskNotifications=new dev.pocketengine.features.assistant.notifications.AssistantTaskNotifications(this,tasks);

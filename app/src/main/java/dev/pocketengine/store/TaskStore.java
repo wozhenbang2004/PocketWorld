@@ -78,6 +78,8 @@ public final class TaskStore {
     public interface OpenObserver {
         void stage(String stage,int observedSchema);
         default void corruption(String reason) { }
+        /** This app process has not installed a device host or held a pickup admission. */
+        default boolean coldPairedPickupWithoutAdmission() { return false; }
     }
     private static final OpenObserver NO_OPEN_OBSERVER=(stage,version)->{};
     private final Database database;
@@ -139,7 +141,7 @@ public final class TaskStore {
             public JSONObject grant(String run)throws Exception{return TaskStore.this.grant(run);}
             public void checkRun(String id,String run,int epoch,RunControl original,boolean dispatch)throws Exception{TaskStore.this.fence(id,run,epoch,original,dispatch);}
         });
-        try{importLegacy(new AtomicFile(new File(context.getFilesDir(),"tasks.json")));TaskAuditStore.seedSequenceFloors(db);recover();InferenceRequestStore.recover(db);TaskStoreGatewayClaims.recover(db);TaskStoreDeviceTasks.recover(db);}
+        try{importLegacy(new AtomicFile(new File(context.getFilesDir(),"tasks.json")));TaskAuditStore.seedSequenceFloors(db);recover(permit==null&&observer.coldPairedPickupWithoutAdmission());InferenceRequestStore.recover(db);TaskStoreGatewayClaims.recover(db);TaskStoreDeviceTasks.recover(db);}
         catch(Exception failure){throw new IllegalStateException("任务数据库恢复失败，原始数据未删除",failure);}
         conversationRepository=new dev.pocketengine.features.assistant.ConversationRepository(db,this);
         bindToolOutputSourceBook(dev.pocketengine.features.attachments.AttachmentRepository.get(context).book);
@@ -21370,7 +21372,7 @@ public final class TaskStore {
             after=ids.get(ids.size()-1);
         }
     }
-    private void recover()throws Exception{
+    private void recover(boolean coldPairedPickup)throws Exception{
         db.beginTransaction();try{
             java.util.Set<String> restoredUnknown=TaskOperationReceipts.restoreLegacyUncertainty(db);
             db.execSQL("UPDATE operations SET state='read_unconfirmed' WHERE state='read_pending'");
@@ -21388,6 +21390,10 @@ public final class TaskStore {
             try(Cursor c=TaskDocumentCursor.tasks(db,"SELECT document FROM tasks","SELECT task_id AS document FROM tasks",null,0)){
                 while(c.moveToNext()){
                     JSONObject t=new JSONObject(c.getString(0));String status=t.optString("status");
+                    if(coldPairedPickup&&"awaiting_user".equals(status)&&deviceTasks.untouchedColdAndroidTextPickup(t)){
+                        t.put("status","interrupted").put("summary","已保存原派单。上次进程结束后这次接手不能恢复，原任务从未启动。可查看原记录，或明确选择不接手。");
+                        write(t);continue;
+                    }
                     if("inference".equals(t.optString("kind"))&&"recording".equals(status)){t.put("status","interrupted").put("summary","用量会话因进程重开结束；未收到的终态/用量仍未知，没有重发");write(t);continue;}
                     // Older hosts could publish a result event before settling the original run.
                     boolean pendingOwnerSettlement=OwnerWorkTask.isOwnerWork(t)

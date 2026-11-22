@@ -8,7 +8,7 @@ import {ownerWorkIdentity,workIdentityKey,type WorkIdentity} from './conversatio
 import {ownerWorkPresentation} from './owner-work-presentation';
 
 type Json=Record<string,any>;
-export type WorkSupplementTarget=WorkIdentity&{conversationId:string;goal:string};
+export type WorkSupplementTarget=WorkIdentity&{conversationId:string;goal:string;overviewPlacement?:'progress'};
 export type WorkSupplementLeave={flush:()=>Promise<boolean>;keepsReceipt:()=>boolean};
 type CurrentDraftCopy={runId:string;epoch:number;revision:number};
 type WorkView={section?:string|null;taskId?:string|null;resumeRevision?:number};

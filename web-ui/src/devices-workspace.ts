@@ -332,6 +332,9 @@ export function deviceHistoryLabel(value: DeviceData | null, view?: DeviceData):
       : '对端本次没有确认接收。不能据此推断未送达，或机主已经看过。';
     if (r.effectState === 'unknown') return '原手机已登记这次派发，操作效果仍未知。';
     const run = identity(r.runId) && positiveInteger(r.executorEpoch);
+    if (r.status === 'interrupted' && r.effectState === 'reported' && r.runId === undefined && r.executorEpoch === undefined &&
+        r.payload?.lifecycleOnly === true && r.payload.executorEpoch === 0 && r.payload.hasUnresolved === false)
+      return '原手机报告这份已接收的目标在开始前中断。可在原手机查看原记录；这不是已取消或完成回执。';
     if (r.status === 'cancel_requested') return '原手机已收到取消请求，不能当作已经停止。';
     if (r.status === 'cancelled') return run ? '原手机报告这次执行已取消，不代表之前的操作已撤销。' : '原手机报告目标已取消，未返回已开始的执行编号。';
     if (r.status === 'waiting_approval') return run ? '原手机上的这次执行正在等人处理。' : '原手机已接收，尚未报告开始执行。请在原手机查看待处理事项。';
