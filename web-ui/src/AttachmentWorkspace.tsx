@@ -311,7 +311,7 @@ function justSavedWorkPdfSource(native:ReturnType<typeof bridge.getState>,view:J
     !Number.isSafeInteger(original.coordinatorEpoch)||original.coordinatorEpoch<1||original.coordinatorEpoch!==catalog.coordinatorEpoch)return;
  return excerptPdfSource(view,taskId);
 }
-const isLiveMessageOriginal=(view:Json)=>view.messagePdfOnly===true||view.messageInputDocumentOnly===true||view.messageReplyDocumentOnly===true;
+const isLiveMessageOriginal=(view:Json)=>view.messagePdfOnly===true||view.messageInputDocumentOnly===true||view.messageReplyDocumentOnly===true||view.savedChatLinkedOnly===true;
 
 /** One file surface for conversation attachments, task outcomes and the private library. */
 export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,replyAttachmentDraft,readWorkTextVisit,quotedDraftArrival,onOriginalBookReply}:Props) {
@@ -648,7 +648,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   if(draftDesk){draftDeskExit.current?.(draftDesk.visit.entry==='quoted');return true}
   if(isLiveMessageOriginal(current)){
    if(current.ready&&!backFlight.current){
-    backFlight.current=true;void act('close').catch(()=>{}).finally(()=>{backFlight.current=false});
+    const exactLinkedOriginal=current.savedChatLinkedOnly===true&&typeof obj(current.originalFile).id==='string';
+    backFlight.current=true;void act(exactLinkedOriginal?'back':'close').catch(()=>{}).finally(()=>{backFlight.current=false});
    }
    return true;
   }
@@ -1003,7 +1004,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const sourceReturnLabel=liveMessageOriginalOnly?(replyDocumentOnly&&returnToDeliveredFiles?'返回文件成果':'返回原消息'):reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
   focusedDraft||quotedDraftArrival?.windowId===view.windowId&&quotedDraftArrival?.current()?'返回原消息':
   view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?returnToDeliveredFiles?'返回文件成果':'返回原消息':view.taskId?'返回原工作':'返回原工作区';
- const entryBack=(mode==='original'||mode==='detail')&&view.originalReturn==='entry';
+ const entryBack=(mode==='original'||mode==='detail')&&(view.originalReturn==='entry'||mode==='detail'&&view.savedChatLinkedOnly===true);
  const mayDismissRestored=view.restoredWorkReturn===true&&!!(error||view.error);
  const originalHasDirectBack=mode==='original'&&(view.originalReturn==='entry'||view.originalReturn==='list');
  const detailsLabel=scopedResultOnly?'文件来源':'来源与操作';
@@ -1042,10 +1043,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  },[view.open,view.ready,mode,listScope,selection?.fileId,selection?.sha256,busy,catalogUnread,view.error]);
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
- const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ const privateLibrary=privateFiles&&view.savedChatLinkedOnly!==true&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
  const localFileDetail=mode==='detail'&&privateLibrary&&privateLibraryWindow(view)&&!!selection&&
   view.focusedStandaloneDraft===false&&view.restoredWorkReturn===false;
- const detailPreviewLabel=localFileDetail&&file.mimeType==='application/pdf'?'阅读原 PDF':
+ const detailPreviewLabel=(localFileDetail||view.savedChatLinkedOnly===true)&&file.mimeType==='application/pdf'?'阅读原 PDF':
   localFileDetail&&typeof file.mimeType==='string'&&file.mimeType.startsWith('image/')?'查看原图':'查看原件';
  const currentNative=bridge.getState(),libraryView=obj(currentNative.view);
  const documentHistory=obj(snapshot.documentActions),documentActions=rows(documentHistory.actions);
@@ -1383,7 +1384,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  <header className="pw-drawer-header pw-file-page-header">
   {mode==='original'&&!originalHasDirectBack&&view.wordExcerptSourceOpen!==true?<Button variant="ghost" size="small" leadingIcon={IconArrowLeft} disabled={busy||draftHandoff?.phase==='opening'} onClick={goBack}>{detailsLabel}</Button>:
    <IconButton icon={IconArrowLeft} aria-label={backLabel} title={backLabel} onClick={goBack} disabled={liveMessageOriginalOnly?!view.ready||pending>0:draftDesk?pending>0:busy||draftBusy}/>}
-  <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[draftDesk||hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,parentVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):searchFileOriginal?'来自命中的原工作 · 仅供查看':replyTextOnly?'原答复已保存的 TXT':replyDocumentOnly?'原答复已保存的文档':liveMessageOriginalOnly?'原消息附件':draftDesk?'':'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>
+  <div ref={heading} tabIndex={-1}><Drawer.Title>{objectTitle}</Drawer.Title><Drawer.Description id="pw-file-page-description">{[draftDesk||hasFile||view.documentDraft?title:'成果工作区',fileOrigin,fileRunProvenance(file.runProvenance,file.sourceRunEvidence),objectVersion,parentVersion,view.group?'原群任务':view.team?'原团队分工':view.taskId?(file.role==='source'?'原工作关联的来源文件':'来自原工作'):searchFileOriginal?'来自命中的原工作 · 仅供查看':replyTextOnly?'原答复已保存的 TXT':replyDocumentOnly?'原答复已保存的文档':view.savedChatLinkedOnly===true?'原消息中的文件位置':liveMessageOriginalOnly?'原消息附件':draftDesk?'':'私人文件库'].filter(Boolean).join(' · ')}</Drawer.Description></div>
   {originalHasDirectBack&&!liveMessageOriginalOnly&&<IconButton icon={IconInfo} aria-label={detailsLabel} title={detailsLabel} disabled={busy||draftBusy} onClick={()=>run('originalDetails')}/>}
   {!scopedResultOnly&&onReturnToSearch&&<Button variant="ghost" size="small" disabled={busy||draftBusy} onClick={returnToSearch}>返回搜索</Button>}
   {!liveMessageOriginalOnly&&(!entryBack||mayDismissRestored)&&<IconButton icon={IconClose} aria-label={view.restoredWorkReturn===true||returnToLibraryDocument?'关闭文件':sourceReturnLabel} title={view.restoredWorkReturn===true||returnToLibraryDocument?'关闭文件':sourceReturnLabel} disabled={pending>0||draftBusy} onClick={close}/>}
@@ -1407,7 +1408,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   warmResumeKey={suspendedDraftKey} onWarmResume={key=>resumeSavedDraft(draftDesk.visit,key)}
   invoke={(command,args)=>draftAct(draftDesk.visit,command,args)} registerExit={handler=>{draftDeskExit.current=handler}}
   onExit={close=>leaveDraftDesk(draftDesk.visit,close)}/>):view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}
-  retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:liveMessageOriginalOnly&&!hasOriginal?null:Object.keys(original).length?<><AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
+  retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:liveMessageOriginalOnly&&!hasOriginal&&view.savedChatLinkedOnly!==true?null:Object.keys(original).length?<><AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
   findBeforeLongText={!!textScope&&canSaveOriginal} onTextDisplayed={textScope?textDisplayed:undefined}
   showingPdfPageText={!!pdfPageText} onReadPdfPageText={offerPdfPageText?requestPdfPageText:undefined}
   showingWordExcerpt={!!wordExcerpt} onReadWordExcerpt={offerWordExcerpt?requestWordExcerpt:undefined} onOpenSavedWordExcerpt={shownWordResult?openSavedWordExcerpt:undefined}

@@ -242,6 +242,33 @@ public final class AttachmentOutcomeHost {
         requireReusableInput(actual);repository.book.requireUnchanged(artifactId,expectedSha256,control);
         JSONObject selected=tasks.linkOwnerAttachment(taskId,actual);control.check();return selected;
     }
+    private JSONObject exactSavedLinkedPdf(String conversation,String id,String sha,RunControl control)throws Exception{
+        JSONObject meta=repository.book.savedLinkedPdfMetadata(id,sha,control),source=meta.getJSONObject("source");
+        String task=source.getString("taskId"),run=source.getString("runId"),operation=source.getString("operationId");
+        OriginalReplyDocument receipt=tasks.savedLinkedPdfForOwner(conversation,task,run,operation,id,sha,control);
+        JSONObject checked=repository.book.savedLinkedPdfMetadata(id,sha,control);
+        if(receipt==null||!receipt.matchesBook(meta,task,run)||!receipt.matchesBook(checked,task,run))
+            throw new SecurityException("原 PDF 登记暂不可核对");
+        control.checkpoint();return checked;
+    }
+    /** Exact Book registration and one stored producer receipt only. No file body or catalog scan. */
+    public JSONObject savedLinkedPdfDetails(String conversation,String id,String sha,String storedLabel,RunControl control)throws Exception{
+        JSONObject meta=exactSavedLinkedPdf(conversation,id,sha,control);
+        String label=storedLabel!=null&&!storedLabel.isBlank()&&storedLabel.length()<=160&&!storedLabel.equals(".")&&!storedLabel.equals("..")&&
+                storedLabel.codePoints().noneMatch(ch->ch=='/'||ch==92||ch==':'||Character.isISOControl(ch)||Character.getType(ch)==Character.FORMAT)
+                ?storedLabel:"PDF 原件";
+        return new JSONObject().put("id",id).put("sha256",sha).put("name",label).put("mimeType","application/pdf")
+                .put("size",meta.getLong("size")).put("role","result").put("availability","available");
+    }
+    /** Only after the separate explicit Original action; existing renderer verifies these exact Book bytes. */
+    public OwnerFilePreviewSource openSavedLinkedPdf(String conversation,String id,String sha,long size,String label,RunControl control)throws Exception{
+        JSONObject checked=exactSavedLinkedPdf(conversation,id,sha,control);
+        if(size!=checked.getLong("size"))throw new SecurityException("原 PDF 版本不可核对");
+        JSONObject displayed=new JSONObject(checked.toString()).put("name",label);
+        return new OwnerFilePreviewSource("attachments",displayed,c->repository.book.verifiedBytes(id,sha,c),
+                c->{JSONObject current=exactSavedLinkedPdf(conversation,id,sha,c);
+                    if(size!=current.getLong("size"))throw new SecurityException("原 PDF 版本不可核对");});
+    }
     /** Display metadata for exact retained message references. Reading/opening still verifies canonical bytes. */
     public JSONArray messageReferences(JSONArray references)throws Exception {
         JSONArray result=new JSONArray();if(references==null)return result;if(references.length()>4)throw new SecurityException("原消息附件数无效");

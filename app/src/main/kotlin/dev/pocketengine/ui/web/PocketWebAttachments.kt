@@ -70,6 +70,7 @@ internal class PocketWebAttachments(
     private data class DraftDocumentReview(val id: String, val windowId: String,
         val edit: PocketWebStandaloneDocumentDrafts.Edit, val outputFormat: Format, val planDigest: String, val expires: Long)
     private var window: Window? = null
+    private var savedChatLinkOpen:((dev.pocketengine.core.RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource)?=null
     @Volatile private var replyDocumentVisit:ReplyDocumentVisit?=null
     private val frames = linkedMapOf<String, Frame>()
     private var review: Review? = null
@@ -471,6 +472,21 @@ internal class PocketWebAttachments(
         return JSONObject().put("opened",true).put("reading",true).put("readOnly",true).put("windowId",active.id)
     }
 
+    /** Exact native owner message locator, metadata landing only. */
+    fun openSavedChatLinkedDetails(file:JSONObject,current:()->Boolean,
+        openOriginal:(dev.pocketengine.core.RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource):JSONObject {
+        check(!flow.state.open&&!flow.exportPending&&controller.webPrivateOwnerVisible()&&current())
+        clear()
+        scopedResultCurrent=current
+        savedChatLinkOpen=openOriginal
+        try {
+            flow.openSavedChatLinkedDetails(file)
+            return JSONObject().put("opened",true).put("windowId",activeWindow().id)
+        } catch(failure:Exception) { clear();throw failure }
+    }
+    fun closeSavedChatLinkedDetails(id:String) {
+        if(window?.id==id&&flow.state.savedChatLinkedOnly)clear()
+    }
     /** Explicit owner click from the immediately preceding positive message-to-draft save. */
     fun openQuotedDraft(pin: Pin, owner: () -> Boolean): JSONObject {
         check(!flow.state.open && !flow.exportPending && controller.webPrivateOwnerVisible() && owner())
@@ -534,7 +550,8 @@ internal class PocketWebAttachments(
         val wordOrigin=state.wordSourceVisit?.takeIf{it.source===source&&wordLibrarySurface(state)}?.origin
         viewer.bind(source, state.comparison, current.ticket, rememberPdf,wordOrigin,rememberPosition=current.searchAnchorReader==null) { ticket ->
             current.accepts(ticket) && (!state.deviceOriginalOnly || deviceTaskCurrent?.invoke()==true) &&
-                (if (state.liveMessageOriginalOnly) window === current else scoped?.invoke()!=false)
+                (if (state.savedChatLinkedOnly) window === current && scoped?.invoke()==true
+                 else if (state.liveMessageOriginalOnly) window === current else scoped?.invoke()!=false)
         }
         val displayedPdfPage = if (libraryPdf && !state.busy && !flow.exportPending &&
             state.snapshot?.optJSONObject("documentCapabilities")?.opt("pdfText")==true)
@@ -599,6 +616,7 @@ internal class PocketWebAttachments(
             .put("messagePdfOnly",state.messageInput==AttachmentMessageInput.PDF)
             .put("messageInputDocumentOnly",state.messageInput==AttachmentMessageInput.WORD_OR_TEXT)
             .put("messageReplyDocumentOnly",state.messageReplyDocumentOnly)
+            .put("savedChatLinkedOnly",state.savedChatLinkedOnly)
             .put("standaloneDraftLibrary", mayUseDraftLibrary())
             .put("focusedStandaloneDraft", state.focusedStandaloneDraft)
             .put("canRetainLinkedDocumentDraft", linkedEditorSource() != null)
@@ -670,7 +688,11 @@ internal class PocketWebAttachments(
             scopedResultCurrent?.let { current ->
                 check(current()) { "原成果阅读窗口已变化，请重新打开这次成果" }
                 val command = args.optString("command")
-                val reads=if(flow.state.liveMessageOriginalOnly)setOf("back","close","cancel")else SCOPED_RESULT_READS
+                val reads=when {
+                    flow.state.savedChatLinkedOnly->setOf("back","close","cancel","openOriginal")
+                    flow.state.liveMessageOriginalOnly->setOf("back","close","cancel")
+                    else->SCOPED_RESULT_READS
+                }
                 check(action == "attachmentWorkspace.viewer" || action == "attachmentWorkspace.action" &&
                     (command in reads || !flow.state.liveMessageOriginalOnly && command == REPORT_WORK_NAVIGATION && canNavigateFromReport(flow.state))) {
                     "这里仅可查看本次原件，不会修改原工作"
@@ -780,6 +802,7 @@ internal class PocketWebAttachments(
                 } else {
                     review = null; processingReview = null; viewer.clear()
                     when {
+                        flow.state.savedChatLinkedOnly&&flow.state.originalFile!=null->flow.backFromOriginalFile()
                         flow.state.deviceOriginalOnly||flow.state.liveMessageOriginalOnly -> {clear();if(flow.state.open)flow.close()}
                         flow.state.comparison != null -> flow.closeComparison()
                         flow.state.processingSource != null -> flow.closeProcessing()
@@ -886,7 +909,19 @@ internal class PocketWebAttachments(
                     flow.saveReadAsFile(::stillOnPage)
                 }
                 "originalDetails" -> { flow.showOriginalDetails(); viewer.clear() }
-                "openOriginal" -> if(pairedPdf!=null){
+                "openOriginal" -> if(flow.state.savedChatLinkedOnly){
+                    check(args.length()==3&&flow.state.originalFile==null) { "请在文件信息中明确查看这份原件" }
+                    val open=checkNotNull(savedChatLinkOpen)
+                    val file=flow.state.file
+                    fun stillHere()=window===current&&acceptsWindow(current.ticket)&&flow.state.file===file&&scopedResultCurrent?.invoke()==true
+                    flow.openOriginalFile{control->
+                        control.setAuthorityCheck { check(stillHere()) }
+                        check(stillHere())
+                        val original=open(control)
+                        check(stillHere())
+                        original
+                    }
+                }else if(pairedPdf!=null){
                     val saved=flow.savedPdfPageExtract(pairedPdf)?:error("本页保存的 TXT 尚未核对")
                     check(args.length()==5&&libraryPdfSurface(flow.state,allowPageText=true)&&!flow.exportPending&&
                         viewer.displayedPdfPage(flow.state.file)==pairedPdf&&args.opt("fileId")==saved.opt("id")&&
@@ -1013,6 +1048,7 @@ internal class PocketWebAttachments(
     }
     /** These replies must go through the Bridge's transient completion, not the ordinary workspace result. */
     fun dispatchStandaloneDraft(args: JSONObject, freshOwner: (() -> Boolean)?, done: (JSONObject?, String?) -> Unit) {
+        if(flow.state.savedChatLinkedOnly){done(null,"这里仅查看原消息所关联的文件");return}
         val unavailable = "原草稿窗口或结果尚未核对；没有自动保存或重试。"
         fun reply(actual: JSONObject?) { if (actual == null) done(null, unavailable) else done(actual, null) }
         fun text(key: String) = args.opt(key) as? String ?: error("原草稿身份无效")
@@ -1323,7 +1359,7 @@ internal class PocketWebAttachments(
         if(flow.state.pdfPageText!=null||flow.state.wordExcerpt!=null)flow.backFromDocument()
         flow.discardWordExcerptSource()
         val scoped = flow.state.deviceOriginalOnly || flow.state.liveMessageOriginalOnly || scopedResultCurrent != null
-        deviceTaskCurrent=null; scopedResultCurrent=null
+        deviceTaskCurrent=null; scopedResultCurrent=null; savedChatLinkOpen=null
         if((scoped || focusedDraft) && flow.state.open)flow.close()
         flow.discardLibraryDocumentReturn()
         window = null; replyDocumentVisit=null; frames.clear(); review = null; processingReview = null; viewer.clear()

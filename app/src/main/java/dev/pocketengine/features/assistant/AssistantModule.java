@@ -212,6 +212,48 @@ public final class AssistantModule implements EngineModule {
     private static void requireLocalShelfOwner(RunControl owner)throws Exception{
         if(owner==null||owner.hasHostRun())throw new SecurityException("原话备忘不属于任务或模型工具");owner.check();
     }
+    /** A saved native registration, not evidence that the file or message was read by a model. */
+    public static boolean savedFileLinkAdmission(JSONObject receipt,String conversation,String message,long revision){
+        if(receipt==null||revision<1||!conversation.equals(receipt.opt("conversationId"))||!message.equals(receipt.opt("messageId"))||
+                !(receipt.opt("clientMessageId") instanceof String client)||client.isBlank()||
+                !(receipt.opt("taskId") instanceof String task)||task.isBlank()||
+                !(receipt.opt("runId") instanceof String run)||run.isBlank()||
+                receipt.optBoolean("notAdmitted")||receipt.optBoolean("nativeLocalRead")||
+                receipt.opt("reconciliationRequired")!=null&&!Boolean.FALSE.equals(receipt.opt("reconciliationRequired")))return false;
+        Object epoch=receipt.opt("epoch"),version=receipt.opt("ownerMessageRevision"),status=receipt.opt("status");
+        return ("accepted".equals(status)||"consumed".equals(status))&&
+                (epoch instanceof Integer||epoch instanceof Long)&&((Number)epoch).longValue()>0&&
+                (version==null||(version instanceof Integer||version instanceof Long)&&((Number)version).longValue()==revision);
+    }
+    /** Native owner UI only. Recheck one held saved message's existing metadata; no body, neighborhood or model access. */
+    public void requireSavedFileLinkCarrier(JSONObject locator,JSONArray heldRefs,RunControl owner)throws Exception{
+        requireLocalShelfOwner(owner);
+        if(!durable()||locator==null||!"owner_native_original".equals(locator.opt("kind")))
+            throw new SecurityException("原消息的文件关联不可核对");
+        String conversation=locator.getString("conversationId"),id=locator.getString("recordId");
+        long revision=locator.getLong("recordVersion");
+        SourceRef ref=new SourceRef("message",id,revision,"owner","private");
+        sourceRead(()->{
+            owner.checkpoint();
+            JSONObject source=historyRepository.source(id);
+            JSONObject receipt=source==null?null:source.optJSONObject("submission");
+            if(source==null||source.optBoolean("deleted")||source.optBoolean("nativeProvenanceImported")||
+                    !"message".equals(source.opt("kind"))||!"owner".equals(source.opt("ownerId"))||!"private".equals(source.opt("spaceId"))||
+                    !"user".equals(source.opt("role"))||!id.equals(source.opt("sourceId"))||
+                    !conversation.equals(source.opt("conversationId"))||revision!=source.optLong("revision")||
+                    !savedFileLinkAdmission(receipt,conversation,id,revision)||!receipt.getString("clientMessageId").equals(source.opt("clientMessageId")))
+                throw new SecurityException("原消息的文件关联不可核对");
+            JSONObject nativePin=historyRepository.nativeMessageSource(ref);
+            if(!conversation.equals(nativePin.opt("sourceConversationId"))||!locator.getString("generation").equals(nativePin.opt("generation"))||
+                    !locator.getString("fingerprint").equals(nativePin.opt("bodyFingerprint")))
+                throw new SecurityException("原消息版本已变化");
+            try(var inspection=inspectOwnerSources()){
+                inspection.requireObjectCarrier(new JSONObject().put("role","user").put("ownerMessageId",id)
+                        .put("ownerMessageRevision",revision).put("ownerObjectRefs",OwnerObjectReferences.checked(heldRefs)),conversation);
+            }
+            owner.checkpoint();return null;
+        });
+    }
     public JSONObject localReferenceShelf(String conversation,RunControl owner)throws Exception{
         requireLocalShelfOwner(owner);
         if(!durable())throw new IllegalStateException("原会话数据库未启用，不能读取本对话备忘");

@@ -406,6 +406,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openGroupArtifact(selection:dev.pocketengine.ui.groups.GroupArtifactSelection) = attachmentOutcomes.openGroup(selection)
     fun openGroupMediaOutcome(task:UiTask,operation:String) = attachmentOutcomes.openGroupOperation(task,operation)
     fun openAttachmentOutcome(meta:JSONObject) = attachmentOutcomes.openFile(meta)
+    private fun savedMessageArtifactReferences(row:JSONObject,conversation:String):String? = runCatching {
+        val id=row.opt("id") as? String ?: return null
+        val revision=row.optLong("revision",0)
+        val locator=row.optJSONObject("ownerOriginalLocator") ?: return null
+        if (row.opt("role")!="user" || row.optBoolean("importAssignedIdentity") || locator.opt("kind")!="owner_native_original" ||
+            locator.opt("conversationId")!=conversation || locator.opt("recordId")!=id || locator.optLong("recordVersion")!=revision ||
+            !dev.pocketengine.features.assistant.AssistantModule.savedFileLinkAdmission(row.optJSONObject("submission"),conversation,id,revision)) return null
+        val refs=dev.pocketengine.features.assistant.OwnerObjectReferences.checked(row.optJSONArray("ownerObjectRefs"))
+        val attached=row.optJSONArray("attachments").objects()
+        refs.takeIf{it.objects().any{ref->ref.opt("kind")=="artifact"&&
+            attached.none{file->file.opt("id")==ref.opt("id")&&file.opt("sha256")==ref.opt("sha256")}}}?.toString()
+    }.getOrNull()
     private fun resolveOriginalMessageAttachments(conversation:String){
         if(conversation.isBlank())return
         val opening = latestChatGet
@@ -723,6 +735,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun webPersonalProfileSummary(): JSONObject? =
         if (closed) null else runCatching { app.settings.personalProfileSummary() }.getOrNull()
 
+    /** Current ordinary Chat defaults: just the existing conversation header and six native presets. */
+    internal fun requestChatDefaultPresets(conversation: String, section: String?, values: JSONObject?, revision: Long?,
+                                           current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        requestPersonalOwner(current, done, refreshAgentPreferences = false) {
+            val control = app.conversationPersonalMemoryForOwner(conversation)
+            check(control.opt("conversationId") == conversation && control.opt("enabled") is Boolean && current()) {
+                "原私人对话的默认偏好窗口已变化"
+            }
+            val visibleOwner = java.util.function.BooleanSupplier { current() }
+            val result = if (section == null) JSONObject().put("defaults", app.settings.personalDefaultPresets(visibleOwner))
+                else app.settings.savePersonalDefaultPresets(section, requireNotNull(values), requireNotNull(revision), visibleOwner)
+            result.put("conversationAllowsDefaults", control.getBoolean("enabled"))
+        }
+    }
+
     internal fun requestPersonalProfile(command: String, payload: JSONObject, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         val input = JSONObject(payload.toString())
         requestPersonalOwner(current, done, requirePrivate = command != "identity") {
@@ -901,7 +928,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (isPersonalMemory(row) && (!pendingOnly || row.optString("status") == "pending")) out.put(JSONObject(row.toString()).put("topic", dev.pocketengine.features.memory.PersonalMemorySemantics.topicOf(row)))
         }
     }
-    private fun requestPersonalOwner(current: () -> Boolean, done: (JSONObject?, String?) -> Unit, requirePrivate: Boolean = true, memoryChanged: Boolean = false, work: () -> JSONObject) {
+    private fun requestPersonalOwner(current: () -> Boolean, done: (JSONObject?, String?) -> Unit, requirePrivate: Boolean = true, memoryChanged: Boolean = false,
+                                     refreshAgentPreferences: Boolean = true, work: () -> JSONObject) {
         fun permitted() = webUiCanInteract() && (!requirePrivate || privateWorkspaceView())
         check(permitted() && current()) { "请在原本机窗口打开个人资料" }
         val owner = webWindowTicket()
@@ -912,7 +940,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 main.post {
                     if (!valid()) done(null, "原个人资料窗口已变化；请重新读取当前状态，未自动重发操作")
                     else result.fold({ receipt ->
-                        if (receipt.optBoolean("saved")) {
+                        if (refreshAgentPreferences && receipt.optBoolean("saved")) {
                             runCatching { app.settings.agentPreferences() }.getOrNull()?.let { actual ->
                                 if (actual.optLong("revision") >= state.agentPreferences.optLong("revision")) state = state.copy(agentPreferences = actual)
                             }
@@ -7269,7 +7297,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         state = state.copy(conversations = parseConversations(state.feature("assistant").optJSONArray("conversations")))
                     }
                     // Only absent or valid empty reference arrays permit text-only staging; malformed or unknown payloads fail closed.
-                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), originalHostFinal = PrivateHostReceipt.finalView(it,id), firstHostRequestLocal = PrivateHostReceipt.isLocalFirstHost(it,id), learningExcluded = originalLearningExcluded(it, id), defaultWritesBlocked = originalDefaultWritesBlocked(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }) });resolveOriginalMessageAttachments(id)
+                    if (id.isNotBlank() && state.conversationId == id) state = state.copy(conversationId = id, messages = result.optJSONArray("messages").objects().map { UiMessage(it.optString("role"), it.optString("content"), it.optLong("at"), it.optString("taskId").takeIf(String::isNotBlank), it.optString("id").takeIf(String::isNotBlank),it.optJSONObject("submission"),it.optJSONArray("attachments")?.length()?:0,it.optJSONArray("attachments").objects().mapNotNull(ChatInputRules::attachment), sourceRevision = if (it.optBoolean("importAssignedIdentity")) 0L else it.optLong("revision", 0), projectConventionRecorded = it.opt("projectConventionRecorded") == true, memoryReference = it.optJSONObject("memoryReference"), ownerOriginalLocator = if (it.optBoolean("importAssignedIdentity")) null else it.optJSONObject("ownerOriginalLocator"), hostGoalTaskId = PrivateHostReceipt.fromMessage(it,id), originalHostFinal = PrivateHostReceipt.finalView(it,id), firstHostRequestLocal = PrivateHostReceipt.isLocalFirstHost(it,id), learningExcluded = originalLearningExcluded(it, id), defaultWritesBlocked = originalDefaultWritesBlocked(it, id), phoneResult = UiPhoneResult.fromNativeMessage(it), replyContext = UiReplyContext.fromNativeMessage(it), taskResult = UiTaskResult.fromNativeMessage(it), textOnlyHandoffEligible = listOf("attachments", "ownerSourceRefs", "ownerPreviewRefs", "ownerObjectRefs").all { key -> !it.has(key) || it.optJSONArray(key)?.length() == 0 }, savedArtifactReferences = savedMessageArtifactReferences(it,id)) });resolveOriginalMessageAttachments(id)
                 }
                 "send" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"));native("getFeatures") }
                 "getSubmission" -> { receiveChatAcknowledgement(result,meta.second.optString("clientMessageId"),true);native("getFeatures") }

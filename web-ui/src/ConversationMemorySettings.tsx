@@ -3,6 +3,7 @@ import {Button,SettingsDialog,StretchSwitch} from './forms-library';
 import {ShimmerText} from './library';
 import {bridge} from './bridge';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
+import {beginChatDefaultPresets,ChatDefaultPresets,retireChatDefaultPresets,type ChatDefaultHolder,type ChatDefaultOrigin,type ChatDefaultVisit} from './ChatDefaultPresets';
 
 type GlobalMemoryPolicy={readingEnabled:boolean;learningEnabled:boolean};
 export type ConversationMemoryControls={conversationId:string;enabled:boolean;excludeNewInputs?:boolean;revision:number;globalMemoryPolicy?:GlobalMemoryPolicy};
@@ -25,13 +26,16 @@ function memoryScope(controls:ConversationMemoryControls) {
 }
 
 /** Independent, owner-reviewed choices on the same original header. This sheet owns no saved mode. */
-export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,registerBack,showReferenceShelf=true}:{
+export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,registerBack,showReferenceShelf=true,defaults}:{
   conversationId:string;controls:ConversationMemoryControls|null;composer?:Record<string,any>;isOpen:boolean;
   onClose:()=>void;onChanged:(value:ConversationMemoryControls|null)=>void;onManage:()=>void;
   registerBack:(handler:(()=>boolean)|null)=>void;showReferenceShelf?:boolean;
+  defaults?:{holder:ChatDefaultHolder;capture?:()=>ChatDefaultOrigin|null};
 }) {
   const [pending,setPending]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [shelf,setShelf]=useState<string|null>(null);
+  const [defaultVisit,setDefaultVisit]=useState<ChatDefaultVisit|null>(null),[defaultExitError,setDefaultExitError]=useState('');
+  const defaultEntry=useRef<HTMLButtonElement>(null);
   const shelfVisit=JSON.stringify([conversationId,composer?.key,composer?.epoch,bridge.getDocumentEpoch()]);
   const request=useRef(0),alive=useRef(true),writing=useRef(false);
   const load=useCallback(async()=>{
@@ -45,8 +49,18 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
   useEffect(()=>{void load();},[load]);
   useEffect(()=>{if(isOpen)void load();},[isOpen,load]);
   const close=useCallback(()=>{if(!writing.current)onClose();},[onClose]);
-  useEffect(()=>{if(!isOpen)setShelf(null);},[isOpen,conversationId]);
-  useEffect(()=>{registerBack(isOpen?()=>{if(shelf)setShelf(null);else close();return true;}:null);return()=>registerBack(null);},[isOpen,shelf,close,registerBack]);
+  const defaultsHolder=defaults?.holder;
+  const returnFromDefaults=useCallback(async()=>{
+    if(!defaultVisit||!defaultsHolder)return;
+    setDefaultExitError('');
+    if(defaultsHolder.current===defaultVisit&&!await retireChatDefaultPresets(defaultsHolder)){
+      setDefaultExitError('原窗口尚未确认关闭。若正在保存，请先等本次结果。');return;
+    }
+    setDefaultVisit(null);
+    requestAnimationFrame(()=>{if(defaultVisit.origin.current())defaultEntry.current?.focus({preventScroll:true});});
+  },[defaultVisit,defaultsHolder]);
+  useEffect(()=>{if(!isOpen){setShelf(null);setDefaultVisit(null);setDefaultExitError('');}},[isOpen,conversationId]);
+  useEffect(()=>{registerBack(isOpen?()=>{if(defaultVisit)void returnFromDefaults();else if(shelf)setShelf(null);else close();return true;}:null);return()=>registerBack(null);},[isOpen,shelf,close,defaultVisit,returnFromDefaults,registerBack]);
   const save=async(field:'enabled'|'excludeNewInputs',value:boolean)=>{
     if(!controls||writing.current)return;writing.current=true;const serial=++request.current;
     setPending(true);setError('');setNotice('');
@@ -76,6 +90,9 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
     finally{writing.current=false;if(alive.current&&serial===request.current)setPending(false);}
   };
   const canShelf=!!single&&!!composer&&Number.isSafeInteger(composer.epoch)&&['list','read','remove','close'].every(name=>bridge.getState().capabilities.commands.includes('messageShelf.'+name));
+  if(isOpen&&defaultVisit&&defaultsHolder)return <SettingsDialog isOpen title="全局默认偏好" closeLabel="返回本对话的个人记忆" onClose={()=>void returnFromDefaults()}>
+    <ChatDefaultPresets key={defaultVisit.id} visit={defaultVisit} holder={defaultsHolder} retireError={defaultExitError}/>
+  </SettingsDialog>;
   if(isOpen&&shelf===shelfVisit&&canShelf&&composer)return <ConversationReferenceShelf key={conversationId+':'+composer.epoch} conversationId={conversationId} draftKey={composer.key} epoch={composer.epoch} onClose={()=>setShelf(null)} onReturnDraft={()=>{setShelf(null);close();}}/>;
   return <SettingsDialog isOpen={isOpen} title="本对话的个人记忆" onClose={close}>
     <p className="pw-muted">这里只显示对话设置，不是这次请求的已选记忆。对应回答若有「本次记忆」，可在那里核对实际提供的条目。</p>
@@ -86,6 +103,11 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
         你填写的资料和偏好：{controls.enabled?'本对话允许参考':'本对话已暂停参考'}。<br/>
         {memoryScope(controls)}
       </>}</p></>}
+    {defaults?.capture&&<Button ref={defaultEntry} variant="secondary" disabled={pending} onClick={()=>{
+      const origin=defaults.capture?.(),visit=origin&&beginChatDefaultPresets(defaults.holder,origin);
+      if(visit){setDefaultExitError('');setDefaultVisit(visit);}else setDefaultExitError('请先回到原私人对话，再核对默认偏好。');
+    }}>查看默认交流与做事偏好</Button>}
+    {defaultExitError&&<p className="pw-error" role="alert">{defaultExitError}</p>}
     <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
     {typeof controls?.excludeNewInputs==='boolean'&&<StretchSwitch label="从现在起，新原话不参与自动整理" description={controls.enabled?
       '适合临时项目：仍可按原规则参考已有偏好，但此对话之后发的原话不用于后台提炼或记忆建议。关闭不会补整理，既有记忆和手动设置不变。':

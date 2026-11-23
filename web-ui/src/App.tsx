@@ -14,6 +14,7 @@ import { IconAccount, IconAdd, IconArrowLeft, IconBook, IconCalendar, IconCalend
 import {WorkspaceNavigator,type OwnerNavigationMemory} from './WorkspaceNavigator';
 
 import {bridge} from './bridge';
+import {SavedChatFileLinks,retireSavedChatPdfVisit,type SavedChatPdfVisit} from './SavedChatFileLinks';
 import {useConversationDraftSwitch} from './useConversationDraftSwitch';
 import {usePocketSnapshot} from './usePocketSnapshot';
 import {foregroundConversationDraft} from './conversation-stream';
@@ -53,6 +54,7 @@ import type {SettingsDirectoryOrigin} from './SettingsDirectory';
 import type {PlanSettingsAnchor,PlanSettingsReturn,RegisterPlanSettingsAnchor} from './PlansWorkspace';
 import ProfileWorkspace,{type AnswerMemoryForgetReceipt,type OriginalMemoryConversation,type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings,type ConversationMemoryControls} from './ConversationMemorySettings';
+import {chatDefaultPresetsCommand,retireChatDefaultPresets,type ChatDefaultHolder,type ChatDefaultOrigin} from './ChatDefaultPresets';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
 import {NewConversationMemory} from './NewConversationMemory';
 import DeveloperDiagnosticsWorkspace from './DeveloperDiagnosticsWorkspace';
@@ -202,7 +204,7 @@ type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:numb
 type OriginalMemoryDraftVisit={source:OriginalMemoryDraftReply&{conversationId:string;replyId:string};documentEpoch:number;navigation:number;resume:number;trigger:HTMLButtonElement};
 type OriginalChatTeamReportSource=WorkIdentity&{conversationId:string;messageId:string;sourceRevision:number;deliveryId:string};
 type OriginalChatTeamReportVisit={source:OriginalChatTeamReportSource;documentEpoch:number;navigation:number;resume:number;sourceChanges:number;draftEpoch:number;taskRequest:number;key:number;trigger:HTMLButtonElement};
-type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;originalGeneratedTextCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
+type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;savedChatLinkOffered?:boolean;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;originalGeneratedTextCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
 type ProjectCreationFeedback={kind:'rejected'|'saved-only';message:string}|{kind:'unknown';ticket:string};
 type ProjectCreationProof={state:'created';projectId:string;createdAt:number}|{state:'not_created';message:string};
@@ -997,6 +999,7 @@ export default function App(){
  const [personalTarget,setPersonalTarget]=useState<PersonalTarget>({view:'home'}),[personalTargetKey,setPersonalTargetKey]=useState(0);
  const [conversationMemoryOpen,setConversationMemoryOpen]=useState(false),[conversationMemoryControls,setConversationMemoryControls]=useState<ConversationMemoryControls|null>(null);
  const conversationMemoryBack=useRef<(()=>boolean)|null>(null);
+ const chatDefaultPresets=useRef<ChatDefaultHolder['current']>(null);
  const [chatReferenceVisit,setChatReferenceVisit]=useState<ChatReferenceVisit|null>(null);
  const registerConversationMemoryBack=useCallback((handler:(()=>boolean)|null)=>{conversationMemoryBack.current=handler},[]);
  const [routeReferenceTarget,setRouteReferenceTarget]=useState<RouteReferenceTarget|null>(null);
@@ -1401,6 +1404,7 @@ export default function App(){
  const registerOriginalPhoneTool=useCallback((handler:((pin:OriginalPhoneToolRecord)=>boolean)|null)=>{originalPhoneToolOpen.current=handler},[]);
  const registerMainPhoneRead=useCallback((handler:((visit:MainPhoneReadVisit)=>boolean)|null)=>{mainPhoneReadOpen.current=handler},[]);
  const attachmentBack=useRef<(()=>boolean)|null>(null);
+ const savedChatPdfVisit=useRef<SavedChatPdfVisit['current']>(null);
  const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport;compilerFile?:{id:string;sha256:string;request:number;document:number}}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn;shelf?:PreferredChatFile})&{target:HTMLButtonElement}|null>(null);
  const [fileAttachmentPicker,setFileAttachmentPicker]=useState<FileAttachmentPickerOrigin|null>(null);
  const fileAttachmentPickerLaunch=useRef<FileAttachmentPickerLaunch|null>(null);
@@ -2080,6 +2084,29 @@ export default function App(){
    setupReturnPending.current=false;rememberChatPosition();setWorkOpen(false);setCommandOpen(false);
    if(taskOpen&&!taskClosed&&!await closeTask())return false;
    if(options?.stillCurrent&&!options.stillCurrent())return false;
+   // Both original Chat windows must be retired before this route can commit.
+   const departingDefaults=chatDefaultPresets.current;
+   if(savedChatPdfVisit.current){
+    const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch();
+    if(!await retireSavedChatPdfVisit(savedChatPdfVisit)){
+     if(navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&!document.hidden)
+      setLocalError('原 PDF 窗口尚未确认关闭。请关闭后再离开当前对话。');
+     return false;
+    }
+    if(savedChatPdfVisit.current||chatDefaultPresets.current!==null&&chatDefaultPresets.current!==departingDefaults||
+       navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==epoch||
+       document.hidden||options?.stillCurrent&&!options.stillCurrent())return false;
+   }
+   if(chatDefaultPresets.current){
+    const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+    if(!await retireChatDefaultPresets(chatDefaultPresets)){
+     if(navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden)
+      setLocalError('请先核对这次默认偏好保存，关闭原窗口后再离开。');
+     return false;
+    }
+    if(chatDefaultPresets.current||savedChatPdfVisit.current||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==documentEpoch||
+       document.hidden||options?.stillCurrent&&!options.stillCurrent())return false;
+   }
    planSettingsReturn.current=null;terminalSavedFileArrival.current=null;setPythonSetupReturn(undefined);setViteToolsReturn(undefined);
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
@@ -2092,6 +2119,23 @@ export default function App(){
   return commit();
  },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
+ const captureChatDefaultPresets=():ChatDefaultOrigin|null=>{
+  if(route!=='chat'||intent!=='chat'||!conversationMemoryOpen||taskOpen||taskOpening||workOpen||commandOpen||
+     !can(chatDefaultPresetsCommand)||document.hidden)return null;
+  const live=bridge.getState(),draft=live.composer,conversationId=live.state.conversationId;
+  if(typeof conversationId!=='string'||!conversationId||draft?.ready!==true||
+     !Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||draft.revision<1)return null;
+  const draftEpoch=Number(draft.epoch),draftRevision=Number(draft.revision),documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
+  const current=()=>{
+   const now=bridge.getState(),view=obj(now.view),owner=now.state,editor=now.composer,phone=obj(now.phoneDraft);
+   return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation&&
+    now.host?.ready===true&&view.section===null&&view.taskId===null&&owner.conversationId===conversationId&&
+    !owner.conversationReader&&!owner.queuedInputsPage&&!owner.filePath&&!owner.chatAttachmentPickerOpen&&!owner.attachmentWorkspace?.open&&
+    phone.phone===false&&phone.channelOrigin===false&&editor?.ready===true&&editor.conversationId===conversationId&&
+    editor.key===`conversation:${conversationId}`&&editor.epoch===draftEpoch&&editor.revision===draftRevision;
+  };
+  return current()?{conversationId,draftEpoch,draftRevision,documentEpoch,current}:null;
+ };
  const providedForgetProfileCurrent=(visit:OriginalMemoryProfileVisit)=>{
   const live=bridge.getState();
   return !!visit.forget&&visit.forget.attention===providedForgetAttention.current&&originalMemoryProfile.current===visit&&
@@ -10084,6 +10128,11 @@ export default function App(){
       enabled={!taskOpen&&!state.conversationReader&&can('attachments.open')} canLocate={can('attachmentWorkspace.open')}
       onLocalPdf={mayOpenChatMessagePdf&&m.localMessagePdfSourceCurrent===true&&file.mimeType==='application/pdf'&&Number.isSafeInteger(file.size)&&file.size>0&&
        savedAttachmentChoices.some(choice=>choice.fileId===file.id&&choice.sha256===file.sha256)?openChatMessageOriginal:undefined}/>)}</div>}
+     {route==='chat'&&intent==='chat'&&!taskOpen&&!state.conversationReader&&m.role==='user'&&m.savedChatLinkOffered===true&&
+      m.id&&state.conversationId&&typeof m.sourceRevision==='number'&&m.sourceRevision>0&&can('attachmentWorkspace.savedChatLinks')&&
+      <SavedChatFileLinks key={`${personalDocumentEpoch}:${navigationRevision}:${state.conversationId}:${m.id}:${m.sourceRevision}`}
+       holder={savedChatPdfVisit} isVisitCurrent={()=>navigationWindow.current===navigationRevision&&bridge.getDocumentEpoch()===personalDocumentEpoch}
+       conversationId={String(state.conversationId)} messageId={m.id} sourceRevision={m.sourceRevision}/>}
      {generatedReply&&<div className="pw-message-files">{generatedDocuments.map(file=><Button key={file.id} variant="secondary" size="small"
        leadingIcon={IconFile} data-original-reply-document={file.id} data-original-reply-document-sha={file.sha256}
        aria-label={file.checkFirst?replyDocumentFileLabel(file):`在本机查看 ${file.name}`} title={file.checkFirst?undefined:file.name}
@@ -10960,7 +11009,16 @@ export default function App(){
     }} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onOriginalBookReply={bookReplyVisit?originalBookReply:undefined} onReturnFocus={(event,messageOriginalWindow)=>{
    restoreTaskFileFocus(event);
-   if(messageOriginalWindow){
+   const savedLink=savedChatPdfVisit.current;
+   if(messageOriginalWindow&&savedLink?.windowId===messageOriginalWindow){
+    event.preventDefault();
+    const restoredTrigger=savedLink.trigger;
+    if(!savedLink.cancelled)requestAnimationFrame(()=>{
+     if(savedChatPdfVisit.current===savedLink&&!savedLink.cancelled&&savedLink.windowId===messageOriginalWindow&&savedLink.sourceCurrent()&&
+        bridge.getState().state.attachmentWorkspace?.open===false&&
+        restoredTrigger.isConnected&&!restoredTrigger.closest('[hidden],[inert],[aria-hidden="true"]'))restoredTrigger.focus({preventScroll:true});
+    });
+   }else if(messageOriginalWindow){
     if(searchFileReturn.current?.(messageOriginalWindow)){event.preventDefault();return;}
     const exact=obj(bridge.getState().state.originalReplyAttachmentPicker),origin=messageOriginalReturn.current;
     if(exact.sourceWindow===messageOriginalWindow&&origin?.windowId===messageOriginalWindow&&origin.kind==='replyDocument'){
@@ -11132,7 +11190,8 @@ export default function App(){
   onOpenSaved={skillDraftTarget.chatWork&&can('connections.enter')&&can('skills.get')?openReviewedSkill:undefined}/>}
  {!preparationInline&&preparationDetail}
  {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
- {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} showReferenceShelf={!referenceInput} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}/>}
+ {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} showReferenceShelf={!referenceInput} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}
+  defaults={{holder:chatDefaultPresets,capture:route==='chat'&&intent==='chat'&&can(chatDefaultPresetsCommand)?captureChatDefaultPresets:undefined}}/>}
  {shownChatReference&&<ConversationReferenceShelf key={shownChatReference.input.key+':'+shownChatReference.input.epoch}
    conversationId={shownChatReference.input.conversation} draftKey={shownChatReference.input.key} epoch={shownChatReference.input.epoch}
    closeLabel="关闭备忘" onClose={()=>closeChatReference(shownChatReference,'menu')}

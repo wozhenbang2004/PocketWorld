@@ -535,6 +535,7 @@ internal class PocketWebBridge(
             PocketWebOwnerQuestions.coldCommands + PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS  + PocketWebNodeCompilerOutput.COMMANDS + PocketWebPythonOutput.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
+            "profile.conversation.defaults",
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
@@ -559,7 +560,7 @@ internal class PocketWebBridge(
             "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.discoverDirect", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
             "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.notificationStatus", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
-        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save", "composer.oneLearning.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebReceivedTextResult.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectDraftDifference.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + dev.pocketengine.ui.ProjectFormalDrafts.COMMANDS + dev.pocketengine.ui.ProjectFormalFileExport.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
+        ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save", "composer.oneLearning.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebReceivedTextResult.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectDraftDifference.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + setOf("attachmentWorkspace.savedChatLinks") + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + dev.pocketengine.ui.ProjectFormalDrafts.COMMANDS + dev.pocketengine.ui.ProjectFormalFileExport.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
     }
 
     /** Equivalent to the former Activity saveable presentation state, never an execution grant. */
@@ -631,12 +632,13 @@ internal class PocketWebBridge(
         }
     }
 
-    fun foreground(value: Boolean) { reminderNotificationForeground(value); if (!value) { observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { reminderNotificationForeground(value); if (!value) { retireChatDefaults(); observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
         if (closed) return
         closed = true
+        retireChatDefaults()
         observeOrdinaryFirstFailure(null)
         retireKeptStaticPages()
         retireSourceCheckpoints()
@@ -679,6 +681,104 @@ internal class PocketWebBridge(
     internal fun captureWindow(): PocketWebWindowTicket = PocketWebWindowTicket(commandFence.ticket(), controller.webWindowTicket())
     internal fun acceptsWindow(ticket: PocketWebWindowTicket): Boolean =
         ticket.accepts(commandFence.ticket(), controller.webWindowTicket())
+
+    private class ChatDefaultsVisit(val nonce: String, val conversation: String, val draftEpoch: Int, val draftRevision: Long,
+        val document: String, val window: PocketWebWindowTicket, val resume: Long, val foreground: Long) {
+        var request: String? = null
+        var writing = false
+        var observedRevision: Long? = null
+    }
+    @Volatile private var chatDefaultsVisit: ChatDefaultsVisit? = null
+    private val chatDefaultsClosed = "原私人对话的默认偏好窗口已关闭"
+
+    private fun chatDefaultsWindow(visit: ChatDefaultsVisit): Boolean =
+        !closed && documentId == visit.document && acceptsWindow(visit.window) && workspaceResumeRevision == visit.resume &&
+            section == null && taskViewId == null && taskReturnSection == null && controller.webPrivateOwnerVisible() &&
+            controller.displayedPhoneWindowAlive(visit.foreground) && !phoneComposer.intent && !controller.hasChannelPhoneOrigin &&
+            controller.conversationReader == null && controller.queuedInputsPage == null && controller.state.filePath == null &&
+            !controller.state.chatAttachmentPickerOpen && !controller.attachmentOutcomes.state.open &&
+            controller.state.conversationId == visit.conversation && controller.composerViewEpoch == visit.draftEpoch &&
+            controller.composerDraft?.let { it.key == "conversation:${visit.conversation}" &&
+                it.conversationId == visit.conversation && it.revision == visit.draftRevision } == true
+
+    private fun retireChatDefaults() {
+        val visit = chatDefaultsVisit ?: return
+        chatDefaultsVisit = null
+        // Resolve any pending read without its data before acknowledging the owner's exit.
+        visit.request?.let { complete(it, null, chatDefaultsClosed, retainValue = false) }
+    }
+
+    private fun chatDefaultPresets(id: String, args: JSONObject) {
+        val action = requiredString(args, "operation")
+        val nonce = requiredString(args, "visitId")
+        val uuid = Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+        require(uuid.matches(nonce))
+        if (action == "close") {
+            require(args.length() == 2)
+            chatDefaultsVisit?.takeIf { it.nonce == nonce }?.let {
+                check(!it.writing) { "正在核对原保存，请等待这次结果后再返回" }
+                retireChatDefaults()
+            }
+            complete(id, JSONObject().put("closed", true).put("visitId", nonce), null, retainValue = false)
+            return
+        }
+        val visit = if (action == "open") {
+            checkedPayload(args, setOf("operation", "visitId", "conversationId", "draftEpoch", "draftRevision"))
+            val conversation = requiredString(args, "conversationId")
+            val epoch = requiredInt(args, "draftEpoch"); val revision = requiredLong(args, "draftRevision")
+            require(uuid.matches(conversation) && epoch >= 0 && revision > 0 && controller.webPresentationActivity().hasWindowFocus())
+            chatDefaultsVisit?.let { old ->
+                check(!old.writing && !chatDefaultsWindow(old)) { "请先返回原默认偏好窗口" }
+                retireChatDefaults()
+            }
+            ChatDefaultsVisit(nonce, conversation, epoch, revision, requireNotNull(documentId), captureWindow(),
+                workspaceResumeRevision, controller.displayedPhoneWindowVersion()).also {
+                check(chatDefaultsWindow(it)) { chatDefaultsClosed }; chatDefaultsVisit = it
+            }
+        } else chatDefaultsVisit?.takeIf { it.nonce == nonce } ?: error(chatDefaultsClosed)
+        fun current() = chatDefaultsVisit === visit && chatDefaultsWindow(visit)
+        check(current() && visit.request == null) { "请在原私人对话核对本次默认偏好" }
+        val writing = action == "save"
+        val sectionKey: String?
+        val values: JSONObject?
+        val expected: Long?
+        if (writing) {
+            checkedPayload(args, setOf("operation", "visitId", "section", "changes", "expectedRevision"))
+            sectionKey = requiredString(args, "section")
+            require(sectionKey in setOf("communication", "behavior"))
+            values = JSONObject(args.getJSONObject("changes").toString())
+            expected = requiredLong(args, "expectedRevision")
+            check(visit.observedRevision == expected && expected > 0) { "请先核对当前默认值再保存" }
+        } else {
+            require(action == "open" || action == "read" && args.length() == 2)
+            sectionKey = null; values = null; expected = null
+        }
+        visit.request = id; visit.writing = writing; visit.observedRevision = null
+        try {
+            controller.requestChatDefaultPresets(visit.conversation, sectionKey, values, expected, ::current) { result, error ->
+                if (chatDefaultsVisit !== visit || visit.request != id) return@requestChatDefaultPresets
+                if (!current() || !controller.webPresentationActivity().hasWindowFocus()) {
+                    retireChatDefaults(); return@requestChatDefaultPresets
+                }
+                visit.request = null; visit.writing = false
+                if (result == null || error != null) {
+                    complete(id, null, error ?: "尚未核对当前默认偏好", if (writing) "outcome_unknown" else "not_accepted", retainValue = false)
+                    return@requestChatDefaultPresets
+                }
+                val revision = result.optJSONObject("defaults")?.optLong("revision", 0) ?: 0
+                if (revision !in 1L..9007199254740991L || writing && revision != checkNotNull(expected) + 1) {
+                    complete(id, null, "默认偏好版本尚未核对", if(writing) "outcome_unknown" else "not_accepted", retainValue = false)
+                    return@requestChatDefaultPresets
+                }
+                visit.observedRevision = revision
+                complete(id, result.put("visitId", nonce).put("conversationId", visit.conversation), null, retainValue = false)
+            }
+        } catch (failure: Exception) {
+            if (chatDefaultsVisit === visit) { visit.request = null; visit.writing = false }
+            throw failure
+        }
+    }
+
     private fun currentProjectCreateOwner(original: ProjectCreateSelection) =
         !closed && documentId == original.document && acceptsWindow(original.owner) && section == null && taskViewId == null &&
             controller.webPrivateOwnerVisible() && controller.state.filePath == null && controller.conversationReader == null
@@ -799,9 +899,11 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        retireChatDefaults()
         retireKeptStaticPages()
         retireSourceCheckpoints()
         retireReplyPicker()
+        originalSavedPdfVisit?.let { retireSavedPdfVisit(it,closeWindow=false) }
         savedLocalReturn = null
         openedRetainedDraftCopy = null
         controller.closeOwnerWorkRequestHistory()
@@ -966,10 +1068,20 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("backgroundOwner", background.snapshot())
             projection?.getJSONObject("state")?.put("remoteInbox", remoteInbox.snapshot())
             projection?.getJSONObject("state")?.put("modelDiagnostics", modelDiagnostics.snapshot())
+            originalSavedPdfVisit?.takeUnless{it.originalCurrent()}?.let{retireSavedPdfVisit(it)}
             projection?.getJSONObject("state")?.put("attachmentWorkspace", attachmentPages.snapshot(
                 draftPresentation = documentId != null && section == null && taskViewId == null,
                 workPagePresentation = documentId != null && section == null && taskViewId != null &&
                     taskReturnSection == null && controller.webPrivateOwnerVisible()))
+            controller.state.conversationId?.takeIf(::savedChatFileLinksWindow)?.let {
+                val shown=projection?.getJSONObject("state")?.optJSONArray("messages")
+                controller.state.messages.forEachIndexed { index,row ->
+                    if(row.savedArtifactReferences!=null&&(!attachmentPages.hasOpenWorkspace||controller.attachmentOutcomes.state.savedChatLinkedOnly))
+                        shown?.optJSONObject(index)?.takeIf {
+                        it.opt("id")==row.id&&it.optLong("sourceRevision")==row.sourceRevision
+                    }?.put("savedChatLinkOffered",true)
+                }
+            }
             projection?.getJSONObject("state")?.put("taskCapabilityExport", taskCapabilities.exportSnapshot() ?: JSONObject.NULL)
             if (section == "teams" && controller.webPrivateOwnerVisible()) projection?.getJSONObject("state")?.put("teamFinalPackageExport", teamPages.finalPackageExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("systemSpeech", presentation.speechInfo())
@@ -1446,6 +1558,10 @@ internal class PocketWebBridge(
                 controller.openMessageAttachment(file, ::current) { status ->
                     complete(id, source.put("status", status), null, retainValue = false)
                 }
+                return
+            }
+            if (action == "attachmentWorkspace.savedChatLinks") {
+                readSavedChatFileLinks(id,args)
                 return
             }
             if (action in PocketWebAttachments.COMMANDS) {
@@ -2282,6 +2398,10 @@ internal class PocketWebBridge(
                 val epoch = args.opt("epoch"); val revision = args.opt("revision"); val paused = args.opt("paused")
                 require(epoch is Int && epoch >= 0 && (revision is Int || revision is Long) && (revision as Number).toLong() > 0 && paused is Boolean)
                 controller.setFirstMessageMemory(requiredString(args, "key"), epoch, (revision as Number).toLong(), paused) { value, error -> complete(id, value, error); publishState() }
+                return
+            }
+            if (action == "profile.conversation.defaults") {
+                chatDefaultPresets(id, args)
                 return
             }
             if (action in PocketWebPersonal.COMMANDS) {
@@ -3548,6 +3668,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
+                    retireChatDefaults()
                     clearReminderNotificationWindow()
                     retireReplyPicker()
                     controller.projectPackages.retireDirectViteExport()
@@ -4680,6 +4801,129 @@ internal class PocketWebBridge(
     }
     private fun isGroup(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") == "group"
     private fun canUseTaskControls(task: UiTask) = task.raw.optJSONObject("origin")?.optString("kind") != "paired_device" && (!isGroup(task) || taskPage != null && controller.groupTaskReady)
+    private fun savedChatFileLinksWindow(conversation:String):Boolean =
+        !closed&&documentId!=null&&section==null&&taskViewId==null&&taskReturnSection==null&&
+            controller.webPrivateOwnerVisible()&&controller.conversationReader==null&&controller.queuedInputsPage==null&&
+            controller.state.filePath==null&&!controller.state.chatAttachmentPickerOpen&&!phoneComposer.intent&&!controller.hasChannelPhoneOrigin&&
+            controller.state.conversationId==conversation&&controller.composerDraft?.let{it.key=="conversation:$conversation"&&it.conversationId==conversation}==true
+
+    private data class SavedPdfLinkCarrier(val conversation:String,val message:String,val revision:Long)
+    private data class SavedPdfVisit(val id:String,val carrier:SavedPdfLinkCarrier,val originalCurrent:()->Boolean,
+        val read:dev.pocketengine.core.RunControl=dev.pocketengine.core.RunControl(),
+        var inFlight:Boolean=false,var offered:Set<Pair<String,String>> = emptySet(),var openedWindow:String?=null)
+    private var originalSavedPdfVisit:SavedPdfVisit?=null
+
+    private fun retireSavedPdfVisit(visit:SavedPdfVisit,closeWindow:Boolean=true){
+        if(originalSavedPdfVisit!==visit)return
+        originalSavedPdfVisit=null
+        visit.read.cancel()
+        visit.offered=emptySet()
+        if(closeWindow)visit.openedWindow?.let(attachmentPages::closeSavedChatLinkedDetails)
+    }
+
+    private fun readSavedChatFileLinks(request:String,args:JSONObject){
+        val uuid=Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+        if(args.has("retireVisit")){
+            val nonce=requiredString(args,"retireVisit")
+            require(args.length()==1&&uuid.matches(nonce))
+            originalSavedPdfVisit?.takeIf{it.id==nonce}?.let{
+                retireSavedPdfVisit(it)
+                // Publish the closure before acknowledging the route exit.
+                publishState(force=true)
+            }
+            complete(request,JSONObject().put("retired",true).put("visitId",nonce),null,retainValue=false)
+            return
+        }
+        checkedPayload(args,setOf("conversationId","messageId","sourceRevision","fileId","sha256","visitId"))
+        val conversation=requiredString(args,"conversationId")
+        val message=requiredString(args,"messageId")
+        val revision=requiredLong(args,"sourceRevision")
+        val nonce=requiredString(args,"visitId")
+        val fileId=if(args.has("fileId"))requiredString(args,"fileId")else null
+        val sha=if(args.has("sha256"))requiredString(args,"sha256")else null
+        require(uuid.matches(conversation)&&uuid.matches(message)&&uuid.matches(nonce)&&revision>0&&
+            (fileId==null&&sha==null&&args.length()==4||
+                fileId!=null&&uuid.matches(fileId)&&sha!=null&&sha.matches(Regex("[a-f0-9]{64}"))&&args.length()==6))
+        val ticket=captureWindow();val document=documentId;val resume=workspaceResumeRevision
+        val epoch=controller.composerViewEpoch;val sources=controller.conversationSourceRevision
+        val unavailable="原消息或原 PDF 暂不可核对，没有打开其他文件。"
+        check(savedChatFileLinksWindow(conversation)){unavailable}
+        fun readRow():UiMessage? = controller.state.messages.singleOrNull { it.id==message&&it.sourceRevision==revision&&
+            it.role=="user"&&it.savedArtifactReferences!=null&&it.ownerOriginalLocator!=null }
+        val row=readRow()?:error(unavailable)
+        val refs=checkNotNull(row.savedArtifactReferences)
+        val origin=checkNotNull(row.ownerOriginalLocator).toString()
+        fun sameMessage():Boolean = savedChatFileLinksWindow(conversation)&&acceptsWindow(ticket)&&documentId==document&&
+            workspaceResumeRevision==resume&&controller.composerViewEpoch==epoch&&controller.conversationSourceRevision==sources&&readRow()?.let{
+                it.savedArtifactReferences==refs&&it.ownerOriginalLocator?.toString()==origin
+            }==true
+        val carrier=SavedPdfLinkCarrier(conversation,message,revision)
+        val visit=if(fileId==null){
+            check(originalSavedPdfVisit==null){unavailable}
+            SavedPdfVisit(nonce,carrier,::sameMessage)
+        }else originalSavedPdfVisit?.takeIf{it.id==nonce&&it.carrier==carrier&&
+            (fileId to checkNotNull(sha)) in it.offered}?:error(unavailable)
+        fun current():Boolean = originalSavedPdfVisit===visit&&!visit.read.isCancelled&&visit.originalCurrent()&&sameMessage()
+        fun available()=!attachmentPages.hasOpenWorkspace&&!controller.attachmentOutcomes.exportPending
+        check(!visit.inFlight&&sameMessage()&&available()&&(fileId==null||current())){unavailable}
+        val app=controller.nativeButlerHost()
+        val assistant=app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule ?: error(unavailable)
+        val artifactRefs=JSONArray(refs).objects().filter { it.opt("kind")=="artifact" && uuid.matches(it.optString("id")) &&
+            row.attachments.none { file->file.id==it.opt("id")&&file.sha256==it.opt("sha256") } }
+        val selected=fileId?.let{artifactRefs.singleOrNull{ref->ref.opt("id")==fileId&&ref.opt("sha256")==sha}?:error(unavailable)}
+        fun verify(control:dev.pocketengine.core.RunControl){
+            assistant.requireSavedFileLinkCarrier(JSONObject(origin),JSONArray(refs),control)
+        }
+        fun details(ref:JSONObject,control:dev.pocketengine.core.RunControl):JSONObject =
+            app.attachmentOutcomes.savedLinkedPdfDetails(conversation,ref.getString("id"),ref.getString("sha256"),ref.getString("label"),control)
+        // Ownership starts with the first metadata request, not the later selection.
+        originalSavedPdfVisit=visit
+        visit.inFlight=true
+        try{controller.runPluginCatalogWork {
+            val read=visit.read
+            val checked=runCatching {
+                verify(read)
+                val result=if(selected!=null)details(selected,read)
+                    else JSONObject().put("files",JSONArray(artifactRefs.mapNotNull{ref->runCatching{details(ref,read)}.getOrNull()}))
+                verify(read)
+                result
+            }
+            main.post {
+                visit.inFlight=false
+                if(!current()||!available()){
+                    retireSavedPdfVisit(visit)
+                    complete(request,null,unavailable,retainValue=false)
+                    return@post
+                }
+                val file=checked.getOrNull()
+                if(file==null){
+                    retireSavedPdfVisit(visit)
+                    complete(request,null,unavailable,retainValue=false)
+                }else if(selected==null){
+                    visit.offered=file.getJSONArray("files").objects().map{it.getString("id") to it.getString("sha256")}.toSet()
+                    complete(request,file.put("visitId",visit.id),null,retainValue=false)
+                }else {
+                    val result=runCatching { attachmentPages.openSavedChatLinkedDetails(file,::current){ control->
+                        verify(control)
+                        val original=app.attachmentOutcomes.openSavedLinkedPdf(conversation,file.getString("id"),file.getString("sha256"),
+                            file.getLong("size"),file.getString("name"),control)
+                        verify(control)
+                        original
+                    } }.getOrNull()
+                    if(result==null){
+                        retireSavedPdfVisit(visit)
+                    }else {
+                        visit.openedWindow=result.getString("windowId")
+                        result.put("visitId",visit.id)
+                    }
+                    complete(request,result,if(result==null)unavailable else null,retainValue=false)
+                    publishState()
+                }
+            }
+        }}catch(failure:Exception){
+            retireSavedPdfVisit(visit);throw failure
+        }
+    }
     private fun checkedMessageAttachmentSource(args: JSONObject): JSONObject {
         val source = checkedPayload(args, setOf("conversationId", "window", "taskId", "messageId", "sourceRevision", "id", "sha256"))
         requiredString(source, "conversationId"); requiredString(source, "messageId"); requiredString(source, "id")

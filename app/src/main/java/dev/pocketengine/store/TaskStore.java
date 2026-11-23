@@ -691,27 +691,32 @@ public final class TaskStore {
     }
     private boolean settledOriginalReplyFile(OriginalReplyDocument.Target target)throws Exception {
         JSONObject header=TaskJobProjection.ownerHeader(db,target.task());
-        if(!OwnerWorkTask.isButlerSource(header)||header.optBoolean("metadataLimited")||header.optBoolean("cancelRequested")
-                ||!target.conversation().equals(header.opt("conversationId"))||!target.run().equals(header.opt("runId"))
-                ||target.epoch()!=OriginalReplyDocument.integer(header.opt("coordinatorEpoch"))
-                ||!header.optString("status").matches("completed|needs_confirmation")||hasUnresolvedOperations(target.task(),null))return false;
+        return OwnerWorkTask.isButlerSource(header)&&settledOriginalFileAttempt(header,target.task(),target.run(),target.epoch(),target.conversation());
+    }
+    /** The same run witness for an original reply or an explicitly saved original PDF location.
+     * Persisted needs_confirmation is a settled run, not a confirmation of the result. */
+    private boolean settledOriginalFileAttempt(JSONObject header,String task,String runId,int epoch,String conversation)throws Exception {
+        if(header.optBoolean("metadataLimited")||header.optBoolean("cancelRequested")
+                ||!conversation.equals(header.opt("conversationId"))||!runId.equals(header.opt("runId"))
+                ||epoch!=OriginalReplyDocument.integer(header.opt("coordinatorEpoch"))
+                ||!header.optString("status").matches("completed|needs_confirmation")||hasUnresolvedOperations(task,null))return false;
         try(Cursor run=db.rawQuery("SELECT status FROM runs WHERE task_id=? AND run_id=? AND epoch=? LIMIT 1",
-                new String[]{target.task(),target.run(),Integer.toString(target.epoch())})){
+                new String[]{task,runId,Integer.toString(epoch)})){
             if(!run.moveToFirst())return false;
             String taskStatus=header.getString("status"),runStatus=run.getString(0);
             return taskStatus.equals(runStatus)||"completed".equals(taskStatus)&&"needs_confirmation".equals(runStatus)
-                    &&originalReplyDocumentOwnerConfirmed(target);
+                    &&originalReplyDocumentOwnerConfirmed(task,runId,epoch);
         }
     }
     /** The native result CAS records this verification and the task confirmation in
      * one transaction without rewriting the already-ended run's original status. */
-    private boolean originalReplyDocumentOwnerConfirmed(OriginalReplyDocument.Target target)throws Exception {
+    private boolean originalReplyDocumentOwnerConfirmed(String task,String runId,int coordinatorEpoch)throws Exception {
         String sql="SELECT event_order,native_seq,completed,CASE WHEN body_bytes BETWEEN 1 AND 32768 "
                 +"AND body_bytes=length(CAST(event_json AS BLOB)) THEN event_json END FROM task_events INDEXED BY task_events_type "
                 +"WHERE task_id=? AND event_type='user_verification' AND NOT EXISTS (SELECT 1 FROM leases WHERE run_id=? AND epoch=?) "
                 +"ORDER BY event_order DESC LIMIT 1";
-        String epoch=Integer.toString(target.epoch());
-        try(Cursor row=db.rawQuery(sql,new String[]{target.task(),target.run(),epoch})){
+        String epoch=Integer.toString(coordinatorEpoch);
+        try(Cursor row=db.rawQuery(sql,new String[]{task,runId,epoch})){
             if(!row.moveToFirst()||row.getLong(0)<1||row.isNull(1)||row.getLong(1)!=row.getLong(0)||row.getInt(2)!=1||row.isNull(3))return false;
             String sequence=Long.toString(row.getLong(0));
             Set<String> required=Set.of("type","runId","coordinatorEpoch","seq","resultReviewDigest","resultRevision","completed");
@@ -726,8 +731,8 @@ public final class TaskStore {
                     JsonToken kind=event.peek();
                     boolean exact=switch(key){
                         case "type" -> kind==JsonToken.STRING&&"user_verification".equals(event.nextString());
-                        case "taskId" -> kind==JsonToken.STRING&&target.task().equals(event.nextString());
-                        case "runId" -> kind==JsonToken.STRING&&target.run().equals(event.nextString());
+                        case "taskId" -> kind==JsonToken.STRING&&task.equals(event.nextString());
+                        case "runId" -> kind==JsonToken.STRING&&runId.equals(event.nextString());
                         case "coordinatorEpoch","epoch" -> kind==JsonToken.NUMBER&&epoch.equals(event.nextString());
                         case "seq" -> kind==JsonToken.NUMBER&&sequence.equals(event.nextString());
                         case "resultReviewDigest" -> kind==JsonToken.STRING&&event.nextString().matches("[a-f0-9]{64}");
@@ -745,6 +750,31 @@ public final class TaskStore {
                 event.endObject();return seen.containsAll(required)&&event.peek()==JsonToken.END_DOCUMENT;
             }catch(java.io.IOException|IllegalStateException|NumberFormatException unavailable){return false;}
         }
+    }
+    /** One originally settled PDF operation in this conversation. No producer core, arguments or audit list. */
+    public synchronized OriginalReplyDocument savedLinkedPdfForOwner(String conversation,String task,String run,String operation,
+            String file,String sha,RunControl control)throws Exception{
+        control.checkpoint();
+        if(control.hasHostRun()||db.inTransaction()||!OriginalReplyDocument.uuid(conversation)||!OriginalReplyDocument.uuid(task)||
+                !OriginalReplyDocument.uuid(run)||!OriginalReplyDocument.uuid(operation)||!OriginalReplyDocument.uuid(file)||
+                sha==null||!sha.matches("[a-f0-9]{64}"))throw new SecurityException("原 PDF 执行身份不可核对");
+        db.beginTransactionNonExclusive();try{
+            JSONObject header=TaskJobProjection.ownerHeader(db,task),work=header.optJSONObject("ownerWork");
+            long epoch=OriginalReplyDocument.integer(header.opt("coordinatorEpoch"));
+            boolean ordinaryWork=OwnerWorkTask.isOwnerWork(header)&&work!=null&&task.equals(work.opt("workTaskId"))&&
+                    conversation.equals(work.opt("conversationId"));
+            if(!(ordinaryWork||OwnerWorkTask.isButlerSource(header))||!"owner".equals(header.opt("actorId"))||
+                    !"private".equals(header.opt("spaceId"))||!"assistant".equals(header.opt("kind"))||
+                    !"capabilities".equals(header.opt("executionMode"))||!header.isNull("origin")||!header.isNull("parentTaskId")||
+                    !header.isNull("teamAssignment")||!header.isNull("developmentContext")||!header.isNull("ownerDeviceWork")||
+                    header.optBoolean("nativeResultHandling")||epoch<1||epoch>Integer.MAX_VALUE||
+                    !settledOriginalFileAttempt(header,task,run,(int)epoch,conversation))return null;
+            control.checkpoint();
+            OriginalReplyDocument receipt=originalReplyDocumentReceipt(task,run,operation);
+            if(receipt==null||!operation.equals(receipt.operationId())||!file.equals(receipt.id())||!sha.equals(receipt.sha256())||
+                    !"application/pdf".equals(receipt.mimeType())||!receipt.publication(task,run))return null;
+            control.checkpoint();db.setTransactionSuccessful();return receipt;
+        }finally{db.endTransaction();}
     }
     private OriginalReplyDocument originalReplyDocumentReceipt(String task,String run,String operation)throws Exception {
         JSONObject receipt=originalReplyFileReceipt(task,run,operation,OriginalReplyDocument.TOOL);

@@ -71,6 +71,22 @@ public final class AttachmentBook {
     public synchronized JSONObject importBytes(InputStream input,String name,String mime,JSONObject source,RunControl control)throws Exception{
         return importBytesInternal(input,name,mime,source,java.util.Objects.requireNonNull(control));
     }
+    /** Exact linked generated PDF registration: index and stat only, no file body or eligibility mutation. */
+    synchronized JSONObject savedLinkedPdfMetadata(String id,String sha,RunControl control)throws Exception{
+        checkId(id);control.checkpoint();
+        File record=new File(root,id+".json"),blob=new File(root,id+".blob");
+        if(!Files.isRegularFile(blob.toPath(),LinkOption.NOFOLLOW_LINKS)||
+                exists(new File(root,id+".part"))||exists(new File(root,id+".json.pending")))
+            throw new SecurityException("原 PDF 登记暂不可核对");
+        JSONObject actual=readIndex(record.toPath(),new IndexReadBudget()),source=actual.optJSONObject("source");
+        long size=actual.optLong("size",0);
+        BasicFileAttributes stat=Files.readAttributes(blob.toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!id.equals(actual.opt("id"))||!sha.equals(actual.opt("sha256"))||!privateOutputSource(actual)||
+                actual.has("groupSource")||size<1||size>MAX_FILE_BYTES||!stat.isRegularFile()||stat.size()!=size||
+                !"application/pdf".equals(actual.opt("mimeType"))||source==null||!"created_document".equals(source.opt("kind"))||
+                !"pdf".equals(source.opt("documentFormat")))throw new SecurityException("原 PDF 登记暂不可核对");
+        control.checkpoint();return visible(actual);
+    }
     /** Native producer retry identity in this SAME Book; not a second journal or authority.
      * A surviving orphan/retired record is unknown, never silently overwritten or given a new ID. */
     public synchronized JSONObject findNativeResult(String operation,String role,String task,String run,String planDigest,RunControl control)throws Exception{

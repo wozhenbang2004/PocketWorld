@@ -238,9 +238,10 @@ internal data class AttachmentOutcomeState(
     val wordSourceVisit:AttachmentWordSourceVisit?=null, // One explicit origin lookup; never restored from Bundle.
     val focusedStandaloneDraft:Boolean=false, // In-session exact draft editor, not an attachment catalogue.
     val messageInput:AttachmentMessageInput?=null, // Exact live private user attachment, never a Library visit.
-    val messageReplyDocumentOnly:Boolean=false
+    val messageReplyDocumentOnly:Boolean=false,
+    val savedChatLinkedOnly:Boolean=false
 ){
-    val liveMessageOriginalOnly get()=messageInput!=null||messageReplyDocumentOnly
+    val liveMessageOriginalOnly get()=messageInput!=null||messageReplyDocumentOnly||savedChatLinkedOnly
 }
 
 /** Navigation and revocable waits only. TaskStore, canonical artifact stores and native owner gate retain truth. */
@@ -1116,13 +1117,22 @@ internal class AttachmentOutcomeCoordinator(
             backFromWordExcerptSource()
         else state=state.copy(wordSourceVisit=null)
     }
-    fun openOriginalFile(){
+    /** Land in the private reader's existing metadata details, not a catalog lookup or a preview. */
+    fun openSavedChatLinkedDetails(file:JSONObject){
+        check(!state.open&&!exportPending)
+        cancel();restoreFile=null;restoredDocumentDraft=null
+        state=AttachmentOutcomeState(open=true,file=file,savedChatLinkedOnly=true)
+    }
+    fun openOriginalFile(openSavedChatLink:((RunControl)->OwnerFilePreviewSource)?=null){
+        check(state.savedChatLinkedOnly==(openSavedChatLink!=null)) { "请从原消息核对这份文件" }
         if(state.busy)return;val selectedTeam=state.team;val selectedGroup=state.group;val selectedFile=state.file;val task=state.taskId
         if(selectedTeam==null&&selectedFile==null)return
         val resultRun=state.resultRun?.takeIf{it.taskId==task}
         var source:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
-        work(onSuccess={source?.let{state=state.copy(originalFile=it)}}){c,w->
+        work(onSuccess={source?.let{state=state.copy(originalFile=it)}},
+            completionFailure=if(openSavedChatLink!=null)"原消息或文件版本暂不可核对，没有打开其他文件。" else null){c,w->
             source=when{
+                openSavedChatLink!=null->openSavedChatLink(c)
                 selectedTeam!=null->requireTeamHost().originalFile(selectedTeam,c)
                 selectedGroup!=null->app.groupOriginalFilePreview(selectedGroup,w?:error("请回原群成果重新打开"),c)
                 else->{
@@ -1132,7 +1142,8 @@ internal class AttachmentOutcomeCoordinator(
                     if(resultRun!=null)requireConversationResult(resultRun,c)
                     original
                 }
-            };JSONObject() to null
+            }
+            JSONObject() to null
         }
     }
     fun backFromOriginalFile(){

@@ -241,13 +241,28 @@ public final class SettingsStore {
 
     /** Reversible agent preferences only. Model routes, grants, credentials and network policy are absent. */
     public synchronized JSONObject agentPreferences()throws Exception {
-        requireConfirmed();return new JSONObject().put("enabled",prefs.getBoolean("allowAgentPreferences",false))
-                .put("revision",prefs.getLong("agentPreferencesRevision",1)).put("response_detail",prefs.getString("agentResponseDetail","standard"))
+        requireConfirmed();return readPersonalDefaultPresets(new JSONObject().put("enabled",prefs.getBoolean("allowAgentPreferences",false)));
+    }
+    private JSONObject readPersonalDefaultPresets(JSONObject view)throws Exception {
+        return view.put("revision",prefs.getLong("agentPreferencesRevision",1)).put("response_detail",prefs.getString("agentResponseDetail","standard"))
                 .put("operation_pace",prefs.getString("agentOperationPace","standard"))
                 .put("language",prefs.getString("personalLanguage","auto"))
                 .put("conclusionFirst",prefs.getBoolean("personalConclusionFirst",false))
                 .put("includeExamples",prefs.getBoolean("personalIncludeExamples",false))
                 .put("initiative",prefs.getString("personalInitiative","balanced"));
+    }
+    /** The private owner host supplies the still-current original view, never a model argument. */
+    public synchronized JSONObject personalDefaultPresets(java.util.function.BooleanSupplier current)throws Exception {
+        requirePersonalPresetView(current);
+        return checkedPersonalDefaultPresets();
+    }
+    private JSONObject checkedPersonalDefaultPresets()throws Exception {
+        requireConfirmed();JSONObject actual=readPersonalDefaultPresets(new JSONObject());
+        if(actual.getLong("revision")<1)throw new IllegalStateException("默认偏好版本尚未核对");
+        for(var fields=actual.keys();fields.hasNext();){
+            String field=fields.next();if(!"revision".equals(field))validateAgentPreference(field,actual.get(field));
+        }
+        return actual;
     }
     public synchronized JSONObject saveAgentPreferences(boolean enabled,String detail,String pace,long expectedRevision)throws Exception {
         JSONObject old=agentPreferences();if(old.getLong("revision")!=expectedRevision)throw new SecurityException("偏好已由主人改变，请刷新原设置");
@@ -312,10 +327,30 @@ public final class SettingsStore {
     /** Native private-owner UI only. A success receipt follows a confirmed disk commit. */
     public synchronized JSONObject savePersonalProfile(String section,JSONObject values,long expectedRevision)throws Exception {
         JSONObject before=personalProfile();
-        if(expectedRevision<1||before.getLong("revision")!=expectedRevision)throw new IllegalStateException("资料或偏好已改变，请刷新后再保存；当前编辑尚未覆盖已保存内容");
+        commitPersonalSection(section,values,expectedRevision,before.getLong("revision"),false,null);
+        return new JSONObject().put("saved",true).put("persisted",true).put("profile",personalProfile());
+    }
+    /** Native store only. This is not a command or an owner authorization; a caller must supply that gate. */
+    public synchronized JSONObject savePersonalDefaultPresets(String section,JSONObject values,long expectedRevision,
+            java.util.function.BooleanSupplier current)throws Exception {
+        requirePersonalPresetView(current);
+        JSONObject before=checkedPersonalDefaultPresets();
+        commitPersonalSection(section,values,expectedRevision,before.getLong("revision"),true,current);
+        JSONObject actual=checkedPersonalDefaultPresets();
+        if(actual.getLong("revision")!=Math.addExact(expectedRevision,1))
+            throw new IllegalStateException("默认偏好保存后已变化，请读取当前设置；没有自动重发");
+        return new JSONObject().put("saved",true).put("persisted",true).put("defaults",actual);
+    }
+    private static void requirePersonalPresetView(java.util.function.BooleanSupplier current){
+        if(current==null||!current.getAsBoolean())throw new SecurityException("原私人对话的默认偏好窗口已关闭");
+    }
+    private void commitPersonalSection(String section,JSONObject values,long expectedRevision,long actualRevision,boolean presetsOnly,
+            java.util.function.BooleanSupplier current)throws Exception {
+        if(expectedRevision<1||actualRevision!=expectedRevision)throw new IllegalStateException("资料或偏好已改变，请刷新后再保存；当前编辑尚未覆盖已保存内容");
         java.util.Set<String> allowed=switch(section){
-            case "identity"->java.util.Set.of("nickname","addressAs","about","avatarDataUrl");
-            case "communication"->java.util.Set.of("language","response_detail","conclusionFirst","includeExamples","instructions");
+            case "identity"->presetsOnly?java.util.Set.of():java.util.Set.of("nickname","addressAs","about","avatarDataUrl");
+            case "communication"->presetsOnly?java.util.Set.of("language","response_detail","conclusionFirst","includeExamples"):
+                    java.util.Set.of("language","response_detail","conclusionFirst","includeExamples","instructions");
             case "behavior"->java.util.Set.of("operation_pace","initiative");
             default->throw new IllegalArgumentException("请选择资料、交流偏好或做事偏好");
         };
@@ -324,8 +359,8 @@ public final class SettingsStore {
             if(!allowed.contains(fields.next()))throw new IllegalArgumentException("只能保存当前分组中的资料或偏好");
         }
         SharedPreferences.Editor edit=prefs.edit();editPersonalValues(edit,values);
+        if(presetsOnly)requirePersonalPresetView(current);
         commitConfirmed(edit.putLong("agentPreferencesRevision",Math.addExact(expectedRevision,1)),false);
-        return new JSONObject().put("saved",true).put("persisted",true).put("profile",personalProfile());
     }
     /** The same field rules apply to owner edits and portable definitions; no revision or opt-in is portable. */
     static Object checkedPersonalValue(JSONObject values,String field)throws Exception {
