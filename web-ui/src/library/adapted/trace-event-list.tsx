@@ -29,8 +29,8 @@ export function TraceEventList({ rows, selectedId, highlightedId, locateTicket, 
           data-failed={failed || undefined} data-running={traceInProgress(node.status) || undefined}>
           <div className="pw-trace-event-spine">
             {role === 'assistant' && node.requestId ? <button className="pw-trace-request-entry" type="button" disabled={!request}
-              aria-label={request ? `打开 Request ${request.callId || request.name}` : complete ? '关联请求未保留' : '关联请求补齐中'}
-              title={request ? '查看这次模型请求' : complete ? '关联请求未保留' : '正在补齐关联请求'} onClick={() => request && onSelect(request)}><i aria-hidden="true"/></button>
+              aria-label={request ? `打开 Request ${request.callId || request.name}` : complete ? '关联请求未保留' : '关联请求尚未核对'}
+              title={request ? '查看这次模型请求' : complete ? '关联请求未保留' : '关联请求尚未核对'} onClick={() => request && onSelect(request)}><i aria-hidden="true"/></button>
               : <span className="pw-trace-event-dot" aria-hidden="true"><i/></span>}
           </div>
           <button type="button" className="pw-trace-event-open" aria-label={`打开 ${traceRoleLabel(node)} ${title}，${state}`} onClick={event => onSelect(node,event.currentTarget)}>

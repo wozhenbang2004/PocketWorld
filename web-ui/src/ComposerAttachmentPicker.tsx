@@ -78,6 +78,8 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
     return [{ id, sha256, name, mimeType, createdAt, availability, sourceKind: source.kind, sourceTaskId: source.taskId }];
   }), []) : undefined, [open, focused, inventoryRows]);
   const choices = fileRows(selected), model = fileObject(inputModel);
+  const photoAllowance = addFromPhone ? fileObject(snapshot.state.chatFilePickPhotos) : {};
+  const photoSlotsFull = photoAllowance.accountSlots === 0 && Number.isSafeInteger(photoAllowance.accountMax);
   const rows = files.filter(file => !needle || normalizedFileName(file.name).includes(needle))
     .map(file => ({ file, use: fileUse(file, model) }));
   const incomplete = fileObject(catalog.indexDiagnostics).incomplete === true;
@@ -96,6 +98,7 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
         <div className="pw-drawer-body">
           {pickError ? <p className="pw-error" role="alert">{pickError}</p> : !focused && typeof snapshot.state.chatFilePickFeedback === 'string' &&
             <p className="pw-muted" role="status">{snapshot.state.chatFilePickFeedback}</p>}
+          {photoSlotsFull && <p className="pw-muted" role="status">当前账号每条最多加入 {photoAllowance.accountMax} 张图；可移除一张后替换，文档不计入这个上限。</p>}
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
           {!focused && (files.length > 0 || query !== '') && <div role="search" aria-label="在当前附件清单中查找">
             <TextField label="文件名" leadingIcon={IconSearch} type="search" placeholder="查找当前清单" value={query}
@@ -110,11 +113,15 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
               const target = exactFileTarget(file), origin = origins?.get(exactFileKey(file));
               const chosen = choices.find(row => row.id === file.id);
               const selectedHere = !!target && chosen?.sha256 === target.sha256;
+              const newPhoto = !selectedHere && !reason && imageFormats.has(file.mimeType);
+              const overPhotoBytes = newPhoto && !photoSlotsFull && Number.isSafeInteger(photoAllowance.nextPhotoBytes) &&
+                file.size > photoAllowance.nextPhotoBytes;
               const note = chosen && !selectedHere ? '草稿选的是另一版本，可回输入框移除。'
-                : reason ?? (paged ? (pagingDenied
+                : reason ?? (overPhotoBytes ? '加上这张原图会超过本条容量，可换较小的图片。' : paged ? (pagingDenied
                   ? '只提供文件引用。当前规则禁止分段读取正文。'
                   : '只提供文件引用。能否分段读取，发送后由原任务核对。') : hint);
-              const disabled = !onToggle || !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections));
+              const disabled = !onToggle || !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections ||
+                overPhotoBytes || newPhoto && photoSlotsFull));
               return <div className="pw-attachment-object" key={target ? `${target.fileId}:${target.sha256}` : index}>
                 <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={selected => {
                   if (!disabled && target) onToggle?.(target.fileId, target.sha256, selected);

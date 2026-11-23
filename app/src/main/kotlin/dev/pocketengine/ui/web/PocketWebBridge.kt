@@ -875,6 +875,7 @@ internal class PocketWebBridge(
             }
             if (chatFilePickSurface()) controller.chatAttachmentPickerRequest()?.takeIf(controller::chatFilePickReady)?.let {
                 projection?.getJSONObject("state")?.put("chatFilePickReadyFor", it)
+                    ?.put("chatFilePickPhotos",controller.chatFilePickPhotos())
             }
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
@@ -3572,7 +3573,7 @@ internal class PocketWebBridge(
                     check(held == null || held.sha256 == sha) { "草稿选的是另一版本，没有替换" }
                     if (requiredBoolean(args, "selected") == (held != null)) return accepted()
                 }
-                controller.toggleChatAttachment(selected)
+                controller.toggleChatAttachment(selected, ordinaryPhotoCheck = !focused && chatFilePickSurface())
             }
             "quickVoice.start" -> { checkedPayload(args, setOf("handoffId")); controller.startQuickPanelVoice(requiredString(args, "handoffId")) }
             "quickVoice.close" -> { checkedPayload(args, emptySet()); controller.closeQuickPanelVoice() }

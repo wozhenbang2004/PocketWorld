@@ -3,17 +3,64 @@ package dev.pocketengine.ui
 import dev.pocketengine.store.TaskStore
 import dev.pocketengine.features.assistant.AttachmentRequestProjection
 import dev.pocketengine.features.attachments.AttachmentBook
+import dev.pocketengine.features.proxy.providers.ResponsesRequest
+import dev.pocketengine.core.ModelConfig
+import dev.pocketengine.runtime.ModelGateway
 import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class UiChatAttachment(val id:String,val sha256:String,val name:String,val mimeType:String,val size:Long){fun selection():JSONObject=JSONObject().put("id",id).put("sha256",sha256)}
 internal object ChatInputRules {
+ private val inlinePhotoTypes=setOf("image/png","image/jpeg","image/webp")
+ private fun inlinePhoto(file:UiChatAttachment)=file.mimeType in inlinePhotoTypes && file.size in 1L..AttachmentRequestProjection.MAX_IMAGE_BYTES.toLong()
+ private fun encodedPhotoBytes(file:UiChatAttachment)=4L*((file.size+2L)/3L)
+
+ class PhotoAllowance(private val encodedLeft:Long,private val accountLeft:Int?) {
+  fun rejectAdding(files:List<UiChatAttachment>):String? {
+   val photos=files.filter(ChatInputRules::inlinePhoto)
+   if(accountLeft!=null&&photos.size>accountLeft)
+    return "当前账号每条最多加入 ${ResponsesRequest.MAX_IMAGES} 张图片。移除一张或分开发送。"
+   if(photos.sumOf(ChatInputRules::encodedPhotoBytes)>encodedLeft)
+    return "加上这些原图会超过本条发送容量。可减少图片、改用较小版本，或分开发送。"
+   return null
+  }
+
+  fun forPicker():JSONObject=JSONObject().put("nextPhotoBytes",encodedLeft/4L*3L)
+   .put("accountSlots",accountLeft).put("accountMax",if(accountLeft==null)null else ResponsesRequest.MAX_IMAGES)
+ }
+
+ /** Only definite ceilings on this native inline route, not a send/readiness or provider claim. */
+ fun photoAllowance(model:JSONObject,held:List<UiChatAttachment>):PhotoAllowance? {
+  if(model.opt("supportsImageInput")!=true||model.optString("model").isBlank())return null
+  val plan=model.optJSONObject("modelRoutePlan")
+  if(plan!=null&&(plan.optLong("groupRevision",-1)!=0L||plan.optInt("maxRouteSwitches",-1)!=0||
+      plan.optJSONArray("orderedCandidates")?.length()!=1))return null
+  val accountLimit=when(model.optString("modelRoute")){
+   "account" -> {
+    if(model.opt("sendScreenshots")!=true)return null
+    val ref=runCatching { ModelConfig.AccountModelRef.fromJson(model.getJSONObject("nativeRef")) }.getOrNull() ?: return null
+    if(ref.modelId!=model.optString("model")||!ModelGateway.accountSupportsImageInput(ref))return null
+    ResponsesRequest.MAX_IMAGES
+   }
+   "api_key" -> {
+    if(model.opt("hasApiKey")!=true&&!(model.optString("credentialKind")=="aws_sts_session"&&
+       model.opt("hasAwsSession")==true&&model.optString("credentialStatus")=="saved_unverified"))return null
+    null
+   }
+   else -> return null
+  }
+  val photos=held.filter(::inlinePhoto)
+  // Inline photo parts always have JSON overhead. Use only the proven Base64 lower bound.
+  val left=(AttachmentRequestProjection.MAX_REQUEST_ATTACHMENT_BYTES-1L-photos.sumOf(::encodedPhotoBytes)).coerceAtLeast(0L)
+  return PhotoAllowance(left,accountLimit?.let{(it-photos.size).coerceAtLeast(0)})
+ }
+
  fun attachment(row:JSONObject):UiChatAttachment?=try{val id=row.getString("id");val sha=row.getString("sha256");if(!id.matches(Regex("[a-fA-F0-9-]{36}"))||!sha.matches(Regex("[a-f0-9]{64}")))null else UiChatAttachment(id,sha,row.optString("name","附件"),row.getString("mimeType"),row.getLong("size"))}catch(_:Exception){null}
  /** Same definite exclusions as the ordinary picker. Draft staging reads no file bytes;
   * AttachmentRequestProjection still verifies the model, contents and aggregate budget on Send. */
  fun pickedFileLimit(file:UiChatAttachment,model:JSONObject):String? = when {
   file.size !in 1L..AttachmentBook.MAX_FILE_BYTES -> "空文件或超过20 MiB的文件不能加入这条消息。"
-  file.mimeType.startsWith("image/") && file.mimeType !in setOf("image/png","image/jpeg","image/webp") -> "普通对话只接收 PNG、JPEG 或 WebP 图片。"
+  file.mimeType.startsWith("image/") && file.mimeType !in inlinePhotoTypes -> "普通对话只接收 PNG、JPEG 或 WebP 图片。"
   file.mimeType.startsWith("image/") && file.size > AttachmentRequestProjection.MAX_IMAGE_BYTES -> "图片超过4 MiB，请选较小的版本。"
   file.mimeType.startsWith("image/") && (model.optString("modelRoute")=="account" && model.opt("sendScreenshots")==false || model.opt("supportsImageInput")!=true) ->
     "当前模型或账号连接没有确认接收图片，可从输入框核对。"

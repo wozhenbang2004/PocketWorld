@@ -1947,6 +1947,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             !state.phoneSubmitting && firstHostSave == null && !independentReportDraftBusy &&
             model == currentAttachmentDraftModel(model.scope)
     }
+    private fun draftPhotoAllowance()=ChatInputRules.photoAllowance(state.chatAttachmentModel,state.selectedChatAttachments)
+    internal fun chatFilePickPhotos():JSONObject?=draftPhotoAllowance()?.forPicker()
     fun closeChatAttachmentPicker(request: String? = null) {
         check(request == null || request == chatAttachmentPickerRequest()) { "原附件选择已关闭，没有关闭其他选择" }
         if (chatFilePick?.picker == attachmentPickerListRequest) chatFilePick = null
@@ -1956,12 +1958,22 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         attachmentPagingDeniedAt = null
         state=state.copy(chatAttachmentPickerOpen=false)
     }
-    fun toggleChatAttachment(meta:JSONObject) {
+    fun toggleChatAttachment(meta:JSONObject)=toggleChatAttachment(meta, ordinaryPhotoCheck=false)
+    internal fun toggleChatAttachment(meta:JSONObject,ordinaryPhotoCheck:Boolean) {
         if(attachmentComposerKey!=composerDraft?.key||attachmentComposerEpoch!=chatViewEpoch){state=state.copy(error="附件选择的原草稿已变化，请回原输入重新选择");return}
         val selected=ChatInputRules.attachment(meta) ?: run { state=state.copy(error="附件元数据不可核对，请刷新附件库");return }
         if(state.selectedChatAttachments.any { it.id==selected.id }) editComposerSelection(state.chatSendMode,state.selectedChatAttachments.filterNot{it.id==selected.id})
         else if(state.selectedChatAttachments.size>=4) state=state.copy(error="每条消息最多选择4个附件")
-        else editComposerSelection(state.chatSendMode,state.selectedChatAttachments+selected)
+        else {
+            val picker=chatAttachmentPickerRequest()
+            if(ordinaryPhotoCheck&&picker!=null&&chatFilePickReady(picker)){
+                draftPhotoAllowance()?.rejectAdding(listOf(selected))?.let { reason ->
+                    chatFilePickFeedback=picker to reason
+                    return
+                }
+            }
+            editComposerSelection(state.chatSendMode,state.selectedChatAttachments+selected)
+        }
     }
     fun removeChatAttachment(id:String,key:String,viewEpoch:Int) { if(composerDraft?.key==key&&chatViewEpoch==viewEpoch)editComposerSelection(state.chatSendMode,state.selectedChatAttachments.filterNot{it.id==id}) }
     internal fun openMessageAttachment(reference: UiChatAttachment, current: () -> Boolean, done: (String) -> Unit) {
@@ -3552,6 +3564,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (rejection != null) { keepOnly(rejection); return }
         }
         if (next.size > AttachmentRequestProjection.MAX_ATTACHMENTS) { keepOnly("加上已有附件会超过4个，可从清单选择。"); return }
+        draftPhotoAllowance()?.rejectAdding(next.drop(previous.size))?.let { keepOnly(it); return }
         if (next != previous) editComposerSelection(state.chatSendMode, next)
         if (state.selectedChatAttachments != next) { keepOnly("没有确认加入这条输入，可从清单重新勾选。"); return }
         closeChatAttachmentPicker(pick.picker)

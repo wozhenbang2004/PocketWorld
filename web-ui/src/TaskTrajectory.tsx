@@ -31,6 +31,9 @@ const getSourceRevision = () => {
   const revision = bridge.getState().state.traceSourceRevision;
   return Number.isSafeInteger(revision) && revision >= 0 ? String(revision) : '';
 };
+const traceSourceUnavailable = (task: TaskHeader) => task.raw?.contextAvailable === false ||
+  task.raw?.contextWithdrawn === true || task.raw?.sourceCurrentReadRequired === true ||
+  task.raw?.taskProjection === 'source_unavailable';
 function metadataOnly(node: TraceNode): TraceNode {
   const metadata = { ...node }; for (const key of bodyKeys) delete metadata[key]; return metadata;
 }
@@ -380,7 +383,9 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   const documentTrigger = useRef<{element: HTMLElement; scope: string; nodeId: string} | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null), [highlighted, setHighlighted] = useState<string | null>(null), [locateTicket, setLocateTicket] = useState(0);
   const readWindow = useTraceWindow(task, selectedRun, active, canRead, documentEpoch), page = readWindow.view?.page;
-  const identity = taskHistoryIdentity(task), complete = readWindow.view?.complete === true;
+  const identity = taskHistoryIdentity(task);
+  const readFailed = !!readWindow.error, backfilling = readWindow.busy && readWindow.view?.backfilling === true;
+  const complete = readWindow.view?.complete === true && !readFailed && !readWindow.busy;
   useEffect(() => { setSelectedRun(''); setSelection(null); setFolded(new Set()); setStepDisclosure({scope: '', values: new Map()}); setQuery(''); setFilter('all'); setHighlighted(null); }, [identity, documentEpoch]);
   useEffect(() => { if (!active) setSelection(null); }, [active]);
   useEffect(() => { if (page) setSelection(previous => previous && (previous.runId !== page.runId || previous.epoch !== page.epoch) ? null : previous); }, [page?.runId, page?.epoch]);
@@ -431,7 +436,11 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   useSurfaceEnter(currentView, `${identity}:${page?.runId || ''}:${page?.epoch ?? ''}:${viewMode}:${intervalMode}`, {selector: '', active: active && readWindow.enabled && !!page});
   const stats = traceSummary(nodes), filtering = filter !== 'all' || query.trim() !== '';
   const empty = filter === 'tool' ? '已读轨迹没有匹配工具，不能据此判断有没有用过，也不能说明原因。'
-    : filtering ? '已读取记录中没有匹配项。' : readWindow.live ? '正在等待原执行产生轨迹…' : '这次执行没有已保存的调用轨迹。';
+    : filtering ? '已读取记录中没有匹配项。' : '已读记录中没有可显示的轨迹，不能据此判断任务是否执行。';
+  const coverage = readFailed ? '同轮已读记录 · 本次重读未确认'
+    : backfilling ? '正在补齐较早记录'
+    : readWindow.busy ? '重读中 · 保留已读记录'
+    : complete ? '本次快照已完整读取' : '当前为部分记录';
   const select = (node: TraceNode, trigger?: HTMLElement) => {
     if (page && active && readWindow.enabled && !document.hidden) {
       documentTrigger.current = isDocumentReadNode(node) && trigger ? {element: trigger, scope: stepScope, nodeId: node.id} : null;
@@ -446,20 +455,38 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
   };
   const locate = (node: TraceNode) => { setQuery(''); setFilter('all'); setViewMode('events'); setHighlighted(node.id); setLocateTicket(value => value + 1); };
   const runs = page?.runs || [], currentRunId = typeof task.raw?.runId === 'string' ? task.raw.runId : '';
+  const unavailable = traceSourceUnavailable(task);
+  const currentEpoch = task.raw?.coordinatorEpoch;
+  const canRetryRun = !unavailable && !!(selectedRun || currentRunId && Number.isSafeInteger(currentEpoch) && currentEpoch >= 0);
+  const retryRun = () => {
+    const native = bridge.getState(), view = native.view as {section?: string | null; taskId?: string} | undefined;
+    const matches = Array.isArray(native.state.tasks)
+      ? native.state.tasks.filter((item: TaskHeader) => item?.id === task.id) : [];
+    if (!canRetryRun || !readWindow.enabled || readWindow.busy || document.hidden || documentEpoch !== bridge.getDocumentEpoch() ||
+        view?.taskId !== task.id || view.section != null || !native.capabilities.commands.includes('trace.read') ||
+        matches.length !== 1 || traceSourceUnavailable(matches[0]) || taskHistoryIdentity(matches[0]) !== identity) return;
+    readWindow.refresh();
+  };
   return <>{!selectedRun && currentCheckpoint}
-    <section ref={bindRoot} className="pw-execution-trace" aria-label="执行调用轨迹" aria-busy={readWindow.busy} data-completeness={complete ? 'complete' : readWindow.view?.backfilling ? 'loading' : 'partial'}>
+    <section ref={bindRoot} className="pw-execution-trace" aria-label="执行调用轨迹" aria-busy={readWindow.busy} data-completeness={complete ? 'complete' : readWindow.busy ? 'loading' : 'partial'}>
     <header className="pw-trace-toolbar">
       <Select aria-label="选择执行记录" selectedKey={selectedRun || 'current'} onSelectionChange={key => chooseRun(key === 'current' ? '' : String(key))}
         triggerClassName="pw-trace-run-trigger" popoverClassName="pw-trace-run-popover" popoverContainer={popoverContainer} className="pw-trace-run-select" isDisabled={!canRead}>
         <SelectItem id="current" textValue="当前执行">当前执行</SelectItem>
         {runs.filter(run => run.runId !== currentRunId).map(run => <SelectItem key={run.runId} id={run.runId} textValue={`${traceTime(run.startedAt)} · ${traceStatus(run.status)}`}><span>{traceTime(run.startedAt)}<small>{traceStatus(run.status)}</small></span></SelectItem>)}
       </Select>
-      <span className="pw-trace-read-status" role="status">{readWindow.busy ? <><Spinner size="xs" aria-hidden/>{readWindow.view?.backfilling ? '补齐中' : page ? '刷新中' : '读取中'}</>
-        : readWindow.live ? <><span className="pw-trace-live-dot"/>实时</> : page ? '已读取' : ''}</span>
-      <IconButton icon={IconRefresh} aria-label="刷新执行轨迹" disabled={!readWindow.enabled || readWindow.busy} onClick={readWindow.refresh}/>
+      <span className="pw-trace-read-status" role="status">{readWindow.busy ? <><Spinner size="xs" aria-hidden/>{backfilling ? '补齐中' : page ? '刷新中' : '读取中'}</>
+        : readFailed ? page ? '已保留' : '待核对' : page && readWindow.live ? <><span className="pw-trace-live-dot"/>自动刷新</> : page ? '已读取' : ''}</span>
+      {(!readFailed || !canRetryRun) && <IconButton icon={IconRefresh} aria-label="刷新执行轨迹" disabled={!readWindow.enabled || readWindow.busy || unavailable} onClick={readWindow.refresh}/>}
     </header>
     {!canRead && <p className="pw-trace-note">当前应用尚未开放这份轨迹读取，可在进展记录和工具调用中查看原记录。</p>}
-    {readWindow.error && <div className="pw-trace-read-error" role="alert"><p>{readWindow.error}</p>{page && <small>下方保留已读取的轨迹。自动刷新已暂停，刷新后继续补齐。</small>}</div>}
+    {readFailed && <div className="pw-trace-read-error"><p role="alert">{readWindow.error}</p>
+      <small>{unavailable ? '请返回上一页，从原入口重新打开这项工作。' : page
+        ? '下方只保留同轮已读记录，未确认最新进展。重新读取不会重新执行任务。'
+        : '没有核对到这次的轨迹。读取失败不代表任务没有执行。'}</small>
+      {canRetryRun && <Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={!readWindow.enabled || readWindow.busy}
+        onClick={retryRun}>重新读取本轮轨迹</Button>}
+    </div>}
     {page && <>
       {documentReads.length > 0 && <div className="pw-action-row"><Button variant="ghost" size="small" data-document-read={documentReads.length === 1 ? documentReads[0].id : undefined} disabled={!active || !readWindow.enabled} onClick={event => {
         if (documentReads.length === 1) select(documentReads[0], event.currentTarget);
@@ -470,9 +497,10 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
           <Button key={node.id} variant="secondary" size="small" disabled={!active || !readWindow.enabled} onClick={() => select(node)}>查看记录 #{node.sequence}</Button>)}
           {preferenceRequests.length > 4 && <Button variant="ghost" size="small" onClick={() => { setFilter('tool'); setQuery('保存默认偏好'); }}>筛选全部已读请求</Button>}</div>
       </AccordionItem></Accordion>}
-      <TraceOverview rows={events} mode={overviewMode} onModeChange={setOverviewMode} highlightedId={highlighted} turnCount={traceTurnCount(nodes)} toolCount={stats.tools} onLocate={locate}/>
-      <div className="pw-trace-completeness" role="status"><span>{readWindow.view?.backfilling ? '正在补齐较早记录' : complete ? '当前快照已完整读取' : '当前为部分记录'} · {nodes.length} 条</span><span>{stats.models} 次请求{stats.failed ? ` · ${stats.failed} 条异常` : ''}</span></div>
-      {stats.models > 0 && <dl className="pw-trace-token-summary" aria-label={complete ? '本次执行模型用量' : '已读取请求的部分用量'}><div><dt>输入 token</dt><dd>{aggregateLabel(stats.input)}</dd></div><div><dt>输出 token</dt><dd>{aggregateLabel(stats.output)}</dd></div></dl>}
+      <div className="pw-trace-completeness" role="status"><span>{coverage}{nodes.length > 0 ? ` · 已读 ${nodes.length} 条` : ''}</span>
+        {(stats.models > 0 || stats.failed > 0) && <span>{[stats.models > 0 && `已读 ${stats.models} 次模型请求`, stats.failed > 0 && `${stats.failed} 条异常`].filter(Boolean).join(' · ')}</span>}</div>
+      {events.length > 0 && <TraceOverview rows={events} mode={overviewMode} onModeChange={setOverviewMode} highlightedId={highlighted} turnCount={traceTurnCount(nodes)} toolCount={stats.tools} onLocate={locate}/>}
+      {stats.models > 0 && <dl className="pw-trace-token-summary" aria-label={complete ? '已读取请求的用量' : '已读取请求的部分用量'}><div><dt>输入 token</dt><dd>{aggregateLabel(stats.input)}</dd></div><div><dt>输出 token</dt><dd>{aggregateLabel(stats.output)}</dd></div></dl>}
       <div className="pw-trace-search-row"><SearchField aria-label="搜索执行轨迹" placeholder={filter === 'tool' ? '按工具用途或名称搜索' : '搜索调用、模型、轮次'} clearLabel="清空轨迹搜索" value={query} onChange={setQuery}/>
         <IconButton icon={viewMode === 'intervals' ? IconList : IconClock} aria-label={viewMode === 'intervals' ? '返回轮次列表' : '查看执行区间'} onClick={() => setViewMode(viewMode === 'intervals' ? 'events' : 'intervals')}/>
         <Button variant={viewMode === 'steps' ? 'secondary' : 'ghost'} aria-label="查看执行步骤" aria-pressed={viewMode === 'steps'} onClick={() => setViewMode(viewMode === 'steps' ? 'events' : 'steps')}>步骤</Button>
@@ -480,17 +508,17 @@ export function TaskTrajectory({ task, active, canRead, registerTransientBack, c
       <LiquidTabs className="pw-trace-filters" variant="minimal" tabs={['全部', '模型', '工具', '异常']} value={filters.indexOf(filter)} onValueChange={index => setFilter(filters[index])} label="轨迹筛选"/>
       {filter === 'tool' && filteredEvents.length > 0 && <p className="pw-trace-note">“工具已返回”仅表示收到了本次调用的结果，不代表动作或工作已成功。点原记录核对。</p>}
       {page.limited && <p className="pw-trace-note pw-trace-read-limit">原记录有部分内容未包含；即使已读到分页末尾，仍不是完整记录。</p>}
-      <div ref={currentView} className="pw-trace-current-view">{viewMode === 'events' ? filteredEvents.length ? <TraceEventList rows={filteredEvents} selectedId={selected?.node.id || null} highlightedId={highlighted} locateTicket={locateTicket} onHighlightEnd={endHighlight} onSelect={select} complete={complete}/>
+      <div ref={currentView} className="pw-trace-current-view">{viewMode === 'events' || !nodes.length ? filteredEvents.length ? <TraceEventList rows={filteredEvents} selectedId={selected?.node.id || null} highlightedId={highlighted} locateTicket={locateTicket} onHighlightEnd={endHighlight} onSelect={select} complete={complete}/>
         : <div className="pw-trace-empty"><p>{empty}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>
         : viewMode === 'intervals' ? <><div className="pw-trace-interval-controls"><p className="pw-trace-note">原始父子关系和实际执行区间</p><Button variant="ghost" onClick={() => setIntervalMode(intervalMode === 'timeline' ? 'tree' : 'timeline')}>{intervalMode === 'timeline' ? '调用树' : '时间轴'}</Button></div>
           <TraceWaterfall rows={traceRows(nodes, folded, filter, query)} bounds={traceBounds(nodes)} mode={intervalMode} selectedId={selected?.node.id || null} filtering={filtering} onToggle={toggle} onSelect={select}/></>
           : <><p className="pw-trace-note">按原记录的父子层级展开；连线不代表执行依赖或完成进度。</p>
-            {steps.length ? <ExecutionSteps steps={steps} scope={`${identity}:${page.runId}:${page.epoch}:${documentEpoch}`} active={active && readWindow.enabled && !readWindow.view?.backfilling}
+            {steps.length ? <ExecutionSteps steps={steps} scope={`${identity}:${page.runId}:${page.epoch}:${documentEpoch}`} active={active && readWindow.enabled && !backfilling}
               onSelect={id => { const node = nodes.find(value => value.id === id); if (node) select(node); }} onToggle={filtering ? undefined : toggleStep}/>
               : <div className="pw-trace-empty"><p>{empty}</p>{filtering && <Button variant="ghost" onClick={() => { setFilter('all'); setQuery(''); }}>清除筛选</Button>}</div>}</>}</div>
       <p className="pw-trace-note pw-trace-timing-note">轮次来自原执行记录；总览的累计耗时包含并行重叠。缺失的计时、用量与正文保持可见。</p>
     </>}
-    {!page && canRead && !readWindow.busy && !readWindow.error && <p className="pw-trace-note">打开此页后读取原任务轨迹。</p>}
+    {!page && canRead && !readWindow.busy && !readFailed && <p className="pw-trace-note">本页尚未核对到原任务轨迹。重读只查看记录，不会重新执行。</p>}
     <TraceDetails selection={selected} page={page} complete={complete} close={close} back={back} restoreDocumentTrigger={restoreDocumentTrigger} active={active && readWindow.enabled}
       openRelated={(node, sourceRevision) => {
         if (selected && !selected.fromSkill && readWindow.enabled && sourceRevision === getSourceRevision())

@@ -1003,6 +1003,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const media=catalogUnread||view.choosingSource?[]:rows(snapshot.media).length?rows(snapshot.media):snapshot.kind==='group_media_result'?[{...snapshot,operationId:snapshot.sourceOperationId,status:snapshot.mediaState}]:[];
  const allSources=catalogUnread||resultFilesOnly?[]:rows(snapshot.sources),savedFiles=catalogUnread?[]:rows(snapshot.artifacts);
  const privateLibrary=privateFiles&&!view.taskId&&!view.choosingSource&&!resultFilesOnly&&!state.chatAttachmentPickerOpen&&!onReturnToSearch;
+ const localFileDetail=mode==='detail'&&privateLibrary&&privateLibraryWindow(view)&&!!selection&&
+  view.focusedStandaloneDraft===false&&view.restoredWorkReturn===false;
+ const detailPreviewLabel=localFileDetail&&file.mimeType==='application/pdf'?'阅读原 PDF':
+  localFileDetail&&typeof file.mimeType==='string'&&file.mimeType.startsWith('image/')?'查看原图':'查看原件';
  const currentNative=bridge.getState(),libraryView=obj(currentNative.view);
  const documentHistory=obj(snapshot.documentActions),documentActions=rows(documentHistory.actions);
  const hasOlderDocumentActions=documentHistory.hasMore===true&&typeof documentHistory.nextCursor==='string'&&
@@ -1326,7 +1330,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  <p className="pw-muted">{file.mimeType} · {fileBytes(file.size??file.sizeBytes)}{(file.parentArtifact||file.source?.parentArtifact)&&' · 基于已有成果生成'}</p>
  {view.group&&<p className="pw-muted">这是原群任务与原受众的文件。群投递回执在原任务中核对。</p>}
  <div className="pw-action-row">
-  <Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button>
+  <Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>{detailPreviewLabel}</Button>
   {canReturnGeneratedDraft&&generatedDraftAction('secondary')}
   {reuseAction}
   {!scopedResultOnly&&exportAction}

@@ -763,7 +763,14 @@ internal class PocketWebAttachments(
                 }
                 "refresh" -> flow.refresh()
                 "cancel" -> if(flow.state.liveMessageOriginalOnly)clear()else flow.cancel()
-                "selectFile" -> flow.selectFile(selected())
+                "selectFile" -> {
+                    val file = selected()
+                    val view = flow.state
+                    if (ordinaryLibrary() && view.snapshot?.opt("taskId") == "" &&
+                        !view.fromWorkResult && !view.restoredWorkReturn)
+                        flow.selectWebLibraryDetails(file)
+                    else flow.selectFile(file)
+                }
                 "attach" -> flow.attach(selected())
                 "chooseSource" -> flow.chooseSource()
                 "import" -> flow.importSource(ordinaryLibrary())

@@ -498,7 +498,19 @@ internal class AttachmentOutcomeCoordinator(
             else "原汇报或本轮文件来源已变化，没有打开其他成果"
         }
     }
-    fun selectFile(file:JSONObject){cancel();restoreFile=null;val group=state.group;val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,file.getString("id"),file.getString("id"),group.audience,group.visibility,file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint));state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,error=null,notice=null,thumbnail=null,originalFile=null,originalReturn=AttachmentOriginalReturn.DETAILS,externalViewerResult=null,copyReceipt=null,previousCopyInFile=null);if(file.optString("mimeType").startsWith("image/"))loadThumbnail()}
+    fun selectFile(file:JSONObject)=selectFile(file, preloadThumbnail=true)
+    /** Private Web library details show metadata only; View explicitly reads the exact original. */
+    internal fun selectWebLibraryDetails(file:JSONObject)=selectFile(file, preloadThumbnail=false)
+    private fun selectFile(file:JSONObject,preloadThumbnail:Boolean){
+        cancel();restoreFile=null;val group=state.group
+        val selected=if(group==null)null else GroupResultAccess.Selection(group.requestId,group.taskId,group.spaceId,
+            file.getString("id"),file.getString("id"),group.audience,group.visibility,
+            file.optString("sourceOperationId",group.sourceOperationHint),file.optString("sourceTaskRunId",group.sourceRunHint))
+        state=state.copy(group=selected?:group,file=JSONObject(file.toString()),document=null,documentOpen=false,
+            error=null,notice=null,thumbnail=null,originalFile=null,originalReturn=AttachmentOriginalReturn.DETAILS,
+            externalViewerResult=null,copyReceipt=null,previousCopyInFile=null)
+        if(preloadThumbnail&&file.optString("mimeType").startsWith("image/"))loadThumbnail()
+    }
     @JvmOverloads
     fun backFromFile(afterRefresh:((Boolean)->Unit)?=null){
         if(state.originalReturn==AttachmentOriginalReturn.ENTRY){close();afterRefresh?.invoke(false);return}

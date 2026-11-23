@@ -50,6 +50,8 @@ type AnswerReceipt = Pick<PendingMessage, 'id' | 'runId' | 'memberId' | 'assignm
 type TeamTab = 'runs' | 'teams';
 type RunSection = 'progress' | 'result' | 'details';
 type EditorPurpose = 'start' | 'definition';
+type SavedTeamRunCatalog = { teamId: string; viewHandle: string; runs: Data[] };
+type SavedTeamRunReturn = { teamId: string; runId: string; inWindow: () => boolean };
 type MessageInput = { recipient: string; replyId: string; mode: string };
 type PendingStart = { teamId: string; since: number; goal: string };
 type ResultMember = { id: string; generation: number; deliveryKey: string; round: number };
@@ -273,6 +275,10 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const [draftCatalogChecked, setDraftCatalogChecked] = useState(false), [messageChecked, setMessageChecked] = useState(false);
   const startDraftId = useRef('');
   const [catalog, setCatalog] = useState<Data>({}), [tab, setTab] = useState<TeamTab>(originalWorkDraft ? 'teams' : 'runs');
+  const [savedTeamRunCatalog, setSavedTeamRunCatalog] = useState<SavedTeamRunCatalog | null>(null);
+  const savedTeamRunBlocked = useRef(false);
+  const savedTeamRunReturn = useRef<SavedTeamRunReturn | null>(null);
+  const reopenedTeamHistoryHandle = useRef('');
   const [catalogReady, setCatalogReady] = useState(false), [editorExpanded, setEditorExpanded] = useState<string[]>([]);
   const [queries, setQueries] = useState<Record<TeamTab, string>>({ runs: '', teams: '' });
   const query = queries[tab], setQuery = (value: string) => setQueries(old => ({ ...old, [tab]: value }));
@@ -333,6 +339,11 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     const view = object(bridge.getState().view);
     return view.section === 'teams' && !view.taskId;
   };
+  const captureTeamWindow = () => {
+    const epoch = bridge.getDocumentEpoch(), resume = object(bridge.getState().view).resumeRevision;
+    return () => alive.current && !backgrounded.current && !document.hidden && ownsNativeWindow() && Number.isSafeInteger(resume) &&
+      bridge.getDocumentEpoch() === epoch && object(bridge.getState().view).resumeRevision === resume;
+  };
   const root = useRef<HTMLElement>(null), positions = useRef(new Map<string, number>());
   const listSelection = useRef<Partial<Record<TeamTab, string>>>({});
   const messageInputs = useRef(new Map<string, MessageInput>()), startInputs = useRef(new Map<string, { goal: string; rounds: string }>());
@@ -340,6 +351,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   const viewKey = readingKey(reading, tab), shownView = useRef(viewKey);
   useSurfaceEnter(root, viewKey, { selector: ':scope > .pw-team-reading, :scope > .pw-team-tabs, :scope > .pw-collaboration-directory, :scope > .pw-team-empty', depth: reading?.kind === 'run' ? 2 : reading ? 1 : 0, active: workspaceActive });
   currentReading.current = reading; currentReview.current = review; currentPhoneSelection.current = phoneSelection;
+  savedTeamRunBlocked.current = !!(originalWorkDraft || editor || formDraft.loading || memberDraft || review || phoneSelection);
   currentInput.current = { recipient, replyId, mode, goal, rounds };
   const rememberView = () => {
     const scroll = root.current?.closest<HTMLElement>('.pw-secondary-scroll');
@@ -440,6 +452,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   };
   const acceptReading = (next: Data) => {
     if(acceptedSummary.current?.handle!==next.viewHandle)acceptedSummary.current=null;
+    const origin = savedTeamRunReturn.current;
+    if (origin && (next.kind !== 'run' || next.run?.id !== origin.runId || next.run?.teamId !== origin.teamId)) savedTeamRunReturn.current = null;
     rememberView();
     if (next.kind !== 'run' || next.run?.id !== currentReading.current?.run?.id) { setMemberDraft(null); setResultSource(null); }
     release(currentReading.current); setReading(next);
@@ -471,17 +485,60 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     return () => cancelAnimationFrame(frame);
   }, [composeOpen, replyId]);
   const acceptCatalog = (value: Data) => {
-    setCatalog(value); setCatalogReady(true);
+    setCatalog(value); setCatalogReady(true); setSavedTeamRunCatalog(null);
+  };
+  const acceptDefinitionCatalog = (id: string, value: Data, reopenHistory = false) => {
+    const fresh = object(value.catalog), next = value.reading;
+    if (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs)) { release(next); throw new Error('原团队目录尚未读取'); }
+    acceptCatalog(fresh);
+    if (next?.kind !== 'definition' || !label(next.viewHandle) || next.definition?.id !== id) {
+      release(next); throw new Error('原团队配置已变化');
+    }
+    if (!originalWorkDraft) {
+      const counts = new Map<string, number>();
+      const records = rows(fresh.runs);
+      for (const row of records) {
+        const runId = label(row?.id);
+        if (runId) counts.set(runId, (counts.get(runId) || 0) + 1);
+      }
+      // Snapshot membership, not a previously opened detail or a display name.
+      const runs = records.filter(row => row?.teamId === id && row.definitionKind !== 'one_time' && counts.get(row.id) === 1);
+      setSavedTeamRunCatalog({ teamId: id, viewHandle: next.viewHandle, runs });
+    }
+    if (reopenHistory) reopenedTeamHistoryHandle.current = next.viewHandle;
+    acceptReading(next);
+    if (reopenHistory) { setComposeOpen(false); setReplyId(''); }
+  };
+  const readDefinitionCatalog = (id: string, current: () => boolean, reopenHistory = false, unavailable?: () => void) => {
+    void invoke('teams.snapshot', { restoreDefinitionId: id }, value => {
+      if (!current()) { release(value.reading); return; }
+      acceptDefinitionCatalog(id, value, reopenHistory);
+    }, unavailable);
   };
   const load = () => { void invoke('teams.snapshot', {}, value => { acceptCatalog(value); if (formDraft.requiresRecheck || startDraft.requiresRecheck || memberFormDraft.requiresRecheck) setDraftCatalogChecked(true); }); };
   useEffect(() => { if (formDraft.requiresRecheck || startDraft.requiresRecheck || memberFormDraft.requiresRecheck) setDraftCatalogChecked(false); }, [formDraft.requiresRecheck, startDraft.requiresRecheck, memberFormDraft.requiresRecheck]);
-  const readRun = (id: string, fromDirectory = false) => { void invoke('teams.readRun', proposalRead(id), result => {
+  const readRun = (id: string, fromDirectory = false, savedTeam?: { id: string; current: () => boolean; inWindow: () => boolean }) => { void invoke('teams.readRun', proposalRead(id), result => {
     const next = result.reading;
-    if (next?.kind !== 'run' || !next.viewHandle || next.run?.id !== id) { release(next); throw new Error('原团队运行身份不匹配'); }
+    if (savedTeam && !savedTeam.current()) { release(next); return; }
+    if (next?.kind !== 'run' || !next.viewHandle || next.run?.id !== id ||
+        savedTeam && (next.run.teamId !== savedTeam.id || next.run.definitionKind === 'one_time')) {
+      release(next); throw new Error('原团队运行身份不匹配');
+    }
     if (fromDirectory && teamRunEntrySection(next) === 'result') setRunSections(old => old[id] ? old : { ...old, [id]: 'result' });
+    if (fromDirectory) savedTeamRunReturn.current = savedTeam ? { teamId: savedTeam.id, runId: id, inWindow: savedTeam.inWindow } : null;
+    if (savedTeam) setProposalEntry(null);
     acceptReading(next);
   }); };
-  const readDefinition = (id: string) => { void invoke('teams.readDefinition', { id }, value => { if (value.definition?.id !== id) throw new Error('团队配置身份不匹配，请刷新目录'); acceptReading(value); }); };
+  const readDefinition = (id: string) => {
+    if (originalWorkDraft) {
+      void invoke('teams.readDefinition', { id }, value => { if (value.definition?.id !== id) throw new Error('团队配置身份不匹配，请刷新目录'); acceptReading(value); });
+      return;
+    }
+    const inWindow = captureTeamWindow(), previousHandle = currentReading.current?.viewHandle;
+    if (entered.current || !inWindow()) return;
+    setSavedTeamRunCatalog(null);
+    readDefinitionCatalog(id, () => inWindow() && currentReading.current?.viewHandle === previousHandle);
+  };
   useEffect(() => {
     const requestId = runFocus?.requestId, runId = runFocus?.runId;
     if (!requestId || !runId || requestId === handledRunFocus.current || !workspaceActive || !catalogReady || busy || entered.current || backgrounded.current || !ownsNativeWindow()) return;
@@ -512,6 +569,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         }
       }
       setEditor(null); setMemberDraft(null); setResultSource(null); closeReview(); closePhoneSelection();
+      savedTeamRunReturn.current = null;
       if(accepted)acceptedSummary.current={handle:next.viewHandle,current:accepted.current};
       acceptReading(next);setProposalEntry(proposal?{source:proposal,returnToWork:runFocus?.returnToWork}:null);
       setWorkPackage(pack&&runFocus?.returnToWork?{view:next.viewHandle,returnToWork:runFocus.returnToWork}:null);
@@ -574,12 +632,13 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         }
       }
       const focus=teamFollowUpFocus(next,object(result.focus),locator),id=next.run.id;
+      savedTeamRunReturn.current = null;
       setResultSource(null); acceptReading(next);
       showDecisionTarget(id,next.viewHandle,focus);
       onAttentionConsumed?.(requestId);
     }, () => onAttentionConsumed?.(requestId));
   }, [attentionFocus?.requestId, workspaceActive, catalogReady, busy]);
-  const back = () => { const leave = () => { rememberView(); release(reading); acceptedSummary.current=null; setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); })))); };
+  const back = () => { const leave = () => { rememberView(); release(reading); acceptedSummary.current=null; savedTeamRunReturn.current=null; setTab(reading?.kind === 'run' ? 'runs' : 'teams'); setReading(null); setComposeOpen(false); setReplyId(''); setEditor(null); setMemberDraft(null); setError(''); setNotice(''); }; formDraft.guard(() => startDraft.guard(() => messageDraft.guard(() => memberFormDraft.guard(() => { if (materialBeforeLeave.current) materialBeforeLeave.current(leave); else leave(); })))); };
   const openRelatedTask = (id: string,item?:Data) => {
     const origin=currentReading.current,live=bridge.getState(),view=object(live.view);
     const board=item&&origin?.kind==='run'&&['awaiting_input','awaiting_user','needs_confirmation','blocked_unknown','paused','failed','interrupted'].includes(item.status)
@@ -645,6 +704,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   useEffect(() => { alive.current = true; return () => { alive.current = false; requestGeneration.current++; retireWorkResult(); release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
   const restoreWorkspace = () => {
     if (backgrounded.current || !ownsNativeWindow()) return;
+    savedTeamRunReturn.current = null;
     // A retired read did not consume its notification; a fresh owner window may locate it again.
     handledAttention.current = '';
     handledRunFocus.current = '';
@@ -663,13 +723,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         const next = value.reading, shown = currentReading.current;
         if (!alive.current || generation !== requestGeneration.current || backgrounded.current || !ownsNativeWindow() ||
             shown?.kind !== 'definition' || shown.definition?.id !== id) { release(next); return; }
-        const fresh = object(value.catalog);
-        if (!Array.isArray(fresh.teams) || !Array.isArray(fresh.runs)) { release(next); throw new Error('原团队目录尚未读取'); }
-        acceptCatalog(fresh);
-        if (next?.kind !== 'definition' || typeof next.viewHandle !== 'string' || !next.viewHandle || next.definition?.id !== id) {
-          release(next); throw new Error('原团队配置已变化');
-        }
-        acceptReading(next);
+        acceptDefinitionCatalog(id, value);
         return;
       }
       const returning = deliveryReturn.current;
@@ -786,14 +840,50 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     return {source:work.source,rearm:work.rearm,summary,resume,request};
   };
   useLayoutEffect(() => { if(workResultReturn.current&&!verifiedWorkResultReturn())retireWorkResult(); });
+  const verifiedSavedTeamReturn = () => {
+    const origin = savedTeamRunReturn.current, shown = currentReading.current;
+    return origin?.inWindow() && shown?.kind === 'run' && label(shown.viewHandle) &&
+      shown.run?.id === origin.runId && shown.run?.teamId === origin.teamId && shown.run?.definitionKind !== 'one_time' ? origin : null;
+  };
   const backFromRun = () => {
-    if(!verifiedWorkResultReturn()){retireWorkResult();back();return;}
-    // App uses the same registered Team draft guard as the normal outer Back.
-    onOpenWork?.(currentReading.current!.ownerWorkLink,'returnResult');
+    if (verifiedWorkResultReturn()) {
+      // App uses the same registered Team draft guard as the normal outer Back.
+      onOpenWork?.(currentReading.current!.ownerWorkLink,'returnResult');
+      return;
+    }
+    retireWorkResult();
+    const origin = verifiedSavedTeamReturn();
+    if (!origin) { back(); return; }
+    const generation = requestGeneration.current;
+    leaveWithDrafts(() => {
+      if (generation !== requestGeneration.current || savedTeamRunBlocked.current || verifiedSavedTeamReturn() !== origin) return;
+      // Progress reads may renew the same run's handle while the draft is saved.
+      const handle = currentReading.current?.viewHandle;
+      const stillOnRun = () => !savedTeamRunBlocked.current && verifiedSavedTeamReturn() === origin && currentReading.current?.viewHandle === handle;
+      readDefinitionCatalog(origin.teamId, stillOnRun, true, () => {
+        if (!stillOnRun()) return;
+        savedTeamRunReturn.current = null;
+        setNotice('未能返回原编组，仍保留当前协作和草稿。再次返回可查看协作记录。');
+      });
+    });
   };
   useEffect(() => { registerTransientBack(() => { if (frozenFilesBack.current?.()) return true; if (materialBack.current?.()) return true; if (busy) return true; if (review) { closeReview(); return true; } if (phoneSelection) { closePhoneSelection(); return true; } if (memberDraft) { memberFormDraft.guard(() => setMemberDraft(null)); return true; } if (editor) { formDraft.guard(() => setEditor(null)); return true; } if (resultBack.current()) return true; if(focusedPackage){leaveWithDrafts(focusedPackage.returnToWork);return true;} if (focusedProposal?.returnToWork) { leaveWithDrafts(focusedProposal.returnToWork); return true; } if (reading) { backFromRun(); return true; } return false; }); return () => registerTransientBack(null); }, [reading, review, phoneSelection, memberDraft, editor, busy, focusedPackage, focusedProposal, onOpenWork, registerTransientBack]);
   const definition = reading?.kind === 'definition' ? object(reading.definition) : null;
   const definitionReady = workspaceActive && (!definition || !!reading?.viewHandle);
+  const teamRunSource = definition && !!reading?.viewHandle && savedTeamRunCatalog && savedTeamRunCatalog.teamId === definition.id &&
+    savedTeamRunCatalog.viewHandle === reading.viewHandle ? savedTeamRunCatalog : null;
+  const savedRuns = teamRunSource ? [...teamRunSource.runs].sort((a, b) =>
+    Number(teamHasEnded(a.status)) - Number(teamHasEnded(b.status)) || (b.createdAt || 0) - (a.createdAt || 0)) : [];
+  const openSavedTeamRun = (runId: string) => {
+    if (!teamRunSource?.runs.some(row => row.id === runId) || busy || materialBusy || !definitionReady) return;
+    const { teamId, viewHandle } = teamRunSource, inWindow = captureTeamWindow(), generation = requestGeneration.current;
+    const current = () => inWindow() && !savedTeamRunBlocked.current && currentReading.current?.kind === 'definition' &&
+      currentReading.current.definition?.id === teamId && currentReading.current.viewHandle === viewHandle;
+    if (!current()) return;
+    leaveWithDrafts(() => {
+      if (generation === requestGeneration.current && current()) readRun(runId, true, { id: teamId, current, inWindow });
+    });
+  };
   const canEditSavedMember = ['teams.reviewDefinition', 'teams.confirm'].every(command => bridge.getState().capabilities.commands.includes(command));
   const definitionMembers = rows(definition?.members);
   const modelKind = modelTeamKind(definition), modelTemplate = modelKind !== null;
@@ -1684,7 +1774,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
     rows(editor.members).every(member => member.runner === 'model' && (!member.device || member.device === 'phone'));
   const reviewDefinitionBlocked = !editor || busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck ||
     !definitionReady || !editorPayload || !editor.name.trim() || editor.name.length > 80 || incompleteMembers.length > 0 || !!discussionError;
-  const refreshReading = <IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="刷新当前记录" title="刷新当前记录" disabled={busy || materialBusy} onClick={() => current ? readRun(current.id) : definition ? void invoke('teams.readDefinition', { id: definition.id }, acceptReading) : load()} />;
+  const refreshReading = <IconButton className="pw-utility-icon" icon={IconRefresh} aria-label="刷新当前记录" title="刷新当前记录" disabled={busy || materialBusy} onClick={() => current ? readRun(current.id) : definition ? readDefinition(definition.id) : load()} />;
   const startRecoveries = [
     ...(formDraft.requiresRecheck && quickStartPending ? [{ kind: 'quick' as const, pending: quickStartPending }] : []),
     ...(startDraft.requiresRecheck && savedStartPending ? [{ kind: 'saved' as const, pending: savedStartPending }] : []),
@@ -1724,7 +1814,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   return <section ref={root} className="pw-team-workspace pw-depth-collaboration" data-team-layer={reading ? 'detail' : 'list'} data-team-view={viewKey} inert={!workspaceActive} aria-busy={!workspaceActive || busy}>
     <div className="pw-team-loading">{(!workspaceActive || busy) && <ProgressBar aria-label={workspaceActive ? '正在读取原团队回执' : '正在进入团队工作区'} isIndeterminate showValueLabel={false} size="sm" />}</div>
     {error && error !== alreadyShownError && !editor && !memberDraft && !review && !phoneSelection && <MotionFeedback identity={error} className="pw-secondary-error" role="alert">{error}</MotionFeedback>}{notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
-    {reading && <nav className="pw-team-location" aria-label="协作记录导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={backFromRun}>{verifiedWorkResultReturn() ? '返回原工作' : current ? '协作记录' : '全部编组'}</Button></nav>}
+    {reading && <nav className="pw-team-location" aria-label="协作记录导航"><Button variant="ghost" leadingIcon={IconArrowLeft} disabled={busy} onClick={backFromRun}>{verifiedWorkResultReturn() ? '返回原工作' : verifiedSavedTeamReturn() ? '返回原编组' : current ? '协作记录' : '全部编组'}</Button></nav>}
     {!reading && <div className="pw-team-directory-intro"><div><h2>{choosingOriginalTeam ? replacingDraftTeam ? '更换协作编组' : '为原对话选编组' : '一起完成'}</h2><p>{choosingOriginalTeam
       ? replacingDraftTeam ? <>当前是 <bdi>{replacingDraftTeam.label}</bdi>。只有确认更换才会改动原草稿。</> : '只关联到原对话草稿，不发送，也不启动协作。'
       : onAskButler && !originalWorkDraft && !entries.length && directoryState === 'empty' ? '先写目标，不用先建编组。管家提出分工后，在原工作里核对。' : '分工、进展与成果，都在这里。'}</p></div>
@@ -1796,7 +1886,20 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
           {carryToOriginalDraft ? '在原对话关联这个编组' : goal.trim() ? '带目标和编组回管家' : '带编组回管家'}</Button>
         <p>{carryToOriginalDraft ? '只关联编组，原输入与工作引用不变，不发送。' : ordinaryTemplate ? '带回只预填管家草稿，不发送。你提交目标后，再到同一件工作里审阅具体分工。' : '回到管家可继续编辑，确认发送后才交办。实际分工仍由你审阅。'}</p>
       </section>}
-      <div className="pw-team-definition-settings"><Accordion variant="divided"><AccordionItem id="definition-management" title="管理编组"><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除编组</Button></AccordionItem></Accordion></div>
+      <div className="pw-team-definition-settings"><Accordion variant="divided" defaultExpandedKeys={reopenedTeamHistoryHandle.current && reopenedTeamHistoryHandle.current === reading?.viewHandle ? ['definition-runs'] : undefined}>
+        {!originalWorkDraft && <AccordionItem id="definition-runs" title="此编组的协作记录" description={teamRunSource ? (savedRuns.length ? savedRuns.length + ' 条已读取' : '本次未核对到相关记录') : undefined}>
+          {!teamRunSource ? <><p className="pw-field-hint" role="status">{busy ? '正在核对此编组的协作记录。' : '暂未核对到此编组的协作记录。'}</p>
+            <Button variant="ghost" disabled={busy || materialBusy} onClick={() => readDefinition(definition.id)}>重新读取</Button></>
+            : savedRuns.length ? <><p className="pw-field-hint">列表显示读取时的状态。打开记录查看原协作进展。</p>
+              <div className="pw-object-list">{savedRuns.map(row => <Button key={row.id} variant="ghost" trailingIcon={IconChevronRight}
+              className="pw-object-row pw-team-directory-row h-auto whitespace-normal" disabled={busy || materialBusy || formDraft.loading || !definitionReady} onClick={() => openSavedTeamRun(row.id)}>
+              <span className="pw-object-row-copy"><span className="pw-object-row-title">{teamGoalTitle(row.goal, '这次协作')}</span>
+                <small className="pw-team-directory-meta"><span className="pw-team-state" data-state={row.status}>{status(row.status)}</span>{teamTimeLabel(row.createdAt) && <time>{teamTimeLabel(row.createdAt)}</time>}</small>
+              </span>
+            </Button>)}</div></> : <p className="pw-field-hint">本次读取的目录中，未核对到此编组的协作。</p>}
+        </AccordionItem>}
+        <AccordionItem id="definition-management" title="管理编组"><Button variant="ghost" disabled={busy || !definitionReady} onClick={() => void invoke('teams.reviewRemove', { viewHandle: reading!.viewHandle }, reviewResult)}>移除编组</Button></AccordionItem>
+      </Accordion></div>
 
     </article>}
     {current && !acceptedSummaryRetired && <article className="pw-team-reading pw-team-run">
