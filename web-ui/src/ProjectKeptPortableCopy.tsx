@@ -117,7 +117,7 @@ export function ProjectKeptPortableCopy({shelf,pages,delivery,active,current}:{s
       const result=proof(value,shelf.projectId);
       if(row(value).kind!=='owner_kept_portable_review'||!result||!samePage(page,result.page))throw Error();
       setOffered(result);
-    },'这版未能核对为保留了原样式和计数器的内置起步网页。没有创建或写入副本。');
+    },'未核对到使用内置配色和原计数器的起步网页。没有创建或写入副本。');
   };
   const take=(value:Proof,allow:boolean)=>{
     setOffered(null);
@@ -168,7 +168,7 @@ export function ProjectKeptPortableCopy({shelf,pages,delivery,active,current}:{s
   return <>{previousCopy}<Accordion variant="divided" className="pw-compact-disclosures">
     <AccordionItem id="kept-portable-html" title="保存单文件离线副本">
       <div className="pw-form-flow">
-        <p className="pw-field-hint">只支持保留原样式和计数器的内置离线起步页。副本不改项目文件和这版保留网页。</p>
+        <p className="pw-field-hint">只支持内置离线起步页的原计数器和内置配色。副本不改项目文件和这版保留网页。</p>
         {offered?<><p>这次将保存 {new Date(offered.page.savedAt).toLocaleString()} 的网页内容、内嵌样式和计数器，作为新的 HTML 文件。</p>
           {summary(offered)}
           <p className="pw-field-hint">选择系统位置不会写入内容。回来后，请重新打开「保留的网页」，确认文件名再写入。</p>

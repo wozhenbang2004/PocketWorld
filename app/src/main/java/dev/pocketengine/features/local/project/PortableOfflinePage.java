@@ -14,6 +14,20 @@ public final class PortableOfflinePage {
     private static final String SCRIPT="<script type=\"module\" src=\"/src/main.js\"></script>";
     private static final String CHARSET="<meta charset=\"UTF-8\">";
     private static final int MAX_INPUT_BYTES=4096,MAX_OUTPUT_BYTES=16*1024;
+    // Code-owned alternatives for the original v2 stylesheet only. Mirror the exact
+    // bytes in ProjectOfflinePagePalette; the registered starter source remains unchanged.
+    private static final String PAPER_CSS_SUFFIX="""
+        :root { color-scheme: light; }
+        body { background-color: #f4f1ec; color: #211f1b; }
+        button { background-color: #302b24; color: #fffaf1; border: 1px solid #302b24; }
+        button:focus-visible { outline: 2px solid #44392e; outline-offset: 3px; }
+        """;
+    private static final String INK_CSS_SUFFIX="""
+        :root { color-scheme: dark; }
+        body { background-color: #121417; color: #f3f4f6; }
+        button { background-color: #e6ebf4; color: #171a20; border: 1px solid #e6ebf4; }
+        button:focus-visible { outline: 2px solid #ebeff5; outline-offset: 3px; }
+        """;
 
     public record Copy(byte[] bytes,String sha256){
         public Copy{bytes=bytes.clone();}
@@ -23,12 +37,12 @@ public final class PortableOfflinePage {
 
     public static Copy fromVerifiedStarter(byte[] entry,byte[] css,byte[] js)throws Exception{
         var template=ProjectLiveProjectTemplate.builtinSavedPageStarterFiles();
-        String stylesheet=template.get("src/style.css"),counter=template.get("src/main.js");
-        if(entry.length>MAX_INPUT_BYTES||!Arrays.equals(css,utf8(stylesheet))||!Arrays.equals(js,utf8(counter)))
+        String stylesheet=verifiedStylesheet(css,template.get("src/style.css")),counter=template.get("src/main.js");
+        if(entry.length>MAX_INPUT_BYTES||stylesheet==null||!Arrays.equals(js,utf8(counter)))
             throw unavailable();
         String html=StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(entry)).toString();
         requireLiteralFields(html,template.get("index.html"));
-        // The exact stock stylesheet has no URLs; the exact stock counter has no imports.
+        // These exact code-owned stylesheets have no URLs; the exact stock counter has no imports.
         // Inlining removes the app-only /src paths and does not need a local server or module loader.
         String csp="<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'sha256-"+
             inlineHash(stylesheet)+"'; script-src 'sha256-"+inlineHash(counter)+"'; base-uri 'none'; form-action 'none'\">";
@@ -37,6 +51,13 @@ public final class PortableOfflinePage {
             .replace(LINK,"<style>"+stylesheet+"</style>").replace(SCRIPT,"<script>"+counter+"</script>"));
         if(result.length>MAX_OUTPUT_BYTES)throw unavailable();
         return new Copy(result,ProjectSources.sha256(result));
+    }
+
+    private static String verifiedStylesheet(byte[] saved,String stock){
+        if(saved.length>MAX_INPUT_BYTES)return null;
+        for(String known:new String[]{stock,stock+PAPER_CSS_SUFFIX,stock+INK_CSS_SUFFIX})
+            if(Arrays.equals(saved,utf8(known)))return known; // Inline the code-owned literal, not arbitrary stored CSS.
+        return null;
     }
 
     private static void requireLiteralFields(String html,String template){

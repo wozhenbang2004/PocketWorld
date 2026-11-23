@@ -9,6 +9,7 @@ import {checkoutDirectoryPage,checkoutFileParent,ProjectCheckoutDirectory,type D
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { canOpenSavedStaticPreview, ProjectSavedStaticPreview, type SavedStaticEditor } from './ProjectSavedStaticPreview';
 import { offlinePageDraftText, ProjectOfflinePageFields, readOfflinePageFields, type OfflinePageFields } from './ProjectOfflinePageFields';
+import { offlinePagePaletteFor, offlinePagePaletteStylesheet, ProjectOfflinePagePalette, type OfflinePagePaletteId } from './ProjectOfflinePagePalette';
 import { bridge } from './bridge';
 import { ProjectSourceCheckpointScreen, ReturnedSourceCheckpointComparison } from './ProjectSourceCheckpointScreen';
 import { useSourceCheckpointFiles, type CheckpointFilesOrigin } from './project-source-checkpoint-files';
@@ -645,6 +646,30 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
       drawerScroll:area.closest('.pw-settings-dialog-content')?.scrollTop??0};
     if(!sameStaticEditor(visit))return;
     activeStaticPreview.current=visit;setStaticPreview(visit);
+  };
+  const originalPalette=(value:Data)=>{
+    if(originalOfflinePageEditorCurrent?.()!==true||sourceMember||hostFile||checkpointArrival||checkpoints.occupied()||
+      moving.current||finder!=='path'&&finder!=='directory'||folderEditorNow.current||localFind||choice||
+      activeAdoption.current||activeMarkdown.current||activeStaticPreview.current||pythonReviewNow.current||
+      orphan!==null||blockedEdit.current||value.path!=='src/style.css'||value.formalFile||
+      value.editSequence!==editSequence.current||!cleanChangeSource(value)||
+      !bridge.getState().capabilities.commands.includes(command+'edit'))return;
+    return offlinePagePaletteFor(value.text);
+  };
+  const savedPalette=file&&originalPalette(file);
+  const paletteFrame=file&&savedPalette?{file,saved:savedPalette,generation:generation.current,key:pageFieldsEditorKey(file)}:null;
+  const syncPalette=(frame:NonNullable<typeof paletteFrame>,selection:OfflinePagePaletteId)=>{
+    const area=editorInput.current,next=offlinePagePaletteStylesheet(selection);
+    if(!next||selection===frame.saved||!live(frame.generation)||entered.current||edits.current||
+      currentFile.current!==frame.file||pageFieldsEditorKey(frame.file)!==frame.key||originalPalette(frame.file)!==frame.saved||
+      !area?.isConnected||area.value!==textareaText(frame.file.text))return false;
+    const sequence=editSequence.current;
+    edit(next); // The ordinary dirty draft only. The owner still chooses Save and Preview separately.
+    if(editSequence.current!==sequence+1||currentText.current!==next)return false;
+    requestAnimationFrame(()=>{
+      if(live(frame.generation)&&currentFile.current?.fileHandle===frame.file.fileHandle)editorHeading.current?.focus({preventScroll:true});
+    });
+    return true;
   };
   const rememberStaticRoot=(visit:StaticPreviewVisit,paths:readonly string[])=>{
     if(activeStaticPreview.current!==visit||visit.editor.companion||!sameStaticEditor(visit))return;
@@ -1363,6 +1388,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
             if(!area||!range){setError('编辑框和已读取的版本不一致，没有替你移动光标。');return}
             area.focus();area.setSelectionRange(...range);
           }}>在编辑框选中这一处</Button>}</div>}
+        {paletteFrame&&<ProjectOfflinePagePalette key={paletteFrame.key} saved={paletteFrame.saved}
+          busy={locked} sync={selection=>syncPalette(paletteFrame,selection)} />}
         {canFindInFile && <>
           <div className="pw-form-actions"><Button ref={findTrigger} variant="ghost" size="small" leadingIcon={IconSearch}
             disabled={findBlocked} aria-expanded={!!localFind} aria-controls={localFind ? findId : undefined}

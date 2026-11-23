@@ -428,6 +428,20 @@ function ordinaryChatWorkRow(task:Task|undefined,conversation:string,detail=fals
   raw.ownerPhoneControl==null&&raw.ownerDeviceWork==null&&
   (!detail||raw.taskProjection==='detail_window'&&raw.auditBodyIncluded===true&&raw.taskCoreReadLimited===false)?work:null;
 }
+function settledOrdinaryWorkStop(task:Task|undefined,expected:WorkIdentity){
+ const raw=task?.raw,source=obj(raw?.ownerWork);
+ if(task?.status!=='cancelled'||raw?.status!=='cancelled'||raw.taskId!==expected.taskId||
+    typeof raw.conversationId!=='string'||!raw.conversationId.trim()||raw.metadataLimited===true||
+    raw.cancelRequested!==true||raw.hasUnresolvedOperations!==false||raw.historyHasUnconfirmedOperations!==false||
+    source.relatedRunId!==expected.runId||source.relatedTaskCount!==0||source.relatedSourcesUnavailable!==false||
+    !Array.isArray(source.relatedPendingChildren)||source.relatedPendingChildren.length!==0||
+    !Array.isArray(raw.ownerWorkTeams)||raw.ownerWorkTeams.length!==0||raw.ownerWorkTeamsUnavailable===true||
+    raw.relatedTasks!=null&&(!Array.isArray(raw.relatedTasks)||raw.relatedTasks.length!==0)||
+    ['ownerWorkPreparation','ownerResultHandling','ownerWorkTakeover','deviceSourceScope','workProfileRef','workProfileIntent',
+     'projectMemoryRead','teamWriteScope','sourceLearningJob','sshSelection','extensionSelection'].some(key=>raw[key]!=null))return false;
+ const actual=ordinaryChatWorkRow(task,raw.conversationId,true);
+ return !!actual&&!!actual.runId&&actual.epoch>0&&workIdentityKey(actual)===workIdentityKey(expected);
+}
 function currentCompletedDirectoryProjection(pin:DirectoryResultRead,live:ReturnType<typeof bridge.getState>,documentEpoch:number,navigation:number,revision:number){
  const {window,run}=pin,view=obj(live?.view);
  if(documentEpoch!==window.documentEpoch||navigation!==pin.navigation||live?.host?.ready!==true||
@@ -1393,7 +1407,7 @@ export default function App(){
  const dismissWorkSupplement=useCallback((target:WorkSupplementTarget)=>{
   setWorkSupplementTarget(previous=>previous===target?null:previous);
  },[]);
- const [workControls,setWorkControls]=useState<Record<string,WorkControlFeedback>>({});
+ const [workControls,setWorkControls]=useState<Record<string,WorkControlFeedback&{cancelAcknowledged?:boolean}>>({});
  const workControlEntered=useRef(new Set<string>());
  const [readingDocuments,setReadingDocuments]=useState<ReadingDocument[]>([]);const readingSerial=useRef(0);
  const originalChatTeamVisit=useRef<OriginalChatTeamReportVisit|null>(null);
@@ -5323,7 +5337,10 @@ export default function App(){
     return;
    }
    const message=receipt?.status==='rejected' ? receipt.message||'这次操作未开始，请处理后再试。' : receipt?.message||'已请求停止这件事，等待状态更新。';
-   setWorkControls(old=>({...old,[key]:{pending:false,unknown:receipt?.status==='unknown',message}}));
+   const cancelAcknowledged=receipt?.controlRequested==='cancel'&&receipt.newGrant===false&&receipt.cancelRequested===true&&
+    receipt.status!=='rejected'&&receipt.status!=='unknown'&&receipt.executionRole==='owner_work'&&
+    receipt.taskId===identity.taskId&&receipt.runId===identity.runId&&receipt.epoch===identity.epoch;
+   setWorkControls(old=>({...old,[key]:{pending:false,unknown:receipt?.status==='unknown',message,cancelAcknowledged}}));
   }).catch(error=>{
    keepOriginal=action==='continue';
    setWorkControls(old=>({...old,[key]:{pending:false,unknown:true,message:action==='continue'?ownerWorkContinuationReply(null,identity).feedback.message:error instanceof Error?error.message:'原工作控制回执尚未确认，请先核对原工作。'}}));
@@ -9092,7 +9109,15 @@ export default function App(){
   return null;
  };
  const selectedWorkIdentity=ownerWorkIdentity(selectedTask);
- const selectedWorkControl=selectedWorkIdentity?workControls[workIdentityKey(selectedWorkIdentity)]:undefined;
+ const selectedWorkFeedback=selectedWorkIdentity?workControls[workIdentityKey(selectedWorkIdentity)]:undefined;
+ // The request receipt alone is not the terminal result, and does not undo saved effects.
+ const stopSettled=selectedWorkFeedback?.cancelAcknowledged===true&&!selectedWorkFeedback.pending&&!selectedWorkFeedback.unknown&&
+   selectedWorkIdentity&&taskOpen&&!taskOpening&&snapshot?.host?.ready===true&&snapshot?.view?.section===null&&
+   openedTaskId.current===selectedWorkIdentity.taskId&&snapshot.view.taskId===selectedWorkIdentity.taskId&&
+   snapshot.view.resumeRevision===openedTaskResumeRevision.current&&
+   tasks.filter(row=>row.id===selectedWorkIdentity.taskId).length===1&&settledOrdinaryWorkStop(selectedTask,selectedWorkIdentity);
+ const selectedWorkControl=stopSettled&&selectedWorkFeedback?{...selectedWorkFeedback,
+  message:'本轮已停止。已保存的成果以原记录为准。'}:selectedWorkFeedback;
  const recheckSelectedWork=()=>{
   if(!selectedTask)return;
   const pin=ownerRequestOrigin?.ownerRequest;
