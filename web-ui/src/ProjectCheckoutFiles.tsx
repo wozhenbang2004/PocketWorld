@@ -318,7 +318,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
       }
     } catch (failure) {
       if(current()){
-        if(opening){opening.finish('未能确认原手机文件夹的文件清单。没有打开文件编辑页，可重新选择原手机副本。');return;}
+        if(opening){opening.finish('未能确认原副本的文件清单。没有打开文件编辑页，可重新选择同一副本。');return;}
         // The native file read can replace its single open editor before Web
         // receives (and validates) the reply. Only a definite no-send keeps A.
         const notSent=failure instanceof Error&&'code' in failure&&failure.code==='not_sent';
@@ -1084,7 +1084,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   const returnsToCheckpoint = checkpointSibling && hasCheckpointContinue() && cleanCheckpointDeparture(handle.current, currentFile.current);
   const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : returnsToCheckpoint ?
     fromCheckpointComparison ? '返回原来的两版比较' : '返回原副本的文件' :
-    originalDirectoryOpening && !originalDirectoryOpening.chosenSavedFile && !listing ? '返回项目预览' : '返回项目工作区';
+    originalDirectoryOpening && !originalDirectoryOpening.chosenSavedFile ? '返回项目预览' : '返回项目工作区';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
         typeof pin.handle !== 'string' || !pin.handle || !Number.isInteger(pin.version) || pin.version < 1 || !/^[a-f0-9-]{36}$/.test(pin.revisionId) ||

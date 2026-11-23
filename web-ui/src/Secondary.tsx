@@ -161,6 +161,12 @@ const ordinaryModelDraft = (value: ModelDraft): ModelDraft => ({
     maxRequestBytes: value.compatibility.maxRequestBytes, cacheMode: value.compatibility.cacheMode, cacheSupport: value.compatibility.cacheSupport,
   },
 });
+const stopModelTestWaiting = 'models.connection.test.stopWaiting';
+type SavedModelTestWait = {
+  target: { id: string; expectedRevision: number; editorId: string; draftRevision: number; waitId: string };
+  document: number; resume: number; generation: number; stopping: boolean; settled: boolean;
+};
+
 function ModelSettings({ state, connection, supported, run, adding = false, preset, initialField, onSaved, onInspect, registerTransientBack, registerBeforeLeave }: {
   state: Data; supported: (action: string) => boolean; run: Run; adding?: boolean;
   connection?: Data; preset?: AIServicePreset; initialField?: AIEditorField; onSaved: (snapshot: Data) => void; onInspect: () => void; registerTransientBack: BackHandlerRegistration; registerBeforeLeave: RegisterFormBeforeLeave;
@@ -213,6 +219,13 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
   const [draftModels, setDraftModels] = useState<Data[] | null>(null);
   const testResultView = useRef<HTMLDivElement>(null);
   const [unknownTest, setUnknownTest] = useState(false);
+  const testWait = useRef<SavedModelTestWait | null>(null);
+  const [testWaitState, setTestWaitState] = useState<'' | 'waiting' | 'stopping'>('');
+  const releaseTestWait = (wait: SavedModelTestWait | null) => {
+    if (testWait.current !== wait) return;
+    testWait.current = null;
+    if (alive.current) setTestWaitState('');
+  };
   const outcomeNotice = useRef<HTMLDivElement>(null);
   const [policyReset, setPolicyReset] = useState(false);
   const bedrock = form.provider === 'bedrock_anthropic';
@@ -249,12 +262,20 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
   }, [testResult, stale]);
   const testDraft = (): ConnectionTestDraft => ({ editorId, draftRevision: editRevision.current,
     connectionId: adding ? '' : text(original.current?.id), connectionRevision: adding ? 0 : Number(original.current?.revision) });
+  const ownsTestEditor = (wait: SavedModelTestWait) => {
+    const view = object(bridge.getState().view), draft = testDraft();
+    return alive.current && !document.hidden && wait.document === bridge.getDocumentEpoch() && wait.generation === ownerGeneration.current &&
+      view.section === 'models' && view.taskId === null && view.resumeRevision === wait.resume &&
+      draft.connectionId === wait.target.id && draft.connectionRevision === wait.target.expectedRevision &&
+      draft.editorId === wait.target.editorId && draft.draftRevision === wait.target.draftRevision;
+  };
   let policyNeedsSave = false, policyError = '';
   try { policyNeedsSave = compatibilityNeedsSave(form.compatibility, original.current, form); }
   catch (error) { policyError = error instanceof Error ? error.message : String(error); }
   const [consentTarget, setConsentTarget] = useState(adding ? '' : text(config.cleartextConsent));
   const clearSecret = () => {
     editRevision.current++; ownerGeneration.current++;
+    releaseTestWait(testWait.current);
     if (pendingOperation.current === 'save') setUnknownSave(true);
     if (pendingOperation.current === 'test') setUnknownTest(true);
     pendingOperation.current = null; submitted.current = null;
@@ -263,8 +284,36 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
   };
   const leaveEditor = useRef<(next: () => void) => void>(() => {});
   leaveEditor.current = next => {
-    if (requestInFlight.current || discarding || savedResultRef.current || restoringDraft) return;
-    formDraft.guard(() => { clearSecret(); leaving.current = true; next(); leaving.current = false; });
+    if (discarding || savedResultRef.current || restoringDraft) return;
+    const finishLeave = () => { clearSecret(); leaving.current = true; next(); leaving.current = false; };
+    const wait = testWait.current;
+    if (wait && ownsTestEditor(wait)) {
+      if (wait.stopping) return;
+      wait.stopping = true; setTestWaitState('stopping');
+      void (async () => {
+        let retired = false;
+        try {
+          const receipt = await bridge.command<{ stoppedWaiting?: boolean; waitId?: string }>(stopModelTestWaiting, wait.target);
+          retired = receipt?.stoppedWaiting === true && receipt.waitId === wait.target.waitId;
+        } catch { /* A lost stop acknowledgement is not proof of retirement. */ }
+        if (testWait.current !== wait || !ownsTestEditor(wait)) return;
+        if (!retired && !wait.settled) {
+          wait.stopping = false; setTestWaitState('waiting');
+          setFormError('尚未确认停止等待，可再按返回。没有重发测试。'); return;
+        }
+        setUnknownTest(true);
+        // Same non-secret draft flush as normal Back; keep the editor fenced
+        // until it finishes so no later edit or save is closed by this click.
+        try {
+          await formDraft.flush();
+          if (testWait.current === wait && ownsTestEditor(wait)) finishLeave();
+        } catch {
+          // The existing form draft error/conflict remains actionable in place.
+        } finally { releaseTestWait(wait); }
+      })();
+      return;
+    }
+    if (!requestInFlight.current) formDraft.guard(finishLeave);
   };
   useEffect(() => {
     registerBeforeLeave(next => leaveEditor.current(next));
@@ -294,7 +343,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
   }, []);
   const storeDraft = (value: ModelDraft) => formDraft.update({ ...ordinaryModelDraft(value), saveRequestId: saveRequestId.current });
   const change = (key: keyof Omit<typeof form, 'compatibility'>, value: string | boolean) => {
-    if (!draftReady || requestInFlight.current || saveUnresolved || discarding || savedResultRef.current) return;
+    if (!draftReady || requestInFlight.current || testWait.current || saveUnresolved || discarding || savedResultRef.current) return;
     if (form[key] === value) return;
     editRevision.current++;
     setTestResult(null); setFormError('');
@@ -310,7 +359,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
     setForm(next); storeDraft(next);
   };
   const changeCompatibility = (compatibility: CompatibilityDraft) => {
-    if (!draftReady || requestInFlight.current || saveUnresolved || discarding || savedResultRef.current) return;
+    if (!draftReady || requestInFlight.current || testWait.current || saveUnresolved || discarding || savedResultRef.current) return;
     editRevision.current++; setTestResult(null); setFormError(''); setPolicyReset(false);
     const next = { ...form, compatibility }; setForm(next); storeDraft(next);
   };
@@ -357,7 +406,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
     if (!draftReady || formDraft.conflict || formDraft.error || stale || saveUnresolved || savedResultRef.current) throw new Error('请先核对原连接与草稿，再继续保存。');
     const testing = action === 'models.connection.test';
     const reading = action === 'models.catalog.preview';
-    if (testing && unknownTest) throw new Error('原测试结果待核对；本表单不会重复发起测试。');
+    if (testing && (unknownTest || testWait.current)) throw new Error('原测试结果待核对；本表单不会重复发起测试。');
     if (policyError) throw new Error(policyError);
     if (testing && policyNeedsSave) throw new Error('先保存兼容与缓存设置，再测试原连接。');
     if (testing && bedrockNeedsSave) throw new Error('请先保存原 Bedrock 连接与有效短期凭据，再进行测试。');
@@ -378,7 +427,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
     const originalGeneration = ownerGeneration.current;
     pendingOperation.current = testing ? 'test' : reading ? 'catalog' : 'save';
     if (testing) setTestResult(null);
-    let saveDispatched = false;
+    let saveDispatched = false, wait: SavedModelTestWait | null = null;
     try {
       const payload: Data = { ...command.identity, name: form.name.trim(), url, model: form.model.trim(), provider: form.provider,
         apiKey: bedrock ? '' : form.apiKey, screenshots: form.screenshots, supportsImageInput: form.supportsImageInput, maxOutputTokens: output, cleartextConsent: bedrock ? '' : consent };
@@ -397,8 +446,27 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
         payload.draftReference = { objectId: draftObjectId, revision: stored.revision, requestId: saveRequestId.current };
         saveDispatched = true;
       }
-      const result = await run(reading ? 'models.catalog.preview' : testing ? command.action : saveAction, payload);
+      if (testedDraft && !adding && supported(stopModelTestWaiting)) {
+        const view = object(bridge.getState().view);
+        if (!Number.isSafeInteger(view.resumeRevision)) throw new Error('原服务窗口尚未核对，没有发送测试。');
+        wait = { target: { id: testedDraft.connectionId, expectedRevision: testedDraft.connectionRevision,
+          editorId: testedDraft.editorId, draftRevision: testedDraft.draftRevision, waitId: crypto.randomUUID() },
+          document: bridge.getDocumentEpoch(), resume: view.resumeRevision, generation: originalGeneration, stopping: false, settled: false };
+        if (!ownsTestEditor(wait)) throw new Error('原服务窗口已变化，没有发送测试。');
+        testWait.current = wait; setTestWaitState('waiting'); payload.waitId = wait.target.waitId;
+      }
+      const nativeAction = reading ? 'models.catalog.preview' : testing ? command.action : saveAction;
+      // This in-editor receipt may be retired intentionally and must not raise an error on the next page.
+      const result = await (wait ? bridge.command(nativeAction, payload) : run(nativeAction, payload));
+      if (wait) {
+        wait.settled = result?.status === 'tested' || result?.status === 'wait_retired' && result.waitId === wait.target.waitId;
+        if (wait.stopping) return;
+        releaseTestWait(wait);
+      }
       if (!alive.current || originalGeneration !== ownerGeneration.current) return;
+      if (wait && result?.status === 'wait_retired' && result.waitId === wait.target.waitId) {
+        pendingOperation.current = null; setUnknownTest(true); return;
+      }
       pendingOperation.current = null;
       if (catalogDraft && catalogDraft.draftRevision === editRevision.current && !currentStale.current) {
         if (result?.format !== 'pocketworld.draft-catalog.v1' || result?.status !== 'succeeded' || result?.saved !== false || result?.selectionChanged !== false || result?.editorId !== catalogDraft.editorId || result?.draftRevision !== catalogDraft.draftRevision || !Array.isArray(result?.models)) throw new Error('目录回执不属于当前服务草稿，请重新核对。');
@@ -422,15 +490,21 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
         }
       }
     } catch (failure) {
-      if (action === saveAction && (!saveDispatched || ['not_sent', 'not_accepted', 'invalid_request'].includes(text(object(failure).code)))) {
+      const notAccepted = ['not_sent', 'not_accepted', 'invalid_request'].includes(text(object(failure).code));
+      if (wait && notAccepted) {
+        wait.settled = true;
+        if (!wait.stopping) releaseTestWait(wait);
+      }
+      if (wait?.stopping) return;
+      if (action === saveAction && (!saveDispatched || notAccepted)) {
         formDraft.clearSubmitted(); if (alive.current) setUnknownSave(false);
       }
       if (!alive.current || originalGeneration !== ownerGeneration.current) return;
       pendingOperation.current = null;
-      if (testedDraft && alive.current && !['not_sent', 'not_accepted', 'invalid_request'].includes(text(object(failure).code))) setUnknownTest(true);
+      if (testedDraft && alive.current && !notAccepted) setUnknownTest(true);
       if (action === saveAction) {
         submitted.current = null;
-        if (saveDispatched && !['not_sent', 'not_accepted', 'invalid_request'].includes(text(object(failure).code))) {
+        if (saveDispatched && !notAccepted) {
           setUnknownSave(true); setForm(current => ({ ...current, expiresAt: '', apiKey: '', accessKeyId: '', secretAccessKey: '', sessionToken: '' }));
         }
       }
@@ -438,7 +512,7 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
     }
   };
   const request = async (action: string) => {
-    if (!supported(action) || requestInFlight.current || !draftReady || discarding || savedResultRef.current) return;
+    if (!supported(action) || requestInFlight.current || testWait.current || !draftReady || discarding || savedResultRef.current) return;
     requestInFlight.current = true;
     const requestedDraftRevision = editRevision.current;
     setFormError(''); setRequesting(true); setRequestedAction(action);
@@ -468,9 +542,9 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
   </div>;
   const apiKeyField = <TextField label="API 密钥" type="password" value={form.apiKey} onChange={value => change('apiKey', value)} autoComplete="new-password"
     placeholder={stale ? '先返回核对连接' : canRetainApiKey ? '已保存 · 留空保留' : '输入 API 密钥'} hint={apiKeyHint} />;
-  const fieldsLocked = !draftReady || requesting || saveUnresolved || discarding || Boolean(savedResult);
+  const fieldsLocked = !draftReady || requesting || Boolean(testWaitState) || saveUnresolved || discarding || Boolean(savedResult);
   const discardDraft = () => {
-    if (requestInFlight.current || saveUnresolved && !formDraft.conflict || savedResultRef.current) return;
+    if (requestInFlight.current || testWait.current || saveUnresolved && !formDraft.conflict || savedResultRef.current) return;
     setDiscardOpen(false); setDiscarding(true); clearSecret();
     formDraft.discard(() => { if (alive.current) { leaving.current = true; setDiscarding(false); onInspect(); leaving.current = false; } });
   };
@@ -491,11 +565,11 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
     <section className="pw-model-editor" aria-label={adding ? '新连接配置' : '当前连接配置'}>
       <div className="pw-model-editor-scroll">
       <div className="pw-field-hint pw-model-draft-status" aria-live="polite">
-        {restoringDraft ? <p>正在读取服务草稿…</p> : formDraft.error ? <><p role="alert">{formDraft.error}</p><Button variant="secondary" disabled={requesting || discarding} onClick={() => { if (savedResult) finishSaved(savedResult); else if (draftReady) formDraft.retry(); else void loadDraft(); }}>{savedResult ? '完成并返回' : draftReady ? '重试保存草稿' : '重新读取草稿'}</Button></>
+        {restoringDraft ? <p>正在读取服务草稿…</p> : formDraft.error ? <><p role="alert">{formDraft.error}</p><Button variant="secondary" disabled={requesting || !!testWaitState || discarding} onClick={() => { if (savedResult) finishSaved(savedResult); else if (draftReady) formDraft.retry(); else void loadDraft(); }}>{savedResult ? '完成并返回' : draftReady ? '重试保存草稿' : '重新读取草稿'}</Button></>
           : formDraft.conflict ? <><p role="alert">本机已有另一份更新的草稿。这次未保存输入仍保留，可对照后放弃这次输入，重新打开本机草稿。</p><Accordion><AccordionItem id="model-draft-conflict" title="对照本机已保存的草稿"><Facts items={[['服务名称', text(formDraft.conflict.name) || '未填写'], ['接口地址', text(formDraft.conflict.url) || '未填写'], ['模型', text(formDraft.conflict.model) || '未填写'], ['保存结果', formDraft.conflict.outcomeUnverified ? '原保存结果仍待核对' : '尚未提交']]} /></AccordionItem></Accordion></>
           : formDraft.restored && !saveUnresolved && !savedResult ? <p>已恢复服务草稿。</p> : null}
         {draftReady && !savedResult && <p>密钥与短期凭据仅留在当前编辑页，离开后需重新填写。</p>}
-        {draftReady && (formDraft.savedAt > 0 || formDraft.conflict) && (!saveUnresolved || formDraft.conflict) && !savedResult && <Button variant="ghost" disabled={requesting || discarding} onClick={() => setDiscardOpen(true)}>{formDraft.conflict ? '放弃这次未保存输入' : '放弃草稿'}</Button>}
+        {draftReady && (formDraft.savedAt > 0 || formDraft.conflict) && (!saveUnresolved || formDraft.conflict) && !savedResult && <Button variant="ghost" disabled={requesting || !!testWaitState || discarding} onClick={() => setDiscardOpen(true)}>{formDraft.conflict ? '放弃这次未保存输入' : '放弃草稿'}</Button>}
       </div>
       <fieldset className="pw-model-editor-fields" disabled={fieldsLocked}>
       {namedPreset ? <div className="pw-ai-preset-destination"><strong>{preset.name}</strong>
@@ -552,12 +626,16 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
       }}><ModelConnectionTestFeedback value={testResult} /></div>}
       {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status">
         <p>{testResult && !stale ? '' : '尚未取得可核对的测试回执，请返回原连接手动核对。'}本表单不会自动重试或再次发送。</p>
-        <Button variant="secondary" onClick={() => leaveEditor.current(onInspect)}>返回原连接核对</Button>
+        {!testWaitState && <Button variant="secondary" onClick={() => leaveEditor.current(onInspect)}>返回原连接核对</Button>}
       </div>}
       {(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}
       </div>
-      <footer className="pw-model-editor-footer"><p className="pw-field-hint pw-model-test-cost">{adding ? '先保存服务，再选择用于新工作的模型。保存不会发送测试消息。' : '保存不会切换默认模型。推理测试可能产生费用。'}</p>
-      <div className="pw-form-actions pw-model-save-actions"><Button variant="ghost" disabled={requesting || discarding || Boolean(savedResult) || restoringDraft || state.modelSaving || state.modelTesting} onClick={() => leaveEditor.current(onInspect)}>返回</Button>{!adding && testButton}<PressButton compact disabled={fieldsLocked || Boolean(formDraft.conflict) || Boolean(formDraft.error) || stale || Boolean(policyError) || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving || requestedAction === saveAction ? '保存中…' : '保存服务'}</PressButton></div></footer>
+      <footer className="pw-model-editor-footer"><p className="pw-field-hint pw-model-test-cost">{adding ? '先保存服务，再选择用于新工作的模型。保存不会发送测试消息。' :
+        testWaitState ? '可以停止等待并返回。服务方可能已处理本次测试并计费。' : '保存不会切换默认模型。推理测试可能产生费用。'}</p>
+      <div className="pw-form-actions pw-model-save-actions"><Button variant="ghost"
+        disabled={testWaitState === 'stopping' || requesting && !testWaitState || discarding || Boolean(savedResult) || restoringDraft ||
+          state.modelSaving || (adding || !supported(stopModelTestWaiting)) && state.modelTesting}
+        onClick={() => leaveEditor.current(onInspect)}>{testWaitState === 'stopping' ? '正在返回…' : testWaitState ? '停止等待，返回' : '返回'}</Button>{!adding && testButton}<PressButton compact disabled={fieldsLocked || Boolean(formDraft.conflict) || Boolean(formDraft.error) || stale || Boolean(policyError) || state.modelSaving || state.modelTesting || state.modelSelectionBusy || !supported(saveAction)} onClick={() => request(saveAction)}>{state.modelSaving || requestedAction === saveAction ? '保存中…' : '保存服务'}</PressButton></div></footer>
     </section>
     <SettingsDialog isOpen={Boolean(transport)} title="允许这个明文模型连接？" onClose={clearSecret}>
       {transport && <><Facts items={[[ '协议', providers.find(x => x.id === transport.provider)?.label ], ['地址', transport.displayTarget || transport.url]]} />

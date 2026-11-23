@@ -33,7 +33,7 @@ export type ProjectBuildEditorResume = CheckoutBuildEditorResume & { taskId:stri
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume; pythonEditor?:OriginalPythonRun };
 const builtinViteStarter='builtin_vite_starter';
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
-export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; exactStarterSource?:true; openDirectory?:true};
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; exactStarterSource?:true; exactSavedPageStarter?:true; openDirectory?:true};
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
@@ -321,7 +321,8 @@ function registeredImportedEditor(projectId:string):ProjectImportedEditor|null {
     !['ownerDevelopmentRequestId','ownerDraftWorkCopy','collectedFromCheckoutId','collectionOperationId'].some(key=>key in copy);
   return {projectId,checkoutId:copy.id,importIdentity:JSON.stringify(identity),sourceKind,window:ownerWindow(),
     ...(exactLocalPublication&&(sourceKind==='external_zip'||sourceKind==='saf_tree')?{exactPhoneSource:true as const}:{}),
-    ...(exactLocalPublication&&starter?{exactStarterSource:true as const}:{})};
+    ...(exactLocalPublication&&starter?{exactStarterSource:true as const,
+      ...(copy.ownerSavedPageStarter===true?{exactSavedPageStarter:true as const}:{})}:{})};
 }
 export function originalImportedEditor(projectId:string):ProjectImportedEditor|null {
   const {state,view}=bridge.getState(), nativeView=view as Data|undefined;
@@ -331,15 +332,19 @@ export function originalImportedEditor(projectId:string):ProjectImportedEditor|n
 export const sameImportedEditor = (target:ProjectImportedEditor, observed:ProjectImportedEditor|null) =>
   !!observed&&target.projectId===observed.projectId&&target.checkoutId===observed.checkoutId&&
   target.importIdentity===observed.importIdentity&&target.sourceKind===observed.sourceKind&&
-  target.exactPhoneSource===observed.exactPhoneSource&&target.exactStarterSource===observed.exactStarterSource&&target.window===observed.window;
-function soleRegisteredSafFolder(projectId:string,original:ProjectImportedEditor|null):ProjectImportedEditor|null {
-  if(original?.sourceKind!=='saf_tree'||original.exactPhoneSource!==true)return null;
+  target.exactPhoneSource===observed.exactPhoneSource&&target.exactStarterSource===observed.exactStarterSource&&
+  target.exactSavedPageStarter===observed.exactSavedPageStarter&&target.window===observed.window;
+function soleRegisteredSource(projectId:string,original:ProjectImportedEditor):ProjectImportedEditor|null {
   const copies=rows(bridge.getState().state.features?.local?.checkouts).filter(row=>row?.projectId===projectId);
   return copies.length===1&&copies[0].id===original.checkoutId?original:null;
 }
-/** Registration, not evidence that a file or its saved bytes are still there. */
+function soleRegisteredSafFolder(projectId:string,original:ProjectImportedEditor|null):ProjectImportedEditor|null {
+  return original?.sourceKind==='saf_tree'&&original.exactPhoneSource===true?soleRegisteredSource(projectId,original):null;
+}
+/** Registration only, not evidence that index.html or its saved bytes are still there. */
 export function originalSavedStaticFolder(projectId:string):ProjectImportedEditor|null {
-  return soleRegisteredSafFolder(projectId,originalImportedEditor(projectId));
+  const original=originalImportedEditor(projectId);
+  return original?.exactSavedPageStarter===true?soleRegisteredSource(projectId,original):soleRegisteredSafFolder(projectId,original);
 }
 /** A clean loaded formal commit may name its original phone folder, not open a source file. */
 export function originalAdoptedSafFolder(projectId:string,path:string,checkoutId:string):ProjectImportedEditor|null {
@@ -573,10 +578,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if(staticVisit){
       const target=staticVisit.source, available=rows(value.checkouts), copy=available[0];
       const chosen=staticVisit.chosenSavedFile;
-      // A deliberate return from the ordinary commit already chose this one registered folder.
-      // An empty draft need not acquire a new selection; a different saved selection is never bypassed.
+      // A deliberate original starter or formal-file visit may use its sole registered
+      // copy with an empty choice. Never bypass a different retained choice or save a selection.
       const sameChoice=incoming.checkoutId===target.checkoutId||incoming.checkoutId===''&&!incoming.ownerPickedConvention&&
-        chosen?.projectId===projectId&&chosen.checkoutId===target.checkoutId;
+        (target.exactSavedPageStarter===true&&!chosen||chosen?.projectId===projectId&&chosen.checkoutId===target.checkoutId);
       if(!staticVisit.current())return;
       if(latest.current.localFilesIntent||latest.current.importedEditor||activeReview.current||previewOpen.current||
         value.executionAuthorized!==false||value.commandsAuthorized!==false||value.draftRecoveryRequired!==false||
@@ -585,7 +590,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         available.length!==1||copy?.projectId!==projectId||copy.checkoutId!==target.checkoutId||
         copy.draftWorkingCopy!==false||copy.taskPackageSource!==false||copy.hostSource!==false||
         !canEditImportedCheckout(latest.current.can)||!sameImportedEditor(target,originalSavedStaticFolder(projectId))){
-        staticVisit.finish('未核对到原先选中的手机文件夹副本。请先在工作区确认副本，没有打开其他文件。');return;
+        staticVisit.finish('未核对到原先选择的私人副本。请先在工作区确认副本，没有打开其他文件。');return;
       }
       // Open only the stock directory. A chosen file needs its matching fresh file-list token, never a stale handle.
       setHostEditor(null);setFileWindow({checkoutId:target.checkoutId,staticFilesVisit:staticVisit});return;

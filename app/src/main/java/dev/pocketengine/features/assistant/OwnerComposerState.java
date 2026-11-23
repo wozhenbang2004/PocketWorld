@@ -19,6 +19,7 @@ public final class OwnerComposerState {
     private static final String TASK_ONLY_FORMAT="pocketworld.owner-composer.v1.first-task-defaults-locked";
     private static final String ONE_MESSAGE_FORMAT="pocketworld.owner-composer.v1.one-message-learning-exclusion";
     private static final String REPORT_FOLLOW_UP_FORMAT="pocketworld.owner-composer.v1.independent-report-follow-up";
+    private static final String RETAINED_WORK_SUFFIX=".retained-work-span";
     public static final int MAX_DRAFTS=64,MAX_PENDING=64,MAX_TEXT=48_000,MAX_STATE_BYTES=1_048_576;
     /** Absence is the older query-only format. FENCED is not evidence of a send. */
     public enum FirstChatPhase { PREPARED, FENCED, RELEASED }
@@ -28,9 +29,15 @@ public final class OwnerComposerState {
         public final int scrollIndex,scrollOffset;
         public final boolean newReplies;
         private final String attachments,sourceRefs,previewRefs,objectRefs;
+        public final OwnerRetainedWorkSpan retainedWorkSpan;
         private Draft(String key,String conversation,long revision,String text,String mode,JSONArray files,
                       int index,int offset,String anchor,String observed,boolean unread,String voice,String voiceId,JSONArray sources,JSONArray previews,JSONArray objects)throws Exception {
+            this(key,conversation,revision,text,mode,files,index,offset,anchor,observed,unread,voice,voiceId,sources,previews,objects,null);
+        }
+        private Draft(String key,String conversation,long revision,String text,String mode,JSONArray files,
+                      int index,int offset,String anchor,String observed,boolean unread,String voice,String voiceId,JSONArray sources,JSONArray previews,JSONArray objects,OwnerRetainedWorkSpan span)throws Exception {
             this.key=key;conversationId=conversation;this.revision=revision;this.text=text;this.mode=mode;
+            retainedWorkSpan=span;
             attachments=checkedAttachments(files).toString();sourceRefs=OwnerSourceReferences.checked(sources).toString();previewRefs=dev.pocketengine.features.local.preview.PreviewElementRef.checked(previews).toString();objectRefs=OwnerObjectReferences.checked(objects).toString();scrollIndex=index;scrollOffset=offset;
             anchorMessage=anchor;observedMessage=observed;newReplies=unread;voiceText=voice;voiceInputId=voiceId;
             if(!validKey(key)||!conversation.isEmpty()&&!conversationId(conversation)||revision<1||text.length()>MAX_TEXT
@@ -38,6 +45,8 @@ public final class OwnerComposerState {
                     ||anchor.length()>300||observed.length()>300||voice.length()>4000
                     ||!voiceId.isEmpty()&&!uuid(voiceId)||voice.isEmpty()!=voiceId.isEmpty())throw new IllegalArgumentException("原私聊草稿格式无效");
             if(key.startsWith("conversation:")&&!key.equals(conversationKey(conversation)))throw new IllegalArgumentException("草稿不属于原对话");
+            if(span!=null&&(!key.startsWith("conversation:")||!span.conversationId().equals(conversation)))
+                throw new SecurityException("原交付选段只属于原私人对话草稿");
             if(isWorkKey(key)&&(conversation.isEmpty()||!attachments.equals("[]")||!sourceRefs.equals("[]")||!previewRefs.equals("[]")||!objectRefs.equals("[]")||!voice.isEmpty()))throw new IllegalArgumentException("工作补充须保留原对话与独立文字草稿");
             JSONArray selected=previewRefs();for(int i=0;i<selected.length();i++)if(!conversation.equals(selected.getJSONObject(i).getString("conversationId")))throw new SecurityException("元素引用不属于这份原对话草稿");
         }
@@ -47,17 +56,18 @@ public final class OwnerComposerState {
         /** Low-trust selected DOM observations; persistence cannot recreate their native document. */
         public JSONArray previewRefs()throws Exception{return new JSONArray(previewRefs);}
         public JSONArray objectRefs()throws Exception{return new JSONArray(objectRefs);}
-        private boolean hasInput(){return !text.isEmpty()||!attachments.equals("[]")||!voiceText.isEmpty()||!sourceRefs.equals("[]")||!previewRefs.equals("[]")||!objectRefs.equals("[]");}
+        private boolean hasInput(){return !text.isEmpty()||!attachments.equals("[]")||!voiceText.isEmpty()||!sourceRefs.equals("[]")||!previewRefs.equals("[]")||!objectRefs.equals("[]")||retainedWorkSpan!=null;}
         private boolean sameInput(Draft other){return other!=null&&key.equals(other.key)&&conversationId.equals(other.conversationId)&&
                 revision==other.revision&&text.equals(other.text)&&mode.equals(other.mode)&&attachments.equals(other.attachments)&&
                 sourceRefs.equals(other.sourceRefs)&&previewRefs.equals(other.previewRefs)&&objectRefs.equals(other.objectRefs)&&
-                voiceText.equals(other.voiceText)&&voiceInputId.equals(other.voiceInputId);}
+                voiceText.equals(other.voiceText)&&voiceInputId.equals(other.voiceInputId)&&Objects.equals(retainedWorkSpan,other.retainedWorkSpan);}
         private JSONObject json()throws Exception{return new JSONObject().put("key",key).put("conversationId",conversationId)
                 .put("revision",revision).put("text",text).put("mode",mode).put("attachments",attachments()).put("ownerSourceRefs",sourceRefs()).put("ownerPreviewRefs",previewRefs()).put("ownerObjectRefs",objectRefs())
                 .put("scrollIndex",scrollIndex).put("scrollOffset",scrollOffset).put("anchorMessage",anchorMessage)
-                .put("observedMessage",observedMessage).put("newReplies",newReplies).put("voiceText",voiceText).put("voiceInputId",voiceInputId);}
+                .put("observedMessage",observedMessage).put("newReplies",newReplies).put("voiceText",voiceText).put("voiceInputId",voiceInputId)
+                .put(OwnerRetainedWorkSpan.FIELD,retainedWorkSpan==null?null:retainedWorkSpan.json());}
         private Draft content(String value,String nextMode,JSONArray files,String voice,String voiceId)throws Exception {
-            return new Draft(key,conversationId,increment(revision),value,nextMode,files,scrollIndex,scrollOffset,anchorMessage,observedMessage,newReplies,voice,voiceId,sourceRefs(),previewRefs(),objectRefs());
+            return new Draft(key,conversationId,increment(revision),value,nextMode,files,scrollIndex,scrollOffset,anchorMessage,observedMessage,newReplies,voice,voiceId,sourceRefs(),previewRefs(),objectRefs(),retainedWorkSpan);
         }
     }
     public static final class Pending {
@@ -363,7 +373,7 @@ public final class OwnerComposerState {
         Draft prior=require(key,expected);JSONArray checked=OwnerSourceReferences.checked(nativeSelections);
         if(prior.sourceRefs.equals(checked.toString()))return prior;
         if(isIndependentReportFollowUp(key)&&checked.length()!=0)throw new SecurityException("这份原追问只可明确移除已选汇报，不会换用其他来源");
-        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,checked,prior.previewRefs(),prior.objectRefs());
+        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,checked,prior.previewRefs(),prior.objectRefs(),prior.retainedWorkSpan);
         drafts.put(key,next);revision=increment(revision);return next;
     }
     /** Add/remove a native preview selection without replacing text, quotes, files or pending ACKs. */
@@ -371,20 +381,30 @@ public final class OwnerComposerState {
         Draft prior=require(key,expected);JSONArray checked=dev.pocketengine.features.local.preview.PreviewElementRef.checked(nativeSelections);
         for(int i=0;i<checked.length();i++)if(!prior.conversationId.equals(checked.getJSONObject(i).getString("conversationId")))throw new SecurityException("预览引用不能进入另一个原对话草稿");
         if(prior.previewRefs.equals(checked.toString()))return prior;
-        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),checked,prior.objectRefs());
+        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),checked,prior.objectRefs(),prior.retainedWorkSpan);
         drafts.put(key,next);revision=increment(revision);return next;
     }
     /** Change only the owner's visible object selection, preserving unsent text and other references. */
     public synchronized Draft editObjectRefs(String key,long expected,JSONArray nativeSelections)throws Exception {
         Draft prior=require(key,expected);if(isWorkKey(key))throw new IllegalArgumentException("对象引用请保留在管家对话草稿");
         JSONArray checked=OwnerObjectReferences.checked(nativeSelections);if(prior.objectRefs.equals(checked.toString()))return prior;
-        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),prior.previewRefs(),checked);
+        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),prior.previewRefs(),checked,prior.retainedWorkSpan);
+        drafts.put(key,next);revision=increment(revision);return next;
+    }
+    /** Only the exact current editor may add one native-selected span or explicitly remove it. */
+    public synchronized Draft editRetainedWorkSpan(String key,long expected,OwnerRetainedWorkSpan span)throws Exception {
+        Draft prior=require(key,expected);
+        if(!key.equals(activeKey)||!key.startsWith("conversation:")||hasPending(key))
+            throw new SecurityException("请从原对话编辑这份选段，先核对待确认输入");
+        if(prior.retainedWorkSpan!=null&&span!=null)throw new SecurityException("请先明确移除原来的选段");
+        if(prior.retainedWorkSpan==null&&span==null)throw new IllegalArgumentException("原选段已离开这份草稿");
+        Draft next=new Draft(key,prior.conversationId,increment(prior.revision),prior.text,prior.mode,prior.attachments(),prior.scrollIndex,prior.scrollOffset,prior.anchorMessage,prior.observedMessage,prior.newReplies,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),prior.previewRefs(),prior.objectRefs(),span);
         drafts.put(key,next);revision=increment(revision);return next;
     }
     public synchronized Draft reading(String key,int index,int offset,String anchor,String observed,boolean unread)throws Exception{
         Draft prior=drafts.get(key);if(prior==null)throw new IllegalArgumentException("原阅读位置不存在");
         if(prior.scrollIndex==index&&prior.scrollOffset==offset&&prior.anchorMessage.equals(anchor)&&prior.observedMessage.equals(observed)&&prior.newReplies==unread)return prior;
-        Draft next=new Draft(key,prior.conversationId,prior.revision,prior.text,prior.mode,prior.attachments(),index,offset,anchor,observed,unread,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),prior.previewRefs(),prior.objectRefs());
+        Draft next=new Draft(key,prior.conversationId,prior.revision,prior.text,prior.mode,prior.attachments(),index,offset,anchor,observed,unread,prior.voiceText,prior.voiceInputId,prior.sourceRefs(),prior.previewRefs(),prior.objectRefs(),prior.retainedWorkSpan);
         drafts.put(key,next);revision=increment(revision);return next;
     }
     /** Only a completed, released native ASR's final text is retained; no microphone lease is serialized. */
@@ -546,7 +566,7 @@ public final class OwnerComposerState {
         if(releaseOne&&!clear)remaining=prior.content(prior.text,prior.mode,prior.attachments(),prior.voiceText,prior.voiceInputId);
         Draft collision=drafts.get(target);
         if(migrate&&collision!=null&&collision.hasInput()&&remaining.hasInput())throw new IllegalStateException("输入已受理，但原对话另有未发送草稿；两份均保留，请回原输入核对");
-        Draft next=migrate&&collision!=null&&collision.hasInput()?new Draft(target,conversation,increment(Math.max(collision.revision,remaining.revision)),collision.text,collision.mode,collision.attachments(),collision.scrollIndex,collision.scrollOffset,collision.anchorMessage,collision.observedMessage,collision.newReplies,collision.voiceText,collision.voiceInputId,collision.sourceRefs(),collision.previewRefs(),collision.objectRefs()):new Draft(target,conversation,remaining.revision,remaining.text,remaining.mode,remaining.attachments(),remaining.scrollIndex,remaining.scrollOffset,remaining.anchorMessage,remaining.observedMessage,remaining.newReplies,remaining.voiceText,remaining.voiceInputId,remaining.sourceRefs(),remaining.previewRefs(),remaining.objectRefs());
+        Draft next=migrate&&collision!=null&&collision.hasInput()?new Draft(target,conversation,increment(Math.max(collision.revision,remaining.revision)),collision.text,collision.mode,collision.attachments(),collision.scrollIndex,collision.scrollOffset,collision.anchorMessage,collision.observedMessage,collision.newReplies,collision.voiceText,collision.voiceInputId,collision.sourceRefs(),collision.previewRefs(),collision.objectRefs(),collision.retainedWorkSpan):new Draft(target,conversation,remaining.revision,remaining.text,remaining.mode,remaining.attachments(),remaining.scrollIndex,remaining.scrollOffset,remaining.anchorMessage,remaining.observedMessage,remaining.newReplies,remaining.voiceText,remaining.voiceInputId,remaining.sourceRefs(),remaining.previewRefs(),remaining.objectRefs(),remaining.retainedWorkSpan);
         // Separate first sends from an unbound editor may have created different
         // conversations. One receipt cannot bind another uncertain input to its target.
         boolean keepOriginal=migrate&&pending.values().stream().anyMatch(other->!other.clientId.equals(client)&&other.draftKey.equals(prior.key));
@@ -558,7 +578,9 @@ public final class OwnerComposerState {
     }
     public synchronized JSONObject toJson()throws Exception{
         JSONArray d=new JSONArray(),p=new JSONArray();for(Draft draft:drafts.values())d.put(draft.json());for(Pending item:pending.values())p.put(item.json());
-        JSONObject result=new JSONObject().put("format",!firstTaskDefaultsLocked.isEmpty()?TASK_ONLY_FORMAT:!oneMessageExcluded.isEmpty()?ONE_MESSAGE_FORMAT:firstMessagePaused.isEmpty()?FORMAT:RESTRICTED_FORMAT).put("revision",revision).put("activeKey",activeKey).put("drafts",d).put("pending",p);
+        String format=!firstTaskDefaultsLocked.isEmpty()?TASK_ONLY_FORMAT:!oneMessageExcluded.isEmpty()?ONE_MESSAGE_FORMAT:firstMessagePaused.isEmpty()?FORMAT:RESTRICTED_FORMAT;
+        if(drafts.values().stream().anyMatch(draft->draft.retainedWorkSpan!=null))format+=RETAINED_WORK_SUFFIX;
+        JSONObject result=new JSONObject().put("format",format).put("revision",revision).put("activeKey",activeKey).put("drafts",d).put("pending",p);
         if(!oneMessageExcluded.isEmpty())result.put("oneMessageExcluded",new JSONArray(oneMessageExcluded));
         if(!firstTaskDefaultsLocked.isEmpty())result.put("firstTaskDefaultsLocked",new JSONArray(firstTaskDefaultsLocked));
         if(!firstMessagePaused.isEmpty())result.put("firstMessagePaused",new JSONArray(firstMessagePaused));
@@ -580,12 +602,15 @@ public final class OwnerComposerState {
     }
     private static OwnerComposerState fromBaseJson(JSONObject json)throws Exception {
         if(json.has("independentReportFollowUp")||json.has("composer"))throw new IllegalArgumentException("原汇报追问须使用专用草稿文件格式");
-        String format=json.getString("format");boolean restricted=RESTRICTED_FORMAT.equals(format);
+        String format=json.getString("format");boolean spans=format.endsWith(RETAINED_WORK_SUFFIX);
+        if(spans)format=format.substring(0,format.length()-RETAINED_WORK_SUFFIX.length());
+        boolean restricted=RESTRICTED_FORMAT.equals(format);
         boolean taskOnly=TASK_ONLY_FORMAT.equals(format),one=ONE_MESSAGE_FORMAT.equals(format)||taskOnly;
         if(taskOnly!=json.has("firstTaskDefaultsLocked")||!FORMAT.equals(format)&&!restricted&&!one||one!=json.has("oneMessageExcluded")||!one&&restricted!=json.has("firstMessagePaused"))throw new IllegalArgumentException("草稿版本或首条记忆范围不受支持，请保留原文件");
         OwnerComposerState state=new OwnerComposerState();state.revision=integer(json,"revision",1,Long.MAX_VALUE);state.activeKey=json.getString("activeKey");
         JSONArray drafts=json.getJSONArray("drafts"),pending=json.getJSONArray("pending");if(drafts.length()<1||drafts.length()>MAX_DRAFTS||pending.length()>MAX_PENDING)throw new IllegalArgumentException("草稿记录超出有界范围");
-        for(int i=0;i<drafts.length();i++){JSONObject row=drafts.getJSONObject(i);Draft d=new Draft(row.getString("key"),row.getString("conversationId"),integer(row,"revision",1,Long.MAX_VALUE),row.getString("text"),row.getString("mode"),row.getJSONArray("attachments"),(int)integer(row,"scrollIndex",0,100000),(int)integer(row,"scrollOffset",0,1000000),row.getString("anchorMessage"),row.getString("observedMessage"),bool(row,"newReplies"),row.getString("voiceText"),row.getString("voiceInputId"),row.has("ownerSourceRefs")?row.getJSONArray("ownerSourceRefs"):new JSONArray(),row.has("ownerPreviewRefs")?row.getJSONArray("ownerPreviewRefs"):new JSONArray(),row.has("ownerObjectRefs")?row.getJSONArray("ownerObjectRefs"):new JSONArray());if(state.drafts.put(d.key,d)!=null)throw new IllegalArgumentException("草稿身份重复");}
+        for(int i=0;i<drafts.length();i++){JSONObject row=drafts.getJSONObject(i);Draft d=new Draft(row.getString("key"),row.getString("conversationId"),integer(row,"revision",1,Long.MAX_VALUE),row.getString("text"),row.getString("mode"),row.getJSONArray("attachments"),(int)integer(row,"scrollIndex",0,100000),(int)integer(row,"scrollOffset",0,1000000),row.getString("anchorMessage"),row.getString("observedMessage"),bool(row,"newReplies"),row.getString("voiceText"),row.getString("voiceInputId"),row.has("ownerSourceRefs")?row.getJSONArray("ownerSourceRefs"):new JSONArray(),row.has("ownerPreviewRefs")?row.getJSONArray("ownerPreviewRefs"):new JSONArray(),row.has("ownerObjectRefs")?row.getJSONArray("ownerObjectRefs"):new JSONArray(),OwnerRetainedWorkSpan.in(row));if(state.drafts.put(d.key,d)!=null)throw new IllegalArgumentException("草稿身份重复");}
+        if(spans!=state.drafts.values().stream().anyMatch(draft->draft.retainedWorkSpan!=null))throw new IllegalArgumentException("原交付选段草稿格式不一致");
         if(json.has("firstMessagePaused")){
             JSONArray restrictions=json.getJSONArray("firstMessagePaused");if(restrictions.length()<1||restrictions.length()>drafts.length())throw new IllegalArgumentException("新草稿记忆范围不可核对");
             for(int i=0;i<restrictions.length();i++){Object raw=restrictions.get(i);if(!(raw instanceof String)||!((String)raw).startsWith("new:")||!state.drafts.containsKey(raw)||!state.drafts.get(raw).conversationId.isEmpty()||!state.firstMessagePaused.add((String)raw))throw new IllegalArgumentException("新草稿记忆范围不可核对");}

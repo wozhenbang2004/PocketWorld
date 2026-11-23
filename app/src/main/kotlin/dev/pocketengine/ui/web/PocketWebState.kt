@@ -12,7 +12,7 @@ import org.json.JSONObject
 /** Explicit read model for the trusted local Web UI. No host authority is serialized. */
 internal object PocketWebState {
     private val hidden = setOf(
-        "remoteinputdrafts", "hasphonedraftrows", "ordinaryturnoutcome", "nativeordinaryfirstturnfailure",
+        "remoteinputdrafts", "hasphonedraftrows", "ordinaryturnoutcome", "nativeordinaryfirstturnfailure", "ownerretainedworkspan",
         "apikey", "password", "passphrase", "privatekey", "clientsecret", "accesstoken",
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",

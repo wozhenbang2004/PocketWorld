@@ -4,7 +4,8 @@ import org.json.JSONObject
 
 /** Typed source save/test commands; no native service, credential I/O or dispatch. */
 internal object PocketWebModelConnectionCommands {
-    val COMMANDS: Set<String> = setOf("models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "models.connections.add", "models.connections.update")
+    const val STOP_WAITING = "models.connection.test.stopWaiting"
+    val COMMANDS: Set<String> = setOf("models.connection.add", "models.connection.edit", "models.connection.test", "models.connection.select", "models.connections.add", "models.connections.update", STOP_WAITING)
 
     sealed interface Command {
         val id: String
@@ -26,15 +27,24 @@ internal object PocketWebModelConnectionCommands {
         override val expectedRevision: Long,
         val input: JSONObject,
         val editorId: String,
-        val draftRevision: Long
+        val draftRevision: Long,
+        val wait: StopWaiting? = null
     ) : Command
+    // Non-secret identity of one explicit test, not the whole model editor.
+    data class StopWaiting(override val id: String, override val expectedRevision: Long,
+        val editorId: String, val draftRevision: Long, val waitId: String) : Command
 
     fun prepare(action: String, args: JSONObject): Command {
         require(action in COMMANDS) { "这项操作没有已接入的宿主实现" }
+        if (action == STOP_WAITING) {
+            checkedPayload(args, setOf("id", "expectedRevision", "editorId", "draftRevision", "waitId"))
+            return stopWaiting(args, requiredString(args, "id"),
+                requiredInt(args, "expectedRevision").toLong(), requiredString(args, "editorId"), draftRevision(args))
+        }
         val testing = action == "models.connection.test"
         val saveSourceOnly = action == "models.connections.add" || action == "models.connections.update"
         checkedPayload(args, setOf("id", "expectedRevision", "name", "url", "model", "apiKey", "bedrockRegion", "awsSession", "screenshots", "supportsImageInput", "provider", "maxOutputTokens", "cleartextConsent", "compatibility") +
-            if (testing) setOf("editorId", "draftRevision") else if (saveSourceOnly) setOf("draftReference") else emptySet())
+            if (testing) setOf("editorId", "draftRevision", "waitId") else if (saveSourceOnly) setOf("draftReference") else emptySet())
         val adding = action == "models.connection.add" || action == "models.connections.add" || testing && args.optString("id").isEmpty()
         val id = if (adding) "" else requiredString(args, "id")
         val expected = if (adding) 0L else requiredInt(args, "expectedRevision").also { require(it > 0) { "请重新读取原连接修订" } }.toLong()
@@ -49,11 +59,22 @@ internal object PocketWebModelConnectionCommands {
         if (args.has("compatibility")) input.put("compatibility", if (args.isNull("compatibility")) JSONObject.NULL else checkedProviderCompatibility(args.getJSONObject("compatibility")))
         if (testing) {
             val editorId = requiredString(args, "editorId")
-            val draftRevision = requiredInt(args, "draftRevision").also { require(it >= 0) { "草稿修订无效，请重新打开连接" } }.toLong()
-            return Test(id, expected, input, editorId, draftRevision)
+            val draftRevision = draftRevision(args)
+            val wait = if (args.has("waitId")) stopWaiting(args, id, expected, editorId, draftRevision) else null
+            return Test(id, expected, input, editorId, draftRevision, wait)
         }
         val draftReference = if (args.has("draftReference")) checkedPayload(args.getJSONObject("draftReference"), setOf("objectId", "revision", "requestId")) else null
         return Save(adding, id, expected, args.optString("name", model.ifBlank { input.getString("provider") }), input, action == "models.connection.add", draftReference)
+    }
+
+    private val waitUuid = Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+    private fun draftRevision(args: JSONObject) = requiredInt(args, "draftRevision")
+        .also { require(it >= 0) { "草稿修订无效，请重新打开连接" } }.toLong()
+    private fun stopWaiting(args: JSONObject, id: String, revision: Long, editorId: String, draft: Long): StopWaiting {
+        val waitId = requiredString(args, "waitId")
+        require(id.isNotBlank() && id.length <= 240 && id.none(Char::isISOControl) && revision > 0 &&
+            waitUuid.matches(editorId) && waitUuid.matches(waitId)) { "原已保存服务的测试身份不可核对" }
+        return StopWaiting(id, revision, editorId, draft, waitId)
     }
 
     private fun checkedProviderCompatibility(options: JSONObject): JSONObject {

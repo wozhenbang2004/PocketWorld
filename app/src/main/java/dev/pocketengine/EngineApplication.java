@@ -3450,6 +3450,10 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         return new dev.pocketengine.features.assistant.AssistantModule.NativeInputHost(){
             public JSONObject start(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{return startAssistantInput(conversation,goal,message,config,control);}
             public JSONObject startScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope);}
+            public JSONObject startRetainedSpanScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,
+                    dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.SendVisit visit)throws Exception{
+                return startAssistantInput(conversation,goal,message,config,control,ownerScope,null,false,false,null,java.util.Objects.requireNonNull(visit));
+            }
             public JSONObject startOrdinaryFirstScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope,null,false,true);}
             public JSONObject startOrdinaryDirectScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{
                 OrdinaryDirectInput direct=new OrdinaryDirectInput(message.getString("clientMessageId"),message.getString("id"),message.getLong("revision"));
@@ -3897,12 +3901,20 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         return startAssistantInput(conversation,goal,message,config,control,ownerScope,projectStart,blockDefaults,ordinaryFirst,null);
     }
     private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,boolean blockDefaults,boolean ordinaryFirst,OrdinaryDirectInput ordinaryDirect)throws Exception{
+        return startAssistantInput(conversation,goal,message,config,control,ownerScope,projectStart,blockDefaults,ordinaryFirst,ordinaryDirect,null);
+    }
+    private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,
+            dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,boolean blockDefaults,boolean ordinaryFirst,
+            OrdinaryDirectInput ordinaryDirect,dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.SendVisit spanVisit)throws Exception{
         synchronized(assistantAdmissions){
             control.check();if(control.hasHostRun())throw new SecurityException("不能用旧控制器新建聊天任务");SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
             for(var entry:capabilityControls.entrySet()){JSONObject current=tasks.get(entry.getKey(),false);if(current!=null&&!"owner_work".equals(current.optString("executionRole"))&&conversation.equals(current.optString("conversationId")))throw new IllegalStateException("原对话仍由原任务执行；请在原任务核对输入，不能启动第二执行器");}
             if(tasks.ownerConversationUnresolved(conversation)!=null)throw new IllegalStateException("原对话有动作结果待核对，请先处理原任务；没有重发旧目标");
             if(projectOwnerWorkflows!=null)projectOwnerWorkflows.checkStartFenceForHost(config);
             if(blockDefaults&&(projectStart!=null||!Boolean.TRUE.equals(message.opt("personalMemoryExcluded"))||!"user".equals(message.opt("role"))||message.optString("id").isEmpty()||message.optString("clientMessageId").isEmpty()))throw new SecurityException("不能将默认偏好限制转给其他来源或任务");
+            if(message.has(dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.FIELD)!=(spanVisit!=null))
+                throw new SecurityException("原选段不能借用普通启动入口");
+            if(spanVisit!=null){tasks.requireExecutionEnabled();spanVisit.requirePending(tasks);}
             JSONObject task=tasks.createCapabilityTask(goal,conversation,blockDefaults);initializeOwnerExecutionScope(task.getString("id"),config,ownerScope);task=tasks.startAttempt(task.getString("id"),"capabilities",config.maxSteps);
             if(blockDefaults&&!Boolean.TRUE.equals(task.opt("ownerDefaultsWriteBlocked")))throw new SecurityException("原任务未保留偏好写入限制，未接手执行");
             control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
@@ -3915,7 +3927,9 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             if(sshOwnerWorkflows!=null)sshOwnerWorkflows.bindNewAttempt(task,control);
             tasks.openOwnerInputMailbox(binding.task,binding.run,binding.epoch,conversation,control);
             if(hasAttachments(message))attachmentRoutePins.require(binding.task,config,true);
-            JSONObject accepted=tasks.appendOwnerGoalInput(binding.task,binding.run,binding.epoch,conversation,message,message.optString("inputMode","queue"),control);pushTask(binding.task);
+            JSONObject accepted=spanVisit==null?tasks.appendOwnerGoalInput(binding.task,binding.run,binding.epoch,conversation,message,message.optString("inputMode","queue"),control)
+                    :tasks.appendOwnerRetainedGoalInput(binding.task,binding.run,binding.epoch,conversation,message,message.optString("inputMode","queue"),control,spanVisit);
+            pushTask(binding.task);
             JSONObject receipt=ownerInputBinding(binding,accepted);if(blockDefaults)receipt.put("defaultWritesBlocked",true);return receipt;
         }
     }
@@ -4385,7 +4399,11 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 // Keep original-source retirement checks above. Only this admitted task's inputs
                 // may now re-materialize selected message ranges; prior conversation prose stays history.
                 dev.pocketengine.features.assistant.OwnerSourceReferences.restrictToTaskInputs(currentHistory,id,inputs);
-                if(hasTaskAttachments(originalTask))attachmentRoutePins.require(id,selected,false);return sourceProjection.project(currentHistory,selected,live,originalContext.selectedTeam());
+                boolean retainedSpan=dev.pocketengine.store.OwnerWorkTask.isButlerSource(originalTask)&&inputs!=null&&
+                        inputs.length()>0&&inputs.getJSONObject(0).has(dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.FIELD);
+                if(retainedSpan)
+                    currentHistory=tasks.projectOriginalRetainedWorkSpan(id,admittedRun,admittedEpoch,live,currentHistory);
+                if(hasTaskAttachments(originalTask))attachmentRoutePins.require(id,selected,false);return sourceProjection.project(currentHistory,selected,live,originalContext.selectedTeam(),retainedSpan);
                 }
                 @Override public void prepared(JSONArray nativeProvenance,JSONArray actualMessages,ModelConfig selected,RunControl live)throws Exception{sourceProjection.prepared(nativeProvenance,actualMessages,selected,live);}
                 @Override public void derivedPrepared(JSONArray nativeProvenance,RunControl live)throws Exception{sourceProjection.derivedPrepared(nativeProvenance,live);}
@@ -5078,6 +5096,13 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     public JSONObject dispatchOwnerAction(String action,JSONObject input)throws Exception{return dispatchOwnerAction(action,input,null);}
     private void requireOwnerActionReady(String action){
         if(!businessReady()&&!java.util.Set.of("stopTask","stopRun","pauseRun").contains(action))throw new SecurityException("原启动恢复或维护尚未完成；请先读取启动维护页");
+    }
+    public JSONObject sendOwnerRetainedWorkSpan(JSONObject input,dev.pocketengine.features.assistant.OwnerComposerState.Pending pending,
+            dev.pocketengine.features.assistant.OwnerRetainedWorkSpan span,dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.SendVisit visit)throws Exception{
+        requireOwnerActionReady("featureRequest");
+        EngineModule module=features.module("assistant");
+        if(!(module instanceof dev.pocketengine.features.assistant.AssistantModule assistant))throw new IllegalStateException("原私人对话暂未就绪");
+        return assistant.sendOwnerRetainedWorkSpan(input,pending,span,visit);
     }
     /** Existing assistant send queue with an in-process owner composer proof, never a request JSON option. */
     public void requestOrdinaryChatPresentation(JSONObject request,dev.pocketengine.features.assistant.AssistantModule.OrdinaryChatDispatch original){

@@ -2,6 +2,7 @@ import { memo, useId, useEffect, useLayoutEffect, useRef, useState } from 'react
 import * as Dialog from '@radix-ui/react-dialog';
 import { IconArrowLeft, IconCopy } from './icons';
 import { ReadingQuoteAction } from './ReadingQuoteAction';
+import { selectedQuoteRange } from './message-quote';
 import { MarkdownBody } from './library/MarkdownBody';
 import { ReadingContext, type ReadingDocument } from './reading-context';
 import './reading.css';
@@ -9,6 +10,7 @@ import './reading.css';
 export type RetainedDeliveryReading = {
   verified: boolean; pending: boolean; error?: string; segment?: number; retentionLimited?: boolean;
   current: () => boolean; previous?: () => void; next?: () => void; retry?: () => void;
+  stage?: (offset: number, chars: number) => Promise<void>;
 };
 
 const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hideCopyControls, retained }: {
@@ -22,6 +24,7 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
   const [bounds,setBounds]=useState({start:0,end:0});
   const [feedback, setFeedback] = useState('');
   const [copying, setCopying] = useState(false);
+  const [staging, setStaging] = useState(false);
   const body = useRef<HTMLDivElement>(null), original = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -80,6 +83,14 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
       <button type="button" aria-label={`文字大小：${textSize === 'normal' ? '标准' : textSize === 'large' ? '大' : '更大'}，点击切换`} title="切换文字大小" onClick={() => setTextSize(size => size === 'normal' ? 'large' : size === 'large' ? 'larger' : 'normal')}>Aa</button>
       {mode === 'select' && <button type="button" onClick={() => { original.current?.focus({ preventScroll: true }); original.current?.select(); selectText(); }}>{exactSegment?'全选本段':'全选'}</button>}
       {snapshot.kind==='message'&&snapshot.quoteSource&&<ReadingQuoteAction source={snapshot.quoteSource} text={snapshot.text} field={original} start={bounds.start} end={bounds.end} visible={active&&mode==='select'&&toolsVisible} report={setFeedback}/>}
+      {retained?.stage&&mode==='select'&&selected.trim()&&<button type="button" disabled={staging}
+        onPointerDown={event=>event.preventDefault()} onClick={()=>{
+          const field=original.current,range=field&&selectedQuoteRange(snapshot.text,field),stage=retained.stage;
+          if(!range||!stage){setFeedback('请选一段不超过 4,000 个字符的原文。');return}
+          setStaging(true);setFeedback('');
+          void stage(range.offset,range.chars).catch(error=>{if(alive.current)setFeedback(error instanceof Error?error.message:'没有核对到选段保存。')})
+            .finally(()=>{if(alive.current)setStaging(false)});
+        }}>{staging?'正在加入草稿…':'引用这段追问'}</button>}
       {!hideCopyControls && <button type="button" disabled={copying} aria-label={selected ? '复制选中文字' : exactSegment ? '复制本段' : snapshot.kind === 'table' ? '复制表格' : '复制全文'}
         onPointerDown={event => event.preventDefault()}
         onClick={() => { void copy(selected || (mode === 'select' ? snapshot.text : snapshot.copyText ?? snapshot.text)).catch(() => {}); }}>

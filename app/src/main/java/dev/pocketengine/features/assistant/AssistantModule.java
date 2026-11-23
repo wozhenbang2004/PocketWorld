@@ -1,5 +1,7 @@
 package dev.pocketengine.features.assistant;
 
+import dev.pocketengine.store.TaskStore;
+
 import android.util.AtomicFile;
 import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
@@ -34,6 +36,10 @@ public final class AssistantModule implements EngineModule {
         JSONObject start(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception;
         /** Native owner settings, never copied into provider messages or stored owner prose. */
         default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
+        default JSONObject startRetainedSpanScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,
+                JSONObject ownerScope,OwnerRetainedWorkSpan.SendVisit visit)throws Exception{
+            throw new SecurityException("原选段的原生任务接收入口不可用，没有改用普通发送");
+        }
         /** Existing start with optional local first-question presentation, never an execution grant. */
         default JSONObject startOrdinaryFirstScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startScoped(conversationId,goal,message,config,control,ownerScope);}
         default JSONObject startOrdinaryDirectScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startScoped(conversationId,goal,message,config,control,ownerScope);}
@@ -348,16 +354,26 @@ public final class AssistantModule implements EngineModule {
         if(!(memory instanceof dev.pocketengine.features.memory.MemoryModule))throw new IllegalStateException("原记忆来源遗忘门未安装");
         if(((dev.pocketengine.features.memory.MemoryModule)memory).isSourceForgotten(privateScope(),ref))throw new IllegalStateException("此来源版本已遗忘，不能通过重新选择原文复活");
     }
+    public void requireRetainedWorkSpanNotForgotten(OwnerRetainedWorkSpan span)throws Exception{
+        requireOwnerSourceNotForgotten(new SourceRef("message",span.messageId(),span.sourceRevision(),"owner","private"));
+    }
+    TaskStore.OriginalRetainedWorkSpanProof originalRetainedWorkSpan(OwnerRetainedWorkSpan span)throws Exception {
+        if(!durable()||historyTasks==null)throw new SecurityException("原交付选段的保存来源不可核对");
+        requireRetainedWorkSpanNotForgotten(span);
+        var proof=historyTasks.requireOriginalRetainedWorkSpan(span);
+        requireRetainedWorkSpanNotForgotten(span);
+        return proof;
+    }
     public JSONObject readOriginalConversation(String conversation,String cursor,int limit)throws Exception{
-        if(limit<1||limit>80)throw new IllegalArgumentException("消息分页最多80条");if(durable())return historyRepository.read(()->historyRepository.window(conversation,cursor,limit));if(!cursor.isEmpty())throw new IllegalArgumentException("旧原件尚未分页入库");return findConversation(conversation).put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor","").put("retentionLimitApplied",true));
+        if(limit<1||limit>80)throw new IllegalArgumentException("消息分页最多80条");if(durable())return historyRepository.read(()->ConversationRepository.forOwnerDisplay(historyRepository.window(conversation,cursor,limit)));if(!cursor.isEmpty())throw new IllegalArgumentException("旧原件尚未分页入库");return ConversationRepository.forOwnerDisplay(findConversation(conversation).put("messagePage",new JSONObject().put("hasMore",false).put("nextCursor","").put("retentionLimitApplied",true)));
     }
     public JSONObject readOriginalSearchHistory(String conversation,JSONObject locator,RunControl control)throws Exception{
         if(!durable()||migrationInProgress)throw new IllegalStateException("本机原文暂不可定位");
-        return historyRepository.windowAtOwnerSearchHit(conversation,locator,control);
+        return ConversationRepository.forOwnerDisplay(historyRepository.windowAtOwnerSearchHit(conversation,locator,control));
     }
     public JSONObject readOriginalDetachedHistory(String conversation,OwnerDetachedHistoryPosition position,RunControl control,Runnable current)throws Exception{
         if(!durable()||migrationInProgress)throw new IllegalStateException("本机原阅读位置暂不可定位");
-        return historyRepository.windowAtOwnerDetachedHistory(conversation,position,control,current);
+        return ConversationRepository.forOwnerDisplay(historyRepository.windowAtOwnerDetachedHistory(conversation,position,control,current));
     }
     public JSONObject deleteOriginalImportedRecord(String conversation,String record,long version)throws Exception{
         if(version<1||version==Long.MAX_VALUE)throw new IllegalArgumentException("内部recordVersion无效");synchronized(admission){idle(conversation);if(!durable())throw new IllegalStateException("先审核导入原件，再按内部记录版本删除");historyRepository.transaction(()->{historyRepository.deleteImportedMessage(conversation,record,version);return null;});sourceGeneration++;synchronizationPending=true;}synchronizeSources();return new JSONObject().put("deleted",true).put("recordId",record).put("recordVersion",version+1).put("historicalRevision",JSONObject.NULL);
@@ -428,13 +444,16 @@ public final class AssistantModule implements EngineModule {
         }return state;
     }
     @Override public JSONObject handle(String command,JSONObject input)throws Exception{
+        return OwnerRetainedWorkSpan.hideInternal(handleSelected(command,input));
+    }
+    private JSONObject handleSelected(String command,JSONObject input)throws Exception{
         switch(command){
             case "list":return durable()?historyRepository.read(()->historyRepository.list(input.optString("cursor"),input.optInt("limit",20))):new JSONObject().put("conversations",list());
             case "get":return durable()?historyRepository.read(()->{
                 String conversation=input.getString("conversationId");
-                return historyRepository.window(conversation,input.optString("cursor"),input.optInt("limit",80))
+                return ConversationRepository.forOwnerDisplay(historyRepository.window(conversation,input.optString("cursor"),input.optInt("limit",80)))
                         .put("organization",historyRepository.ownerOrganization("getOrganization",new JSONObject().put("conversationId",conversation)));
-            }):findConversation(input.getString("conversationId"));
+            }):ConversationRepository.forOwnerDisplay(findConversation(input.getString("conversationId")));
             case "send":
                 if(nativeInputHost==null&&Boolean.TRUE.equals(input.opt("mustMatchObservedForeground")))
                     throw new IllegalStateException("原生对话接收边界不可用；不能按旧入口发送这条输入");
@@ -488,6 +507,7 @@ public final class AssistantModule implements EngineModule {
         catch(Exception notDelivered){pendingCancellations.put(control,new Cancellation(control,conversation));throw notDelivered;}
     }
     private JSONObject send(JSONObject input)throws Exception{
+        if(input.has(OwnerRetainedWorkSpan.FIELD))throw new SecurityException("原交付选段只从原私人草稿发送");
         if(input.has("firstMessageWithoutPersonalMemory")||input.has("excludeThisInputFromLearning")||input.has("firstTaskWithoutDefaultWrites"))throw new IllegalStateException("未安装原生记忆限制准入，没有按默认规则发送");
         if(input.has("ownerSourceRefs")&&(input.optJSONArray("ownerSourceRefs")==null||input.getJSONArray("ownerSourceRefs").length()>0))throw new IllegalStateException("原文引用的真实原生任务投影未安装，未降级为普通文本发送");
         if(input.has("ownerPreviewRefs")&&(input.optJSONArray("ownerPreviewRefs")==null||input.getJSONArray("ownerPreviewRefs").length()>0))throw new IllegalStateException("元素引用的原生项目投影未安装，草稿未降级发送");
@@ -573,6 +593,7 @@ public final class AssistantModule implements EngineModule {
     private static void requireContinuationWindow(java.util.function.BooleanSupplier current){if(current==null||!current.getAsBoolean())throw new SecurityException("原项目审阅窗口已关闭，请重新核对；对话草稿未发送");}
     /** Direct owner UI ingress to an exact durable work. Does not reserve the foreground chat. */
     public JSONObject sendOwnerWorkInput(String conversation,JSONObject input)throws Exception{
+        if(input.has(OwnerRetainedWorkSpan.FIELD))throw new SecurityException("不能把原交付选段转到其他工作输入");
         if(input.has("excludeThisInputFromLearning")||input.has("firstTaskWithoutDefaultWrites"))throw new SecurityException("原私聊的记忆限制不能转交其他工作");
         if(historyTasks==null||!durable()||nativeInputHost==null)throw new IllegalStateException("原私人会话存储尚未就绪");
         String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
@@ -647,6 +668,18 @@ public final class AssistantModule implements EngineModule {
         if(!dev.pocketengine.phone.reading.PrimaryDisplayQuestion.matchesFreshDraft(input)||input.optJSONObject("ownerDisplayScope")==null||input.has("executionScope")||window==null)throw new SecurityException("需要当前私人草稿的明确主屏读数请求");
         return sendNativeBound(copy(input).put("_nativeDisplayDraftProof",original.fingerprint),null,()->original.mayBeginDisplayRead()&&window.getAsBoolean());
     }
+    private record OriginalRetainedSpanSend(OwnerRetainedWorkSpan span,OwnerRetainedWorkSpan.SendVisit visit){}
+    /** The exact already-prepared owner composer only. Not a feature/model command. */
+    public JSONObject sendOwnerRetainedWorkSpan(JSONObject input,OwnerComposerState.Pending original,OwnerRetainedWorkSpan span,
+            OwnerRetainedWorkSpan.SendVisit visit)throws Exception {
+        if(original==null||original.primaryDisplayOnly||original.firstChatPhase!=null||span==null||visit==null||
+                !original.clientId.equals(input.opt("clientMessageId"))||
+                !original.conversationId.equals(input.opt("conversationId"))||!original.conversationId.equals(span.conversationId())||
+                !original.draftKey.equals("conversation:"+span.conversationId())||!original.mode.equals(input.opt("mode"))||
+                original.originalTarget().length()!=0||!span.equals(OwnerRetainedWorkSpan.in(input)))
+            throw new SecurityException("原交付选段不属于这次原私人输入");
+        return sendNativeBound(copy(input),null,null,null,new OriginalRetainedSpanSend(span,visit));
+    }
     /** On reopening this private editor, inspect the exact saved input across the original admission gate.
      * Never read Android, create a task, write history or turn absence into evidence of no physical sample. */
     public JSONObject lookupOwnerDisplayInput(OwnerComposerState.Pending original,java.util.function.BooleanSupplier ownerVisible)throws Exception{
@@ -679,7 +712,13 @@ public final class AssistantModule implements EngineModule {
     private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,java.util.function.BooleanSupplier displayWindow)throws Exception {
         return sendNativeBound(input,projectStart,displayWindow,null);
     }
-    private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,java.util.function.BooleanSupplier displayWindow,OrdinaryChatKind ordinaryKind)throws Exception {
+    private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,
+            java.util.function.BooleanSupplier displayWindow,OrdinaryChatKind ordinaryKind)throws Exception {
+        return sendNativeBound(input,projectStart,displayWindow,ordinaryKind,null);
+    }
+    private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,
+            java.util.function.BooleanSupplier displayWindow,OrdinaryChatKind ordinaryKind,OriginalRetainedSpanSend spanSend)throws Exception {
+        if(input.has(OwnerRetainedWorkSpan.FIELD)!=(spanSend!=null))throw new SecurityException("原交付选段只从当前私人草稿明确发送");
         if(displayWindow==null&&(input.has("ownerDisplayScope")||input.has("_nativeDisplayDraftProof")))throw new SecurityException("本机主屏读数只能从原私人草稿单独发送");
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，未接收新消息；不会重复新建任务");
         requireLegacyWritable();String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
@@ -701,6 +740,8 @@ public final class AssistantModule implements EngineModule {
         boolean firstPaused=input.has("firstMessageWithoutPersonalMemory");
         if(firstPaused&&(!Boolean.TRUE.equals(input.opt("firstMessageWithoutPersonalMemory"))||!requested.isEmpty()||projectStart!=null||!durable()))throw new SecurityException("首条个人记忆设置只适用于新私人对话的原生持久准入，未按默认发送");
         String contentFingerprint=fingerprint(text,mode,selections,selectedSources,selectedPreviews,selectedObjects);
+        if(spanSend!=null)contentFingerprint=TaskStore.capabilityFingerprint(new JSONObject().put("input",contentFingerprint)
+                .put(OwnerRetainedWorkSpan.FIELD,spanSend.span().json()));
         if(displayWindow!=null)contentFingerprint=dev.pocketengine.store.TaskStore.capabilityFingerprint(new JSONObject().put("input",contentFingerprint).put("ownerNativeRead","primary_display_mode"));
         boolean excludeThis=input.has("excludeThisInputFromLearning");
         if(excludeThis&&(!Boolean.TRUE.equals(input.opt("excludeThisInputFromLearning"))||projectStart!=null||!durable()))throw new SecurityException("单条限制只用于普通私人输入的原生持久登记，未按默认规则发送");
@@ -728,6 +769,9 @@ public final class AssistantModule implements EngineModule {
             DevelopmentTurn retained=existing==null?developmentTurns.get(requested):null;
             boolean resuming=retained!=null,starting=existing==null&&!resuming;
             boolean hasTurn=input.has("taskId")||input.has("runId")||input.has("epoch");
+            if(spanSend!=null&&(!starting||hasTurn||projectStart!=null||displayWindow!=null||requested.isEmpty()||
+                    !spanSend.visit().pending(historyTasks)||executor==null||nativeInputHost==null||!durable()))
+                throw new SecurityException("原对话或选段草稿已变化，未发送；请回到原输入核对");
             // The UI saw no foreground turn. Do not implicitly inherit one that
             // appeared while the original draft and submission identity were saved.
             if(Boolean.TRUE.equals(input.opt("mustMatchObservedForeground"))&&!hasTurn&&!starting)
@@ -771,6 +815,12 @@ public final class AssistantModule implements EngineModule {
                 AttachmentRequestProjection projection=attachmentProjection;
                 if(selections.length()>0&&projection==null)throw new IllegalStateException("真实附件请求投影尚未安装");
                 final JSONArray immutableRefs=projection==null?new JSONArray():projection.select(selections,config,live);
+                if(spanSend!=null){
+                    var proof=originalRetainedWorkSpan(spanSend.span());
+                    if(!proof.body().equals(config.redactSensitive(proof.body())))
+                        throw new SecurityException("原选段或窗口无法原样核对，可移除选段后再发送");
+                    spanSend.visit().requirePending(historyTasks);
+                }
                 messageWriteAttempted=true;
                 saved=commit(()->{
                     JSONObject conversation;
@@ -787,16 +837,22 @@ public final class AssistantModule implements EngineModule {
                     if(immutableSources.length()>0)message.put("ownerSourceRefs",immutableSources);
                     if(immutablePreviews.length()>0)message.put("ownerPreviewRefs",immutablePreviews);
                     if(immutableObjects.length()>0)message.put("ownerObjectRefs",immutableObjects);
+                    if(spanSend!=null){
+                        spanSend.visit().requirePending(historyTasks);
+                        historyTasks.requireOriginalRetainedWorkSpan(spanSend.span());
+                        spanSend.visit().requirePending(historyTasks);
+                        message.put(OwnerRetainedWorkSpan.FIELD,spanSend.span().json());
+                    }
                     JSONObject ack=new JSONObject().put("status","unconfirmed").put("messageId",message.getString("id")).put("clientMessageId",client).put("conversationId",cid).put("mode",mode).put("reconciliationRequired",true);
                     if(displayWindow!=null){ack.put("nativeLocalRead",true);source(message.getString("id")).put("ownerDisplayDraftProof",input.getString("_nativeDisplayDraftProof"));}
                     message.put("submission",ack);source(message.getString("id")).put("clientMessageId",client).put("requestFingerprint",fingerprint).put("submission",copy(ack));
                     conversation.getJSONArray("messages").put(message);trimMessages(conversation);conversation.put("updatedAt",System.currentTimeMillis());
                     return new JSONObject().put("conversationId",cid).put("message",copy(message));
                 });
-                synchronizeSources();
+                if(spanSend==null)synchronizeSources();
             }catch(Exception failure){if(starting||resuming)releaseLive(lease);throw failure;}
             JSONObject message=saved.getJSONObject("message"),binding;
-            final OrdinaryQuestionInput ordinary=ordinaryKind!=null&&starting&&(requested.isEmpty()==(ordinaryKind==OrdinaryChatKind.FIRST_FENCED))&&
+            final OrdinaryQuestionInput ordinary=spanSend==null&&ordinaryKind!=null&&starting&&(requested.isEmpty()==(ordinaryKind==OrdinaryChatKind.FIRST_FENCED))&&
                     projectStart==null&&displayWindow==null&&!blockDefaults&&Boolean.TRUE.equals(input.opt("mustMatchObservedForeground"))&&
                     !hasTurn&&!safe.isEmpty()&&selections.length()==0&&selectedSources.length()==0&&selectedPreviews.length()==0&&
                     selectedObjects.length()==0&&durable()?new OrdinaryQuestionInput(client,message.getLong("revision"),ordinaryKind):null;
@@ -805,7 +861,12 @@ public final class AssistantModule implements EngineModule {
                 finally{releaseLive(lease);}
             }
             try{
-                if(!starting)binding=nativeInputHost.append(cid,copy(message),mode,expected,live);
+                if(spanSend!=null){
+                    spanSend.visit().requirePending(historyTasks);
+                    synchronizeSources();
+                    spanSend.visit().requirePending(historyTasks);
+                    binding=nativeInputHost.startRetainedSpanScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input),spanSend.visit());
+                }else if(!starting)binding=nativeInputHost.append(cid,copy(message),mode,expected,live);
                 else if(blockDefaults)binding=nativeInputHost.startWithoutDefaultWrites(cid,safe,copy(message),config,live,nativeExecutionScope(input));
                 else if(projectStart!=null)binding=nativeInputHost.startProject(cid,safe,copy(message),config,live,nativeExecutionScope(input),projectStart);
                 else if(ordinary!=null&&ordinary.kind==OrdinaryChatKind.FIRST_FENCED)
@@ -816,6 +877,14 @@ public final class AssistantModule implements EngineModule {
                 if(blockDefaults&&!Boolean.TRUE.equals(binding.opt("defaultWritesBlocked")))throw new SecurityException("原宿主未证实这项委托的默认偏好限制");
             }catch(Exception failure){
                 if(starting||resuming){stopUnstarted(lease);}
+                if(spanSend!=null&&spanSend.visit().retireWithoutClaim()){
+                    // The USER really exists; no typed mailbox commit decision was
+                    // won. Preserve its exact receipt; never replay or delete it.
+                    JSONObject rejected=copy(message.getJSONObject("submission")).put("status","rejected").put("notAdmitted",true)
+                            .put("reconciliationRequired",false).put("reason","retained_span_saved_not_dispatched");
+                    commit(()->{findMessage(find(cid),message.getString("id")).put("submission",copy(rejected));source(message.getString("id")).put("submission",copy(rejected));return null;});
+                    context.emit(id(),copy(rejected).put("phase","rejected"));return rejected;
+                }
                 // Only the native mailbox can prove this input was never admitted. Unknown
                 // exceptions retain the original query-only receipt and must not be replayed.
                 if(!starting&&!resuming&&failure instanceof dev.pocketengine.core.OwnerInputNotAdmittedException){

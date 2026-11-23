@@ -99,7 +99,7 @@ import {MessageOriginReader,type MessageOriginTarget} from './MessageOriginReade
 import {PhoneReturnedReport,phoneReportInSource,type PhoneReportTarget} from './PhoneReturnedReport';
 import {PhoneMessageReturn} from './PhoneMessageReturn';
 import {ReadingView} from './ReadingView';
-import {originalWorkDeliveryCommand,sameOriginalWorkDelivery,useOriginalWorkDeliveryReader,type OriginalWorkDeliverySource} from './useOriginalWorkDeliveryReader';
+import {originalWorkDeliveryCommand,retainedSpanRemoveCommand,retainedSpanStageCommand,sameOriginalWorkDelivery,useOriginalWorkDeliveryReader,type OriginalWorkDeliverySource} from './useOriginalWorkDeliveryReader';
 import {ReadingContext,type ReadingDocument,type ReadingSnapshot} from './reading-context';
 import {ComposerSourceReferences,ComposerObjectReferences} from './ComposerSourceReferences';
 import {ComposerPreviewReferences} from './ComposerPreviewReferences';
@@ -975,13 +975,16 @@ function useNativeDraft(owner:string,text:string,revision:any){
   currentValueFor:(key:string)=>current.current.owner===key?current.current.value:undefined,currentEditSequence:()=>editSequence.current,owner};
 }
 /** Existing exceptional receipts retain their separate feedback. */
-function Receipt({receipt}:{receipt:Json}){
+function Receipt({receipt,savedMessage}:{receipt:Json;savedMessage?:{id:string;conversation:string}}){
  const status=String(receipt.status||receipt.state||'');
  if(!['failed','rejected','unconfirmed','unknown','pending','withdrawn'].includes(status))return null;
  const labels:Record<string,string>={failed:'发送未确认',rejected:'未发送',unconfirmed:'结果待确认',unknown:'结果待确认',pending:'正在确认',withdrawn:'已撤回'};
- const detail=receipt.message||receipt.reason;
+ const spanNotDispatched=!!savedMessage&&status==='rejected'&&receipt.reason==='retained_span_saved_not_dispatched'&&
+  receipt.messageId===savedMessage.id&&receipt.conversationId===savedMessage.conversation&&
+  receipt.notAdmitted===true&&receipt.reconciliationRequired===false&&!['taskId','runId','epoch'].some(key=>Object.hasOwn(receipt,key));
+ const detail=spanNotDispatched?null:receipt.message||receipt.reason;
  const localPending=status==='unconfirmed'&&receipt.nativeLocalRead===true;
- return <MotionFeedback identity={`${status}:${detail||''}`} className="pw-input-receipt" role="status"><span>{localPending?'原问题已保存，暂无可核对的主屏读数':labels[status]}</span>{detail&&<small>{detail}</small>}</MotionFeedback>;
+ return <MotionFeedback identity={`${status}:${detail||''}`} className="pw-input-receipt" role="status"><span>{spanNotDispatched?'已保存到本机，未派发任务':localPending?'原问题已保存，暂无可核对的主屏读数':labels[status]}</span>{detail&&<small>{detail}</small>}</MotionFeedback>;
 }
 
 function ChatPhonePickerGate({covered,retire,children}:{covered:boolean;retire:()=>void;children:ReactNode}){
@@ -1408,6 +1411,12 @@ export default function App(){
  const savedChatPdfVisit=useRef<SavedChatPdfVisit['current']>(null);
  const confirmedHistoryWordVisit=useRef<ConfirmedHistoryWordVisit|null>(null);
  const [confirmedHistoryWordReady,setConfirmedHistoryWordReady]=useState('');
+ const retainedSpanSendVisit=useRef<{id:string}|null>(null);
+ const beginRetainedSpanSendVisit=()=>{
+  const visit={id:crypto.randomUUID()};
+  retainedSpanSendVisit.current=visit;
+  return {retainedSpanVisitId:visit.id};
+ };
  const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport;compilerFile?:{id:string;sha256:string;request:number;document:number}}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn;shelf?:PreferredChatFile})&{target:HTMLButtonElement}|null>(null);
  const [fileAttachmentPicker,setFileAttachmentPicker]=useState<FileAttachmentPickerOrigin|null>(null);
  const fileAttachmentPickerLaunch=useRef<FileAttachmentPickerLaunch|null>(null);
@@ -2146,6 +2155,22 @@ export default function App(){
        document.hidden||options?.stillCurrent&&!options.stillCurrent())return false;
    }
    if(savedChatPdfVisit.current||chatDefaultPresets.current||confirmedHistoryWordVisit.current)return false;
+   const spanVisit=retainedSpanSendVisit.current;
+   if(spanVisit){
+    const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+    const current=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&
+     retainedSpanSendVisit.current===spanVisit&&!document.hidden;
+    if(!current())return false;
+    try{
+     const reply=await bridge.command<{visitId?:string;retired?:boolean}>('composer.retireRetainedSpanSend',{visitId:spanVisit.id});
+     if(!current()||reply?.retired!==true||reply.visitId!==spanVisit.id||chatDefaultPresets.current||savedChatPdfVisit.current||confirmedHistoryWordVisit.current||
+        options?.stillCurrent&&!options.stillCurrent())return false;
+     retainedSpanSendVisit.current=null;
+    }catch{
+     if(current())setLocalError('原选段发送窗口尚未确认关闭，请重试离开。不会自动重发。');
+     return false;
+    }
+   }
    planSettingsReturn.current=null;terminalSavedFileArrival.current=null;setPythonSetupReturn(undefined);setViteToolsReturn(undefined);
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
@@ -4309,6 +4334,24 @@ export default function App(){
    if(originalChatTeamVisit.current===visit)closeChatTeamReport(false);
   }
  };
+ const retainedWorkSpan=obj(state.retainedWorkSpan);
+ const hasRetainedWorkSpan=retainedWorkSpan.key===draftKey&&retainedWorkSpan.epoch===draftEpoch&&
+  Number.isSafeInteger(retainedWorkSpan.chars)&&retainedWorkSpan.chars>0&&retainedWorkSpan.chars<=4000;
+ const retainedWorkSendBlocked=hasRetainedWorkSpan&&(route!=='chat'||intent!=='chat'||state.chatBusy||localDisplayReady||
+  retainedWorkSpan.saving!==false||!!composer.voiceText||asArray(composer.previewRefs).length>0);
+ const removeRetainedWorkSpan=async()=>{
+  const live=bridge.getState(),d=live.composer,span=obj(live.state.retainedWorkSpan),doc=bridge.getDocumentEpoch(),nav=navigationWindow.current;
+  const here=()=>!document.hidden&&doc===bridge.getDocumentEpoch()&&nav===navigationWindow.current&&
+   bridge.getState().composer?.key===d?.key&&bridge.getState().composer?.epoch===d?.epoch;
+  if(!here()||!d||d.key!==draftKey||d.epoch!==draftEpoch||span.key!==d.key||span.epoch!==d.epoch||
+     d.revision!==span.revision||d.text!==chatDraft.currentValue()||!Number.isSafeInteger(d.revision))return;
+  try{
+   const value=await bridge.command<Json>(retainedSpanRemoveCommand,{key:d.key,epoch:d.epoch,revision:d.revision});
+   if(here()&&(value?.persisted!==true||value.selected!==false||value.executionAuthorized!==false||
+      value.key!==d.key||value.epoch!==d.epoch||value.fromRevision!==d.revision||value.revision!==d.revision+1))
+    setLocalError('移除尚未核对，请回原草稿查看。没有发送。');
+  }catch(error){if(here())setLocalError(error instanceof Error?error.message:'未核对到选段移除。')}
+ };
  const deliveryReader=useOriginalWorkDeliveryReader((source,trigger)=>{
   const live=bridge.getState(),view=obj(live.view),owner=live.state;
   if(route!=='chat'||intent!=='chat'||taskOpen||taskOpening||commandOpen||workReportPage||searchHistoryPage||searchOriginal||readingDocuments.length||
@@ -4328,6 +4371,24 @@ export default function App(){
   const node=scroll.current,top=node?.scrollTop;
   rememberChatPosition();
   return ()=>{if(node?.isConnected&&node===scroll.current&&typeof top==='number')node.scrollTop=top};
+ },source=>{
+  const live=bridge.getState(),d=live.composer,owner=live.state,voice=obj(owner.voiceInput);
+  if(route!=='chat'||intent!=='chat'||!ordinaryMessageWorkChat(live,source.conversationId,draftEpoch)||
+     !live.capabilities?.commands.includes(retainedSpanStageCommand)||owner.chatBusy||owner.chatSubmitting||owner.phoneSubmitting||
+     owner.chatAttachmentPickerOpen||owner.listening||voice.reviewAvailable===true||voice.active===true||
+     obj(owner.retainedWorkSpan).key===d?.key||d?.ready!==true||d.saving!==false||
+     d.key!=='conversation:'+source.conversationId||d.key!==draftKey||d.epoch!==draftEpoch||
+     !Number.isSafeInteger(d.revision)||d.text!==chatDraft.currentValue()||
+     asArray<Json>(d.pending).some(row=>row.draftKey===d.key))return;
+  return {key:d.key,epoch:d.epoch,revision:d.revision};
+ },editor=>{
+  const doc=bridge.getDocumentEpoch(),nav=navigationWindow.current;
+  setLocalStatus('已引用原成果选段，未发送。');
+  requestAnimationFrame(()=>{
+   const d=bridge.getState().composer;
+   if(!document.hidden&&doc===bridge.getDocumentEpoch()&&nav===navigationWindow.current&&d?.key===editor.key&&d.epoch===editor.epoch)
+    workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')?.focus({preventScroll:true});
+  });
  });
  const closeOriginalDelivery=deliveryReader.close;
  const originalReminderChatCurrent=(visit:OriginalReminderChatVisit)=>{
@@ -4883,6 +4944,7 @@ export default function App(){
  };
  useEffect(()=>{const receipt=phoneDraft.startReceipt;if(receipt&&['accepted','rejected','unknown'].includes(receipt.status)){const original=phoneStartReceipt(receipt);setPhoneStart(original);if(original.status!=='unknown'&&phoneReview&&phoneReview.reviewHandle===receipt.reviewHandle)setPhoneReview(receipt.recheckReview===phoneReview.reviewHandle?{...phoneReview,documentEpoch:undefined}:null)}},[phoneDraft.startReceipt?.status,phoneDraft.startReceipt?.reviewHandle,phoneDraft.startReceipt?.requestId,phoneDraft.startReceipt?.draftRequestId,phoneDraft.startReceipt?.canRetire,phoneDraft.startReceipt?.taskId,phoneDraft.startReceipt?.admitted,phoneDraft.startReceipt?.admissionState,phoneDraft.startReceipt?.runId,phoneDraft.startReceipt?.epoch,phoneOwner]);
  const send=()=>{
+  if(retainedWorkSendBlocked){setLocalStatus('请在空闲的原私人对话核对选段，或先移除。没有发送。');return;}
   if(intent==='chat'&&firstChatDraftHeld(draftKey,draftEpoch))return;
   if(intent==='chat'&&teamReplacements.current.has(draftKey)){setLocalStatus('请先核对编组更换，原草稿没有发送。');return;}
   if(displayDraftSettling||reportDraftFlight.current)return;if(keepOriginalPhoneGoal){setLocalStatus('这段目标已有原启动回执。可以核对，或编辑成一个新目标。');return}if(intent!=='chat'&&['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)){setLocalStatus('请先核对所选原话。这份手机目标没有提交。');return}if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(displayBlocked){setLocalError(displayBlocked);return}
@@ -4910,7 +4972,7 @@ export default function App(){
   if(route==='butler'){butlerSendConversation.current=String(state.conversationId||'');void navigate('chat')}
   setLocalStatus('');goToLatest();chatDraft.markSent();markMessageArrival();
   const displayedTurn=foregroundTurn?{taskId:foregroundTurn.taskId,runId:foregroundTurn.runId,epoch:foregroundTurn.epoch}:{};
-  void act('composer.send',{key:draftKey,epoch:draftEpoch,text,...(localDisplayReady?{primaryDisplayRevision:composer.revision}:
+  void act('composer.send',{key:draftKey,epoch:draftEpoch,text,...(hasRetainedWorkSpan?beginRetainedSpanSendVisit():{}),...(localDisplayReady?{primaryDisplayRevision:composer.revision}:
    {expectedDraftRevision:ordinaryDraftRevision,expectedForegroundTurn:displayedTurn})}).then(value=>{
    if(!pin||firstChatRegistration.current!==pin||pin.document!==bridge.getDocumentEpoch())return;
    const proof=obj(value?.firstChatRegistration);
@@ -9362,6 +9424,7 @@ export default function App(){
   finally{savedLocalFlight.current=false;setSavedLocalOpening(false);}
  };
  const prepareCloudGoal=async()=>{
+  if(hasRetainedWorkSpan){setLocalError('原成果选段只留在这份对话草稿，未带到其他设备。');return}
   const visibleText=chatDraft.currentValue(), goal=visibleText.trim(), native=bridge.getState();
   if(intent!=='chat'||document.hidden||!goal||goal.length>8000||native.state.chatSubmitting||native.state.phoneSubmitting||firstHostSaveFlight.current)return;
   const original=native.composer, documentEpoch=bridge.getDocumentEpoch();
@@ -9558,6 +9621,11 @@ export default function App(){
    {visibleAttachedFeedback&&<p className="pw-field-hint" role="status">{visibleAttachedFeedback.message}</p>}
    {intent==='chat'&&!draftSwitching&&!state.chatSubmitting&&!registration.waiting&&<ConversationDraftStatus composer={composer} conversation={String(state.conversationId||'')} text={text} attachments={asArray(state.selectedChatAttachments).length}/>}
    {intent==='chat'&&<ComposerSourceReferences key={`${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.source.remove')}/>}
+   {intent==='chat'&&hasRetainedWorkSpan&&<div className="pw-action-row" aria-label="原成果选段">
+     <span className="pw-field-hint">{retainedWorkSpan.saving===false?'已引用原成果选段':'原成果选段保存待核对'} · {retainedWorkSpan.chars} 字 · {state.chatSubmitting||pendingOriginal?'发送回执待核对':'未发送'}</span>
+     <Button variant="ghost" size="small" disabled={!!state.chatSubmitting||!!pendingOriginal||!can(retainedSpanRemoveCommand)}
+       onClick={()=>void removeRetainedWorkSpan()}>移除选段</Button>
+   </div>}
    {intent==='chat'&&!text.length&&composer.independentReportDiscardEmpty===true&&can('ownerWork.report.followUp.discardEmpty')&&
     <Button variant="ghost" size="small" disabled={draftSwitching||registration.waiting||reportDraftSwitching}
      onClick={()=>{void abandonEmptyReportDraft()}}>放弃空追问</Button>}
@@ -9585,7 +9653,7 @@ export default function App(){
        :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':heldFirstChat?
         heldFirstChat.unknown?'首条发送尚待核对。可复制原文、查询已有回执，或返回后另开对话。不会自动重发。':'正在登记首条消息，原文可复制。登记后可继续输入。':inputLimitMessage||undefined}
      visibleSendLabel={shownLocalMainRead?'核对本机只读一次':undefined}
-     sendDisabled={!!pendingDraftTeam||keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady&&!shownLocalMainRead)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={pendingDraftTeam?'先核对编组更换':keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady&&!shownLocalMainRead?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
+     sendDisabled={retainedWorkSendBlocked||!!pendingDraftTeam||keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady&&!shownLocalMainRead)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={retainedWorkSendBlocked?'先核对原成果选段':pendingDraftTeam?'先核对编组更换':keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady&&!shownLocalMainRead?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容" data-chat-add-content="true"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>
     {intent==='chat'&&can('attachments.openPicker')&&<Button variant="ghost" leadingIcon={IconFile} disabled={!!state.chatSubmitting||!draftKey||fileAttachmentPickerLaunch.current?.settled===false} onClick={openRegularAttachmentPicker}>添加附件</Button>}
     {referenceShelfAvailable&&<Button variant="ghost" leadingIcon={IconBook} aria-haspopup="dialog" onClick={openChatReference}>引用本对话备忘</Button>}
@@ -9642,7 +9710,8 @@ export default function App(){
      }
      return;
     }
-    run(action==='query'?'composer.query':action==='retry'?'composer.retry':'composer.returnPending',{clientMessageId:row.clientMessageId});
+    run(action==='query'?'composer.query':action==='retry'?'composer.retry':'composer.returnPending',{clientMessageId:row.clientMessageId,
+     ...(action==='retry'&&hasRetainedWorkSpan&&row.sameDraft?beginRetainedSpanSendVisit():{})});
    }}/></div>;
  // Conversation identity is published before its native messages are loaded.
  // Re-read only when the visible owner source identities arrive or change.
@@ -10324,7 +10393,8 @@ export default function App(){
          <Button variant="ghost" size="small" leadingIcon={IconServer} data-saved-host-continue disabled={!canChooseSavedHost}
            aria-description="先选择主机，不会在这一步发送原话。" onClick={event=>chooseHostForSource(m,event.currentTarget)}>{continueSavedHostLabel}</Button>}
      </div>}
-     {m.submission&&<Receipt receipt={m.submission}/>}
+     {m.submission&&<Receipt receipt={m.submission} savedMessage={m.role==='user'&&m.id&&conversation&&
+       typeof m.sourceRevision==='number'&&m.sourceRevision>0?{id:m.id,conversation}:undefined}/>}
      <MotionFeedback className="pw-message-footer" identity={`${id}:${m.submission?.status||'saved'}:${refs.map(source=>source.id).join(',')}`} initial={continued}>
      {m.hostGoalTaskId&&m.id&&can('conversation.openHostGoal')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
        disabled={taskOpen||chatWorkReading} onClick={event=>void openHostWorkFromChat(m,event.currentTarget)}>打开原主机工作</Button>}
@@ -10959,8 +11029,11 @@ export default function App(){
           {canReadCurrentWeb&&<><p className="pw-reading-note">只核对当前私人副本已保存的源码与对应的本机网页成果。不会自动构建或保存。</p>
             <Button disabled={previewBlocked||taskOpening} onClick={openCurrentProjectWeb}>预览已构建网页</Button></>}
           {savedStaticFolder&&<div className="pw-form-actions">
-            <Button variant="secondary" disabled={previewBlocked||taskOpening} onClick={()=>chooseSavedStaticFile(savedStaticFolder)}>到原手机副本选择网页</Button>
-            <p className="pw-field-hint">打开原文件列表，选择已保存的 index.html 后再核对网页资源。</p>
+            <Button variant="secondary" disabled={previewBlocked||taskOpening} onClick={()=>chooseSavedStaticFile(savedStaticFolder)}>
+              {savedStaticFolder.exactSavedPageStarter?'选择当前已保存的网页':'到原手机副本选择网页'}</Button>
+            <p className="pw-field-hint">{savedStaticFolder.exactSavedPageStarter?
+              '选择这份副本中当前已保存的 index.html，再核对网页资源。不打开保留的旧版本，也不构建。':
+              '打开原文件列表，选择已保存的 index.html 后再核对网页资源。'}</p>
           </div>}
           {can('projects.preview')&&<div className="pw-form-actions">
             <Button variant="secondary" disabled={previewBlocked} onClick={projectPreview.open}>查看已登记的任务预览</Button>

@@ -540,7 +540,7 @@ internal class PocketWebBridge(
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "conversation.reader.searchFiles", "conversation.reader.openSearchFile",
-            "ownerWork.teamReport.read", "ownerWork.deliveryText.read", "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
+            "ownerWork.teamReport.read", "ownerWork.deliveryText.read", "ownerWork.deliveryText.release", "ownerWork.deliverySpan.stage", "ownerWork.deliverySpan.remove", "composer.retireRetainedSpanSend", "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
             "attachments.pick", "attachments.pickForDraft", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original", "phone.result.taskOriginal",
             "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
@@ -632,12 +632,18 @@ internal class PocketWebBridge(
         }
     }
 
-    fun foreground(value: Boolean) { reminderNotificationForeground(value); if (!value) { retireChatDefaults(); observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) {
+        // Fence native mailbox admission as soon as the host begins pausing this surface.
+        if (!value) retireActiveSpanSend()
+        reminderNotificationForeground(value); if (!value) { retireChatDefaults(); observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value)
+    }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
         if (closed) return
         closed = true
+        retireActiveSpanSend()
+        retireSavedModelTestWait()
         retireChatDefaults()
         observeOrdinaryFirstFailure(null)
         retireKeptStaticPages()
@@ -899,11 +905,13 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        retireSavedModelTestWait()
         retireChatDefaults()
         retireKeptStaticPages()
         retireSourceCheckpoints()
         retireReplyPicker()
         originalSavedPdfVisit?.let { retireSavedPdfVisit(it,closeWindow=false) }
+        retireActiveSpanSend()
         savedLocalReturn = null
         openedRetainedDraftCopy = null
         controller.closeOwnerWorkRequestHistory()
@@ -1016,6 +1024,15 @@ internal class PocketWebBridge(
                 liveReplyDocuments(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true,includeText=true).orEmpty()
                     .map{original->PocketWebState.ReplyDocument(original.file,original.checkFirst)}
             }
+            if(section==null&&taskViewId==null&&!phoneComposer.intent&&controller.webPrivateOwnerVisible()) {
+                controller.composerDraft?.let { draft ->
+                    draft.retainedWorkSpan?.let { span ->
+                        projection?.getJSONObject("state")?.put("retainedWorkSpan",JSONObject().put("key",draft.key)
+                            .put("epoch",controller.composerViewEpoch).put("revision",draft.revision).put("chars",span.chars())
+                            .put("saving",controller.composerSaving))
+                    }
+                }
+            }
             exactPicker?.let {
                 projection?.getJSONObject("state")?.put("originalReplyAttachmentPicker",
                     JSONObject().put("requestId",it.request).put("draftKey",it.key).put("draftEpoch",it.epoch).put("sourceWindow",it.sourceWindow)
@@ -1070,6 +1087,7 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("remoteInbox", remoteInbox.snapshot())
             projection?.getJSONObject("state")?.put("modelDiagnostics", modelDiagnostics.snapshot())
             originalSavedPdfVisit?.takeUnless{it.originalCurrent()}?.let{retireSavedPdfVisit(it)}
+            if(originalRetainedSpanSend?.current?.invoke()==false)retireActiveSpanSend()
             projection?.getJSONObject("state")?.put("attachmentWorkspace", attachmentPages.snapshot(
                 draftPresentation = documentId != null && section == null && taskViewId == null,
                 workPagePresentation = documentId != null && section == null && taskViewId != null &&
@@ -2231,6 +2249,23 @@ internal class PocketWebBridge(
             if (action == "ownerWork.deliveryText.read") {
                 readOriginalCompletedWorkDelivery(id, args)
                 return
+            }
+            if(action=="ownerWork.deliverySpan.stage"||action=="ownerWork.deliverySpan.remove"){
+                mutateRetainedDeliverySpan(id,action,args);return
+            }
+            if(action=="ownerWork.deliveryText.release"){
+                checkedPayload(args,setOf("pageToken"))
+                if(retainedDeliveryOffer?.token==requiredString(args,"pageToken"))retainedDeliveryOffer=null
+                complete(id,accepted(),null,retainValue=false);return
+            }
+            if(action=="composer.retireRetainedSpanSend"){
+                checkedPayload(args,setOf("visitId"));val visit=requiredString(args,"visitId")
+                require(visit.matches(Regex("[a-f0-9-]{36}")))
+                recordRetiredSpanVisit(visit)
+                originalRetainedSpanSend?.takeIf{it.visit.id==visit}?.let{
+                    retireActiveSpanSend()
+                }
+                complete(id,JSONObject().put("visitId",visit).put("retired",true),null,retainValue=false);return
             }
             if (action == "ownerWork.teamReport.read") {
                 readOriginalChatTeamReport(id, args)
@@ -3675,6 +3710,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
+                    retireActiveSpanSend()
                     retireChatDefaults()
                     clearReminderNotificationWindow()
                     retireReplyPicker()
@@ -3708,13 +3744,14 @@ internal class PocketWebBridge(
                                 && controller.composerDraft?.revision == revision.toLong()) { "原输入已变化，协作目标没有覆盖当前草稿，请回原草稿核对" }
                             require(text.length <= dev.pocketengine.features.assistant.OwnerComposerState.MAX_TEXT) { "管家原草稿与协作目标合并后过长，请先整理原输入；两份内容仍保留" }
                         }
+                        if(controller.composerDraft?.text!=text)retireActiveSpanSend()
                         controller.editComposerText(key, epoch, text)
                         if (args.has("expectedRevision")) {
                             require(controller.composerDraft?.key == key && controller.composerViewEpoch == epoch
                                 && controller.composerDraft?.text == text) { "协作目标尚未加入管家输入，请核对保留的原草稿" }
                         }
                     }
-                    "composer.mode" -> { val mode = requiredString(args, "mode"); require(mode in setOf("queue", "steer")); controller.setChatSendMode(mode, key, epoch) }
+                    "composer.mode" -> { val mode = requiredString(args, "mode"); require(mode in setOf("queue", "steer")); if(controller.composerDraft?.mode!=mode)retireActiveSpanSend();controller.setChatSendMode(mode, key, epoch) }
                     else -> {
                         val text = requiredString(args, "text", true)
                         val draftAtPreflight = controller.composerDraft
@@ -3732,6 +3769,8 @@ internal class PocketWebBridge(
                                 firstChatRegistration(key, epoch, attemptedFirstRevision, "not_prepared"), message)
                             throw IllegalArgumentException(message)
                         }
+                        if(args.has("retainedSpanVisitId")!=(draftAtPreflight?.retainedWorkSpan!=null))
+                            rejectBeforePrepare("原选段草稿或发送窗口已变化，没有按其他内容发送。")
                         if (draftAtPreflight?.text != text || !ChatInputRules.canSend(controller.state, false, text))
                             rejectBeforePrepare("原输入尚不可发送，请核对保留草稿与原任务")
                         if (attemptedFirstRevision != null && attemptedFirstRevision != draftAtPreflight?.revision)
@@ -3757,7 +3796,8 @@ internal class PocketWebBridge(
                                 draft.voiceText.isEmpty() && text.isNotBlank()
                         }
                         controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() },
-                            originalOrdinaryComposer=ordinary,expectedDraftRevision=expectedDraftRevision,expectedForegroundTurn=expectedForegroundTurn)
+                            originalOrdinaryComposer=ordinary,expectedDraftRevision=expectedDraftRevision,expectedForegroundTurn=expectedForegroundTurn,
+                            retainedSpanVisit=if(draftAtPreflight?.retainedWorkSpan!=null) captureRetainedSpanSend(args) else null)
                         if (first != null && controller.composerViewEpoch == epoch && controller.composerDraft === first) {
                             val rows = controller.composerPending.filter { it.draftKey == key }
                             val prepared = rows.singleOrNull()?.takeIf { it.draftRevision == first.revision &&
@@ -3800,6 +3840,7 @@ internal class PocketWebBridge(
                     ) { "原手机回执或输入已变化，没有切换输入或启动任务" }
                     controller.switchIdleReceiptInput { phoneComposer.changeIntent(args) }
                 } else {
+                    if(args.opt("phone")==true)retireActiveSpanSend()
                     phoneComposer.changeIntent(args)
                     controller.dismissError()
                     voiceInput.clear()
@@ -3813,7 +3854,8 @@ internal class PocketWebBridge(
                 when (action) {
                     "composer.query" -> controller.queryChatSubmission(client)
                     "composer.retry" -> controller.retryLocallyUnsent(client,
-                        if (controller.composerPending.any { it.clientId == client && it.primaryDisplayOnly }) primaryDisplayComposerWindow() else null)
+                        if (controller.composerPending.any { it.clientId == client && it.primaryDisplayOnly }) primaryDisplayComposerWindow() else null,
+                        if (controller.composerDraft?.retainedWorkSpan != null && controller.canRetryLocallyUnsent(client)) captureRetainedSpanSend(args) else null)
                     else -> controller.returnToPendingComposer(client)
                 }
             }
@@ -4449,9 +4491,27 @@ internal class PocketWebBridge(
         return projection.value() to dev.pocketengine.runtime.models.ModelSelectionCoordinator.Status(projection.revision(), false)
     }
 
+    private class SavedModelTestWait(val target: PocketWebModelConnectionCommands.StopWaiting,
+        val requestId: String, val panelCurrent: () -> Boolean, val control: RunControl = RunControl()) {
+        var inFlight = true
+    }
+    // Main-thread owned. Keep only a single non-secret wait identity until the panel leaves,
+    // so Back also works if the diagnostic finished just before the stop acknowledgement.
+    private var savedModelTestWait: SavedModelTestWait? = null
+
+    private fun retireSavedModelTestWait(keepIdentity: Boolean = false) {
+        val wait = savedModelTestWait ?: return
+        if (!keepIdentity) savedModelTestWait = null
+        if (!wait.inFlight) return
+        wait.inFlight = false
+        wait.control.cancel()
+        complete(wait.requestId, JSONObject().put("status", "wait_retired").put("waitId", wait.target.waitId),
+            null, retainValue = false)
+    }
+
     private fun modelConnection(requestId: String, action: String, args: JSONObject) {
         requireSection("models")
-        requireModelSelectionIdle()
+        if (action != PocketWebModelConnectionCommands.STOP_WAITING) requireModelSelectionIdle()
         val command = PocketWebModelConnectionCommands.prepare(action, args)
         val completed: (Result<JSONObject>) -> Unit = { result ->
             if (!closed && action != "models.connection.test") {
@@ -4461,7 +4521,9 @@ internal class PocketWebBridge(
             }
             result.fold({ snapshot ->
                 if (action.startsWith("models.connections.")) complete(requestId, PocketWebState.publicValue(snapshot) as JSONObject, null)
-                else complete(requestId, JSONObject().put("status", if (action == "models.connection.test") "tested" else "saved").put("snapshot", PocketWebState.publicValue(snapshot)), null)
+                else complete(requestId, JSONObject().put("status", if (action == "models.connection.test") "tested" else "saved")
+                    .put("snapshot", PocketWebState.publicValue(snapshot)), null,
+                    retainValue = command !is PocketWebModelConnectionCommands.Test || command.wait == null)
             }, { error ->
                 val notApplied = error is dev.pocketengine.store.SettingsStore.ApiConnectionSaveNotApplied
                 complete(requestId, null, (if (notApplied) "服务连接没有保存：" else "原连接操作结果待核对：") + (error.message ?: "请刷新原连接记录"), if (notApplied) "not_sent" else "outcome_unknown")
@@ -4469,16 +4531,41 @@ internal class PocketWebBridge(
             publishState()
         }
         when (command) {
+            is PocketWebModelConnectionCommands.StopWaiting -> {
+                val wait = savedModelTestWait
+                check(wait != null && wait.target == command && wait.panelCurrent()) { "不是当前窗口的原服务测试，没有停止其他测试" }
+                retireSavedModelTestWait(keepIdentity = true)
+                complete(requestId, JSONObject().put("stoppedWaiting", true).put("waitId", command.waitId),
+                    null, retainValue = false)
+                publishState()
+            }
             is PocketWebModelConnectionCommands.Select -> {
                 val service = controller.nativeModelConnections() ?: error("本机模型连接尚未准备")
                 controller.runModelSelectionWrite({ requireModelSelectionIdle(ownMutation = true); service.selectConnection(command.id, command.expectedRevision) }, completed)
             }
             is PocketWebModelConnectionCommands.Test -> {
                 val generation = domainGeneration; val document = documentId; val window = captureWindow()
-                controller.testApiConnection(command.id, command.expectedRevision, command.input, command.editorId, command.draftRevision, {
-                    !closed && section == "models" && document != null && document == documentId && generation == domainGeneration &&
-                        acceptsWindow(window) && controller.webPrivateOwnerVisible()
-                }, completed)
+                fun samePanel() = !closed && section == "models" && taskViewId == null && document != null &&
+                    document == documentId && generation == domainGeneration && controller.webPrivateOwnerVisible()
+                val previous = savedModelTestWait
+                val wait = command.wait?.let { SavedModelTestWait(it, requestId, ::samePanel) }
+                if (wait != null) savedModelTestWait = wait
+                try {
+                    controller.testApiConnection(command.id, command.expectedRevision, command.input, command.editorId, command.draftRevision,
+                        { samePanel() && acceptsWindow(window) }, wait?.control) { result ->
+                        if (wait == null) completed(result)
+                        else if (savedModelTestWait === wait && wait.inFlight && samePanel()) {
+                            wait.inFlight = false
+                            completed(result)
+                        } else {
+                            if (savedModelTestWait === wait && wait.inFlight) retireSavedModelTestWait()
+                            publishState()
+                        }
+                    }
+                } catch (failure: Exception) {
+                    if (wait != null && savedModelTestWait === wait) savedModelTestWait = previous
+                    throw failure
+                }
             }
             is PocketWebModelConnectionCommands.Save -> {
                 val reference = command.draftReference
@@ -5370,7 +5457,84 @@ internal class PocketWebBridge(
         return selected
     }
 
+    private data class RetainedDeliveryOffer(val token:String,val conversation:String,val message:String,val revision:Long,
+        val delivery:TaskStore.OwnerWorkDeliveryRef,val summaryChars:Int,val digest:String,val offset:Int,val end:Int,
+        val fast:()->Boolean,val current:()->Boolean)
+    @Volatile private var retainedDeliveryOffer:RetainedDeliveryOffer?=null
+    private var retainedDeliveryReadSerial=0L
+    private data class RetainedSpanSendScope(val visit:dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.SendVisit,val current:()->Boolean)
+    private var originalRetainedSpanSend:RetainedSpanSendScope?=null
+    private val retiredSpanVisitIds=linkedSetOf<String>()
+    private fun recordRetiredSpanVisit(id:String){
+        retiredSpanVisitIds.add(id)
+        if(retiredSpanVisitIds.size>32)retiredSpanVisitIds.remove(retiredSpanVisitIds.first())
+    }
+    private fun retireActiveSpanSend(){
+        val visit=originalRetainedSpanSend?.visit ?: return
+        visit.retireWithoutClaim();recordRetiredSpanVisit(visit.id);originalRetainedSpanSend=null
+    }
+
+    private fun captureRetainedSpanSend(args:JSONObject):dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.SendVisit {
+        val id=requiredString(args,"retainedSpanVisitId")
+        check(id !in retiredSpanVisitIds && originalRetainedSpanSend?.visit?.id!=id) { "这次原选段发送窗口已退休" }
+        val current=retainedSpanSendWindow()
+        check(current()) { "原选段发送窗口已离开" }
+        val document=requireNotNull(documentId);val bridgeOwner=commandFence.ticket()
+        val foreground=controller.displayedPhoneWindowVersion();val epoch=controller.composerViewEpochForScopedRead
+        val store=controller.nativeButlerHost().tasks
+        // This callback is memory-only and may run during native SQLite admission.
+        // No renderer access or Compose/navigation/TaskStore callbacks.
+        val visit=dev.pocketengine.features.assistant.OwnerRetainedWorkSpan.SendVisit(id,store) {
+            !closed && documentId==document && commandFence.accepts(bridgeOwner) &&
+                controller.displayedPhoneWindowAlive(foreground) && controller.composerViewEpochForScopedRead==epoch &&
+                taskViewId==null
+        }
+        retireActiveSpanSend()
+        originalRetainedSpanSend=RetainedSpanSendScope(visit,current)
+        return visit
+    }
+
+    private fun retainedSpanSendWindow():()->Boolean {
+        val document=documentId
+        val window=captureWindow()
+        val foreground=controller.displayedPhoneWindowVersion()
+        val epoch=controller.composerViewEpochForScopedRead
+        return { !closed&&document!=null&&document==documentId&&commandFence.accepts(window.bridge)&&
+            controller.displayedPhoneWindowAlive(foreground)&&controller.composerViewEpochForScopedRead==epoch&&
+            section==null&&taskViewId==null&&taskReturnSection==null&&!phoneComposer.intent&&
+            controller.conversationReader==null&&controller.queuedInputsPage==null&&controller.state.filePath==null&&
+            !controller.state.chatAttachmentPickerOpen&&!controller.attachmentOutcomes.state.open }
+    }
+    private fun mutateRetainedDeliverySpan(id:String,action:String,args:JSONObject) {
+        val insert=action=="ownerWork.deliverySpan.stage"
+        checkedPayload(args,if(insert)setOf("pageToken","offset","chars","key","epoch","revision") else setOf("key","epoch","revision"))
+        val key=requiredString(args,"key");val epoch=requiredInt(args,"epoch");val revision=requiredLong(args,"revision")
+        val currentEditor=retainedSpanSendWindow()
+        check(currentEditor()&&controller.retainedWorkSpanEditor(key,epoch,revision,insert)){"原选段草稿已变化，保留现有输入"}
+        val document=requireNotNull(documentId)
+        fun settled(value:JSONObject?,failure:String?){
+            if(documentId!=document)return
+            if(!currentEditor())complete(id,null,"原草稿窗口已离开，请回同一输入核对",retainValue=false)
+            else {
+                if(value?.optBoolean("persisted")==true)publishState(force=true)
+                complete(id,value,failure,retainValue=false)
+            }
+        }
+        if(!insert){controller.changeRetainedWorkSpan(key,epoch,revision,null,::settled);return}
+        val offer=retainedDeliveryOffer?:error("请先读取这份原交付正文")
+        val token=requiredString(args,"pageToken")
+        check(offer.token==token&&offer.current()&&key=="conversation:${offer.conversation}"){"原选段阅读窗口已变化"}
+        val offset=requiredInt(args,"offset");val chars=requiredInt(args,"chars")
+        fun fast()=retainedDeliveryOffer===offer&&offer.fast()&&currentEditor()
+        fun current()=fast()&&offer.current()
+        controller.stageRetainedWorkSpan(key,epoch,revision,offer.conversation,offer.message,offer.revision,offer.delivery,
+            offer.summaryChars,offer.digest,offer.offset,offer.end,offset,chars,::fast,::current){value,failure->
+            if(value?.optBoolean("persisted")==true&&retainedDeliveryOffer===offer)retainedDeliveryOffer=null
+            settled(value,failure)
+        }
+    }
     private fun readOriginalCompletedWorkDelivery(id: String, args: JSONObject) {
+        val serial=++retainedDeliveryReadSerial;retainedDeliveryOffer=null
         checkedPayload(args,setOf("conversationId","messageId","sourceRevision","offset","expectedDigest"))
         val conversation=requiredString(args,"conversationId").also { require(it.length<=240) }
         val message=requiredString(args,"messageId").also { require(it.matches(Regex("[a-f0-9-]{36}"))) }
@@ -5394,7 +5558,15 @@ internal class PocketWebBridge(
         controller.readOriginalCompletedWorkDelivery(conversation,message,revision,delivery,selected.summaryChars,offset,digest,::fast,::current) { page,failure ->
             if(documentId!=document)return@readOriginalCompletedWorkDelivery
             if(!current())complete(id,null,"原交付或阅读窗口已变化，未读取其他版本",retainValue=false)
-            else complete(id,page,failure,retainValue=false)
+            else {
+                if(failure==null&&page!=null&&serial==retainedDeliveryReadSerial) {
+                    val token=java.util.UUID.randomUUID().toString()
+                    retainedDeliveryOffer=RetainedDeliveryOffer(token,conversation,message,revision,delivery,selected.summaryChars,
+                        page.getString("resultDigest"),offset,page.getInt("nextOffset"),::fast,::current)
+                    page.put("pageToken",token)
+                }
+                complete(id,page,failure,retainValue=false)
+            }
         }
     }
 
@@ -5546,6 +5718,8 @@ internal class PocketWebBridge(
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { retireKeptStaticPages(); controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
+        retireActiveSpanSend()
+        retireSavedModelTestWait()
         clearReminderNotificationWindow()
         retireKeptStaticPages()
         controller.closeOriginalReminderHistory()

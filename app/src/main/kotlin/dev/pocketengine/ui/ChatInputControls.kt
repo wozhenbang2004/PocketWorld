@@ -2,6 +2,7 @@ package dev.pocketengine.ui
 
 import dev.pocketengine.store.TaskStore
 import dev.pocketengine.features.assistant.AttachmentRequestProjection
+import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.attachments.AttachmentBook
 import dev.pocketengine.features.proxy.providers.ResponsesRequest
 import dev.pocketengine.core.ModelConfig
@@ -11,6 +12,9 @@ import org.json.JSONObject
 
 internal data class UiChatAttachment(val id:String,val sha256:String,val name:String,val mimeType:String,val size:Long){fun selection():JSONObject=JSONObject().put("id",id).put("sha256",sha256)}
 internal object ChatInputRules {
+ const val RETAINED_SPAN_SAVED_NOT_DISPATCHED="retained_span_saved_not_dispatched"
+ private val retainedSpanMessageId=Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
+ private val retainedSpanReceiptFields=setOf("status","reason","clientMessageId","messageId","conversationId","mode","notAdmitted","reconciliationRequired")
  private val inlinePhotoTypes=setOf("image/png","image/jpeg","image/webp")
  private fun inlinePhoto(file:UiChatAttachment)=file.mimeType in inlinePhotoTypes && file.size in 1L..AttachmentRequestProjection.MAX_IMAGE_BYTES.toLong()
  private fun encodedPhotoBytes(file:UiChatAttachment)=4L*((file.size+2L)/3L)
@@ -84,6 +88,23 @@ internal object ChatInputRules {
   if(excludeThis)input.put("excludeThisInputFromLearning",true)
   if(lockDefaults){require(excludeThis&&conversation.isNullOrEmpty());input.put("firstTaskWithoutDefaultWrites",true)}
   return TaskStore.capabilityFingerprint(input)
+ }
+ /** A saved USER message with no mailbox admission has no new task/run identity. */
+ fun savedRetainedSpanReceipt(old:JSONObject?,incoming:JSONObject,original:OwnerComposerState.Pending):JSONObject?{
+  val keys=incoming.keys().asSequence().toSet()
+  if(keys!=retainedSpanReceiptFields&&
+   !(keys==retainedSpanReceiptFields+"duplicate"&&incoming.opt("duplicate")==true))return null
+  val message=incoming.opt("messageId") as? String ?: return null
+  if(original.primaryDisplayOnly||original.firstChatPhase!=null||original.conversationId.isBlank()||
+   original.draftKey!="conversation:${original.conversationId}"||original.originalTarget().length()!=0||
+   incoming.opt("status")!="rejected"||incoming.opt("reason")!=RETAINED_SPAN_SAVED_NOT_DISPATCHED||
+   incoming.opt("notAdmitted")!=true||incoming.opt("reconciliationRequired")!=false||
+   incoming.opt("clientMessageId")!=original.clientId||incoming.opt("conversationId")!=original.conversationId||
+   incoming.opt("mode")!=original.mode||!message.matches(retainedSpanMessageId))return null
+  if(old!=null&&(old.opt("status")!="unconfirmed"||old.opt("clientMessageId")!=original.clientId||
+   listOf("taskId","runId","epoch").any(old::has)||
+   listOf("messageId","conversationId","mode").any{old.has(it)&&old.opt(it)!=incoming.opt(it)}))return null
+  return JSONObject(incoming.toString())
  }
  fun mergeReceipt(old:JSONObject?,incoming:JSONObject):JSONObject?{
   val client=incoming.optString("clientMessageId");val status=incoming.optString("status");if(client.isBlank()||status !in setOf("accepted","queued","unconfirmed","consumed","withdrawn","rejected"))return null

@@ -502,6 +502,7 @@ public final class ConversationRepository {
                     if(message.optJSONArray("attachments")!=null&&message.getJSONArray("attachments").length()>0){omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","attachment_bytes_and_grants_not_exported"));JSONArray refs=message.getJSONArray("attachments");for(int i=0;i<refs.length();i++){JSONObject ref=refs.getJSONObject(i);if(ref.optString("id").isEmpty()||!ref.optString("sha256").matches("[a-f0-9]{64}"))continue;attachments.put(new JSONObject().put("messageId",id).put("attachmentId",ref.getString("id")).put("sha256",ref.getString("sha256")).put("availability","reference_only_unverified_not_restored"));}}
                     if(message.optJSONArray("ownerSourceRefs")!=null&&message.getJSONArray("ownerSourceRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","external_source_grants_not_exported"));
                     if(message.optJSONArray("ownerObjectRefs")!=null&&message.getJSONArray("ownerObjectRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","native_object_selections_not_exported"));
+                    if(message.has(OwnerRetainedWorkSpan.FIELD))omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","retained_work_span_not_exported"));
                     if(message.optJSONArray("ownerPreviewRefs")!=null&&message.getJSONArray("ownerPreviewRefs").length()>0)omitted.put(new JSONObject().put("sourceRecordId",id).put("reason","native_preview_selections_not_exported"));
                 }
             }
@@ -952,6 +953,7 @@ public final class ConversationRepository {
         String id=message.getString("id");JSONObject state=source(gen,id);if(state==null||state.getBoolean("deleted")||!conversation.equals(state.getString("conversationId"))||integer(message,"revision",1)!=state.getLong("revision")||!message.getString("role").equals(state.getString("role")))throw new SecurityException("原消息/来源修订不一致，未保存副本");
         JSONObject meta=new JSONObject(message.toString());String body=meta.getString("content");if(!StandardCharsets.UTF_8.newEncoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).canEncode(body))throw new IllegalArgumentException("原文含不完整Unicode字符，未隐式替换后保存");byte[] bodyBytes=body.getBytes(StandardCharsets.UTF_8);meta.remove("content");meta.remove("ownerOriginalLocator");long sequence=importedSequence;
         meta.remove(ORIGINAL_REMINDER_RECORDED); // Derived from the private source row, never from message JSON.
+        meta.remove(OwnerRetainedWorkSpan.DISPLAY_FIELD);
         meta.remove(ORIGINAL_MEMORY_DRAFT);meta.remove(ORIGINAL_MEMORY_DRAFT_RECORDED);
         meta.remove(ORIGINAL_REPLY_DOCUMENT);meta.remove(ORIGINAL_REPLY_DOCUMENT_VIEW);meta.remove(ORIGINAL_REPLY_DOCUMENT_PAIR);
         boolean existing=false;
@@ -1084,6 +1086,8 @@ public final class ConversationRepository {
                     .equals(TaskMemoryTrace.rawFingerprint(new JSONObject().put("refs",actual==null?new JSONArray():actual))))
                 throw new SecurityException("原排队输入的附件或原文引用已变化");
         }
+        if(!java.util.Objects.equals(OwnerRetainedWorkSpan.in(row),OwnerRetainedWorkSpan.in(message)))
+            throw new SecurityException("原主人输入的留存选段与已保存记录不符");
     }
     /** Native opaque selection only; no independent transaction, source grant or model command. */
     JSONObject mutateQueuedOwnerMessage(dev.pocketengine.store.TaskStore original,dev.pocketengine.store.TaskStore.QueuedOwnerMessage selected,
@@ -1208,6 +1212,17 @@ public final class ConversationRepository {
     /** Native owner/UI window, not a retention operation. Import records never become SourceRefs. */
     public JSONObject window(String conversation,String cursor,int limit)throws Exception{
         return window(conversation,cursor,limit,null);
+    }
+    /** Detached result only; raw window/message reads also drive original-row mutations. */
+    public static JSONObject forOwnerDisplay(JSONObject result)throws Exception{
+        JSONArray rows=result.optJSONArray("messages");
+        for(int i=0;rows!=null&&i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i);
+            row.remove(OwnerRetainedWorkSpan.DISPLAY_FIELD);
+            if(row.has(OwnerRetainedWorkSpan.FIELD)&&"user".equals(row.opt("role"))&&!row.optBoolean("importAssignedIdentity"))
+                row.put(OwnerRetainedWorkSpan.DISPLAY_FIELD,true);
+        }
+        return OwnerRetainedWorkSpan.hideInternal(result);
     }
     private JSONObject window(String conversation,String cursor,int limit,Runnable current)throws Exception{
         if(current!=null)current.run();

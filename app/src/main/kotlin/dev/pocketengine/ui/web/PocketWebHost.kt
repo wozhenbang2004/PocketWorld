@@ -49,10 +49,12 @@ internal class PocketWebHost private constructor(
     endpoint: ((JSONObject) -> Unit) -> PocketWebEndpoint,
     private val savedPresentation: JSONObject? = null,
     private val readerFailure: (() -> Unit)? = null,
-    private val ownsSystemInsets: Boolean = true
+    private val ownsSystemInsets: Boolean = true,
+    private val retireRetainedSpanBeforeFence: (() -> Unit)? = null
 ) {
     constructor(activity: ComposeActivity, controller: PocketWorldController, savedPresentation: JSONObject? = null) :
-        this(activity, { emit -> PocketWebWorkspaceEndpoint(controller, emit) }, savedPresentation)
+        this(activity, { emit -> PocketWebWorkspaceEndpoint(controller, emit) }, savedPresentation,
+            retireRetainedSpanBeforeFence = controller::retireRetainedSpanBeforeHostFence)
 
     companion object {
         private const val TAG = "PocketWebUi"
@@ -199,6 +201,7 @@ internal class PocketWebHost private constructor(
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 if (closed || documentFence.isRejected()) return
                 if (readerFailure != null && url != ENTRY) { failReader(); return }
+                retireRetainedSpanBeforeFence?.invoke()
                 revokeOwnerStopSurface()
                 documentToken = null
                 bridge.invalidatePresentation(documentReplaced = true)
@@ -230,6 +233,7 @@ internal class PocketWebHost private constructor(
             }
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.cancel(); if (readerFailure != null) failReader() }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                if (!closed && !reopenShown) retireRetainedSpanBeforeFence?.invoke()
                 Log.e(TAG, "renderer-exit crashed=${detail.didCrash()}")
                 if (failReader()) return true
                 // Reopen the same workspace after the renderer exits.
@@ -293,6 +297,7 @@ internal class PocketWebHost private constructor(
     private fun showReopenPrompt() {
         if (closed || reopenShown) return
         if (failReader()) return
+        retireRetainedSpanBeforeFence?.invoke()
         revokeOwnerStopSurface()
         reopenShown = true
         documentFence.close(); documentToken = null; documentLoaded = false
@@ -527,6 +532,8 @@ internal class PocketWebHost private constructor(
         }
     } } }
     fun pause() { if (!closed) {
+        // The typed native sender must lose the mailbox race before the old frame loses authority.
+        retireRetainedSpanBeforeFence?.invoke()
         resumed = false
         revokeOwnerStopSurface()
         main.removeCallbacks(readerStartupTimeout)
@@ -536,6 +543,7 @@ internal class PocketWebHost private constructor(
     fun savePresentationState(): String = bridge.savePresentationState().toString()
     fun close() {
         if (closed) return
+        retireRetainedSpanBeforeFence?.invoke()
         closed = true
         resumed = false
         revokeOwnerStopSurface()

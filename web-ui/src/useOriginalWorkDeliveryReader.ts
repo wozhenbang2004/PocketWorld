@@ -5,11 +5,15 @@ import type {RetainedDeliveryReading} from './ReadingView';
 import type {TaskResult} from './conversation-work';
 
 export const originalWorkDeliveryCommand='ownerWork.deliveryText.read';
+export const retainedSpanStageCommand='ownerWork.deliverySpan.stage';
+export const retainedSpanRemoveCommand='ownerWork.deliverySpan.remove';
+const releasePageCommand='ownerWork.deliveryText.release';
 export type OriginalWorkDeliverySource=Pick<TaskResult,'taskId'|'runId'|'epoch'|'deliveryId'|'summaryChars'>&{
   conversationId:string;messageId:string;sourceRevision:number;
 };
 type Receipt={digest:string;retainedChars:number;excerptChars:number;limited:boolean};
-type Page={body:string;next:number;more:boolean};
+type Page={body:string;next:number;more:boolean;token?:string};
+export type RetainedSpanEditor={key:string;epoch:number;revision:number};
 type Visit={source:OriginalWorkDeliverySource;trigger:HTMLButtonElement;window:string;restorePosition:()=>void};
 type Read={visit:Visit;offset:number;prior:number[];receipt?:Receipt;page?:Page;busy:boolean;error?:string};
 const unavailable='暂时无法核对这份交付的留存正文，可返回原消息查看摘录。';
@@ -35,19 +39,25 @@ function deliveredPage(value:any,source:OriginalWorkDeliverySource,offset:number
   const receipt={digest:value.resultDigest,retainedChars:value.retainedChars,excerptChars:value.excerptChars,limited:value.retentionLimited};
   if(prior&&(receipt.digest!==prior.digest||receipt.retainedChars!==prior.retainedChars||
     receipt.excerptChars!==prior.excerptChars||receipt.limited!==prior.limited))throw new Error(badRange);
-  return {receipt,page:{body:value.body,next:value.nextOffset,more:value.hasMore}};
+  return {receipt,page:{body:value.body,next:value.nextOffset,more:value.hasMore,
+    token:typeof value.pageToken==='string'&&/^[a-f0-9-]{36}$/.test(value.pageToken)?value.pageToken:undefined}};
 }
+function release(token?:string){if(token)void bridge.command(releasePageCommand,{pageToken:token}).catch(()=>{})}
 
 /** The parent supplies the actual, currently rendered ordinary Chat scope. A
  * page never survives the original button/window, even when a native ACK is late. */
 export function useOriginalWorkDeliveryReader(
   readWindow:(source:OriginalWorkDeliverySource,trigger:HTMLButtonElement)=>string|undefined,
-  rememberChatPosition:()=>()=>void
+  rememberChatPosition:()=>()=>void,
+  spanEditor:(source:OriginalWorkDeliverySource)=>RetainedSpanEditor|undefined,
+  onStaged:(editor:RetainedSpanEditor)=>void
 ){
   const windowNow=useRef(readWindow);windowNow.current=readWindow;
+  const editorNow=useRef(spanEditor);editorNow.current=spanEditor;
   const original=useRef<Read|null>(null);
   const [reading,setReading]=useState<Read|null>(null);
   const focusRequest=useRef(0);
+  const staging=useRef(false);
   const current=(visit:Visit)=>!document.hidden&&windowNow.current(visit.source,visit.trigger)===visit.window;
   const put=(value:Read|null)=>{original.current=value;setReading(value)};
   const close=useCallback((restore=true)=>{
@@ -55,6 +65,7 @@ export function useOriginalWorkDeliveryReader(
     if(!target)return false;
     const visit=target.visit,request=++focusRequest.current;
     original.current=null;setReading(null);
+    release(target.page?.token);
     if(!restore||document.hidden||windowNow.current(visit.source,visit.trigger)!==visit.window)return false;
     requestAnimationFrame(()=>{
       if(!original.current&&request===focusRequest.current&&!document.hidden&&
@@ -69,11 +80,12 @@ export function useOriginalWorkDeliveryReader(
   useEffect(()=>{
     const hidden=()=>{if(document.hidden)close(false)};
     document.addEventListener('visibilitychange',hidden);
-    return()=>{document.removeEventListener('visibilitychange',hidden);original.current=null;focusRequest.current++};
+    return()=>{document.removeEventListener('visibilitychange',hidden);release(original.current?.page?.token);original.current=null;focusRequest.current++};
   },[close]);
 
   const read=async(visit:Visit,offset:number,prior:number[],receipt?:Receipt)=>{
-    if(!current(visit)||original.current?.busy)return;
+    if(!current(visit)||original.current?.busy||staging.current)return;
+    release(original.current?.page?.token);
     const pending={visit,offset,prior,receipt,busy:true};
     put(pending);
     const accepts=()=>original.current===pending&&current(visit);
@@ -81,7 +93,8 @@ export function useOriginalWorkDeliveryReader(
       const {conversationId,messageId,sourceRevision}=visit.source;
       const data=await bridge.command(originalWorkDeliveryCommand,{conversationId,messageId,sourceRevision,offset,
         ...(receipt?{expectedDigest:receipt.digest}:{})});
-      if(accepts())put({...pending,...deliveredPage(data,visit.source,offset,receipt),busy:false});
+      const proved=deliveredPage(data,visit.source,offset,receipt);
+      if(accepts())put({...pending,...proved,busy:false});else release(proved.page.token);
     }catch(failure){
       if(accepts())put({...pending,busy:false,error:failure instanceof Error&&failure.message===badRange?badRange:unavailable});
     }
@@ -102,6 +115,20 @@ export function useOriginalWorkDeliveryReader(
     previous:shown.page&&shown.prior.length>0?()=>void read(shown.visit,shown.prior[shown.prior.length-1],shown.prior.slice(0,-1),shown.receipt):undefined,
     next:shown.page?.more?()=>void read(shown.visit,shown.page!.next,[...shown.prior,shown.offset],shown.receipt):undefined,
     retry:shown.error?()=>void read(shown.visit,shown.offset,shown.prior,shown.receipt):undefined,
+    stage:shown.page?.token&&editorNow.current(shown.visit.source)?async(offset,chars)=>{
+      const editor=editorNow.current(shown.visit.source),token=shown.page?.token;
+      if(!editor||!token||!current(shown.visit)||original.current!==shown||staging.current)
+        throw Error('这份原交付或对应草稿已变化，可保留阅读或复制。');
+      staging.current=true;
+      try{
+        const value=await bridge.command<Record<string,unknown>>(retainedSpanStageCommand,{
+          ...editor,pageToken:token,offset:shown.offset+offset,chars});
+        if(value?.persisted!==true||value.selected!==true||value.executionAuthorized!==false||
+           value.key!==editor.key||value.epoch!==editor.epoch||value.fromRevision!==editor.revision||value.revision!==editor.revision+1)
+          throw Error('尚未核对选段保存，请回原草稿核对，不要重复添加。');
+        if(original.current===shown&&current(shown.visit)){close(false);onStaged(editor)}
+      }finally{staging.current=false}
+    }:undefined,
   }:undefined;
   return {open,close,documents,retained};
 }

@@ -96,6 +96,17 @@ public final class LocalModule implements EngineModule {
     }
     @Override public synchronized JSONObject snapshot()throws Exception {
         JSONArray checkouts=ownerCheckoutRecords();
+        // Presentation hint from the already-read registration only. The original editor
+        // still proves the current private file and every explicitly selected preview resource.
+        for(int i=0;i<checkouts.length();i++){
+            JSONObject row=checkouts.getJSONObject(i),source=row.optJSONObject("sourceImport");
+            row.remove("ownerSavedPageStarter"); // Never treat a stored presentation field as a source proof.
+            if(source==null||!ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind")))continue;
+            try{
+                if(ordinaryEditorImportHeader(row,row.optString("projectId"),row.optString("id"))!=null&&savedPageStarterSource(source))
+                    row.put("ownerSavedPageStarter",true);
+            }catch(Exception unavailable){/* An unavailable hint must not change the local catalogue. */}
+        }
         return new JSONObject().put("tools",commands.tools()).put("jobs",commands.list()).put("legacyReceiptRecovery",commands.receiptRecovery()).put("termuxJobs",termux.list()).put("checkouts",checkouts).put("termux",termux.status()).put("projectRuntime",projectRuntime.describe()).put("projectRuntimes",projectRuntimesForOwner()).put("arbitraryAppUidShell",false).put("reviewedImportRequired",true).put("termuxReturnMaxBytes",TermuxWorkspaceTransfer.MAX_BYTES).put("projectDevelopment",development.snapshot());
     }
     /** Native-only wiring; no JSON operation can install an authorization provider. */
@@ -2447,10 +2458,8 @@ public final class LocalModule implements EngineModule {
     private static boolean importIdentity(Object value){
         return value instanceof String id&&id.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}");
     }
-    /** The originally published copy, never an inherited or cached source marker. */
-    private EditorSaveOrigin editorSaveOrigin(JSONObject row,String project,String id)throws Exception{
-        if(originalPreparedOwnerCopy(row,project,id))return EditorSaveOrigin.PREPARED;
-        if(ownerDependencyCopyEditorForOwner(row,project,id))return EditorSaveOrigin.DEPENDENCY_COPY;
+    /** Body-free identity of the originally published copy, not an inherited source marker. */
+    private static JSONObject ordinaryEditorImportHeader(JSONObject row,String project,String id){
         JSONObject source=row.optJSONObject("sourceImport");
         if(!project.equals(row.opt("projectId"))||!id.equals(row.opt("id"))||!ordinaryDirectNodeCheckout(row)||
                 row.has("ownerDevelopmentRequestId")||source==null||!"new_project".equals(source.opt("mode"))||
@@ -2459,6 +2468,15 @@ public final class LocalModule implements EngineModule {
                 !(source.opt("clientId") instanceof String client)||!importIdentity(client)||
                 !project.equals(importedProjectId(client))||
                 !id.equals(UUID.nameUUIDFromBytes(("project-package-checkout:"+client).getBytes(StandardCharsets.UTF_8)).toString()))return null;
+        return source;
+    }
+    /** The original native editor also proves the saved workspace registration. */
+    private EditorSaveOrigin editorSaveOrigin(JSONObject row,String project,String id)throws Exception{
+        if(originalPreparedOwnerCopy(row,project,id))return EditorSaveOrigin.PREPARED;
+        if(ownerDependencyCopyEditorForOwner(row,project,id))return EditorSaveOrigin.DEPENDENCY_COPY;
+        JSONObject source=ordinaryEditorImportHeader(row,project,id);
+        if(source==null)return null;
+        String client=source.getString("clientId");
         EditorSaveOrigin origin;
         if(ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))&&source.length()==7)origin=EditorSaveOrigin.BUILTIN_VITE;
         else if(source.length()==7 && ("external_zip".equals(source.opt("sourceKind"))||"saf_tree".equals(source.opt("sourceKind"))))
@@ -2493,11 +2511,12 @@ public final class LocalModule implements EngineModule {
                     row.opt("createdAt") instanceof Number createdAt&&createdAt.longValue()>0&&
                     row.opt("files") instanceof JSONArray baseline&&baseline.length()==0;
         }
-        if(origin==EditorSaveOrigin.BUILTIN_VITE){
-            JSONObject source=row.getJSONObject("sourceImport");
-            return ProjectSourceImport.matchesSavedPageStarterImport(source.opt("manifestIdentity"),source.opt("sourceEvidenceSha256"));
-        }
+        if(origin==EditorSaveOrigin.BUILTIN_VITE)return savedPageStarterSource(row.getJSONObject("sourceImport"));
         return originalPhoneEditorImport(row,origin);
+    }
+    private static boolean savedPageStarterSource(JSONObject source)throws Exception{
+        return source.length()==7&&ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))&&
+                ProjectSourceImport.matchesSavedPageStarterImport(source.opt("manifestIdentity"),source.opt("sourceEvidenceSha256"));
     }
     private static boolean originalPhoneEditorImport(JSONObject row,EditorSaveOrigin origin){
         JSONObject imported=row.optJSONObject("sourceImport");
