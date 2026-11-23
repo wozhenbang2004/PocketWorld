@@ -47,7 +47,7 @@ public final class OwnerPythonRun {
     static final String INTERPRETER = "/usr/bin/python3";
     // The owned guest mounts only the frozen stage at /workspace. In isolated -c mode
     // it is not importable at startup. Compile the exact selected leaf first, then allow
-    // reviewed sibling imports after the managed standard library, never before entry.
+    // reviewed local imports after the managed standard library, never before entry.
     private static final String PROGRAM_BOOTSTRAP = """
             import sys as _pw_sys
             __file__ = '/workspace/' + _pw_sys.argv.pop(1)
@@ -64,6 +64,7 @@ public final class OwnerPythonRun {
     private static final int MAX_PATH = 240, MAX_PARENT_DEPTH = 4;
     private static final Pattern SCRIPT_LEAF = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]{0,119}\\.py");
     private static final Pattern MODULE_LEAF = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,119}\\.py");
+    private static final Pattern PACKAGE_LEAF = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,63}");
     private static final Pattern SOURCE_FOLDER = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9._-]{0,63}");
     private static final long REVIEW_NANOS = 120_000_000_000L;
     private static final String INTENT = "owner_python_script";
@@ -102,20 +103,28 @@ public final class OwnerPythonRun {
                 if (programFiles.size() < 2 || programFiles.size() > MAX_PROGRAM_FILES)
                     throw new SecurityException("本机小程序只带入 2 至 8 个同目录 Python 源码文件");
                 int total = 0;
-                boolean entry = false;
+                boolean entry = false, siblings = false, initialized = false;
+                String packageName = null;
                 String previous = "";
                 for (InputFile file : programFiles) {
-                    if (!folder(path).equals(folder(file.path)) || previous.compareTo(file.path) >= 0)
-                        throw new SecurityException("原 Python 源码不在同一个已选目录");
+                    if (previous.compareTo(file.path) >= 0)
+                        throw new SecurityException("原 Python 源码路径不唯一或顺序不符");
                     if (file.path.equals(path)) {
                         entry = sha256.equals(file.sha256) && size == file.size;
-                    } else if (!programCompanion(path, file.path))
-                        throw new SecurityException("这不是同目录可直接导入的 Python 模块");
+                    } else if (programCompanion(path, file.path)) {
+                        siblings = true;
+                    } else {
+                        String name = packageName(path, file.path);
+                        if (name == null || packageName != null && !packageName.equals(name))
+                            throw new SecurityException("只支持一个明确选中的同级 Python 包");
+                        packageName = name;
+                        initialized |= scriptLeaf(file.path).equals("__init__.py");
+                    }
                     total += file.size;
                     previous = file.path;
                 }
-                if (!entry || total > MAX_SOURCE)
-                    throw new SecurityException("原入口或 256 KiB 同目录源码范围不符");
+                if (!entry || total > MAX_SOURCE || packageName != null && (!initialized || siblings))
+                    throw new SecurityException("原入口、包初始化文件或 256 KiB 源码范围不符");
             }
         }
         // Job ordering is private to this runner, not the real checkout's build/output order.
@@ -129,8 +138,15 @@ public final class OwnerPythonRun {
             return scriptLeaf(path);
         }
         boolean directory() { return !programFiles.isEmpty(); }
+        String selectedPackage() {
+            for (InputFile file : programFiles) {
+                String name = packageName(path, file.path);
+                if (name != null) return name;
+            }
+            return null;
+        }
         String stageName(InputFile file) {
-            return scriptLeaf(file.path);
+            return relativeSource(path, file.path);
         }
         List<InputFile> stagedSources() {
             return directory() ? programFiles : List.of(new InputFile(path, sha256, size));
@@ -190,6 +206,18 @@ public final class OwnerPythonRun {
         if (!supportsPath(entry) || !supportsPath(path) || entry.equals(path) || !folder(entry).equals(folder(path))) return false;
         return MODULE_LEAF.matcher(scriptLeaf(path)).matches();
     }
+    /** A single immediate named package, never an arbitrary descendant or namespace package. */
+    public static String packageName(String entry, String path) {
+        if (!supportsPath(entry) || !supportsPath(path) || !path.startsWith(folder(entry))) return null;
+        String relative = relativeSource(entry, path);
+        int slash = relative.indexOf('/');
+        if (slash <= 0 || relative.indexOf('/', slash + 1) >= 0) return null;
+        String name = relative.substring(0, slash);
+        return PACKAGE_LEAF.matcher(name).matches() && MODULE_LEAF.matcher(relative.substring(slash + 1)).matches() ? name : null;
+    }
+    private static String relativeSource(String entry, String path) {
+        return path.substring(folder(entry).length());
+    }
 
     public static boolean matchesRoute(JSONObject route) {
         return route != null && route.has(ROUTE);
@@ -233,10 +261,11 @@ public final class OwnerPythonRun {
             int size = entry.length;
             for (var sibling : siblings.entrySet()) {
                 byte[] observed = sibling.getValue();
-                if (!programCompanion(editor.path, sibling.getKey()) || observed == null || observed.length > MAX_SOURCE - size)
-                    throw new SecurityException("同目录在核对期间变化或源码超过 256 KiB");
+                if ((!programCompanion(editor.path, sibling.getKey()) && packageName(editor.path, sibling.getKey()) == null)
+                        || observed == null || observed.length > MAX_SOURCE - size)
+                    throw new SecurityException("所选源码在核对期间变化或超过 256 KiB");
                 byte[] frozen = observed.clone();
-                bytes.put(scriptLeaf(sibling.getKey()), frozen);
+                bytes.put(relativeSource(editor.path, sibling.getKey()), frozen);
                 sourceText(frozen);
                 inputs.put(sibling.getKey(), new InputFile(sibling.getKey(), ProjectSources.sha256(frozen), frozen.length));
                 size += frozen.length;
@@ -411,7 +440,9 @@ public final class OwnerPythonRun {
                 .put("environment", new JSONObject()).put("timeoutMillis", TIMEOUT_MILLIS).put("runMode", "foreground")
                 .put("terminalMode", "pipes").put(FIELD, source.pin());
         JSONObject step = new JSONObject().put("id", "command").put("stepId", "command").put("localCommand", "project.runtime.run")
-                .put("payload", payload).put("approvalRequired", true).put("label", source.directory() ? "运行这份已保存的同目录 Python 程序" : "运行这份已保存的 Python 脚本")
+                .put("payload", payload).put("approvalRequired", true).put("label", source.selectedPackage() != null
+                        ? "运行这份已保存的 Python 入口和所选包" : source.directory()
+                        ? "运行这份已保存的同目录 Python 程序" : "运行这份已保存的 Python 脚本")
                 .put("cancelReliable", false)
                 .put("effects", new JSONObject().put("runtime", ManagedProjectRuntime.RUNTIME_ID).put("writes", true)
                         .put("networkMayBeUsed", true).put("scopeEnforced", false).put("interactiveInput", false)
@@ -420,7 +451,8 @@ public final class OwnerPythonRun {
                 .put("checkoutId", source.executionCheckout()).put("sourceDigest", digest).put("sourceManifest", manifest)
                 .put("intent", INTENT).put("ecosystem", INTENT).put("runtimeId", ManagedProjectRuntime.RUNTIME_ID)
                 .put("runtimeIdentity", source.tool.generation()).put("runMode", "foreground").put("available", true)
-                .put("warnings", new JSONArray().put((source.directory() ? "只复制已核对的同目录 Python 源码，不安装依赖，不带回运行生成的文件。"
+                .put("warnings", new JSONArray().put((source.selectedPackage() != null ? "只复制已核对的入口和所选包源码，不安装依赖，不带回运行生成的文件。"
+                        : source.directory() ? "只复制已核对的同目录 Python 源码，不安装依赖，不带回运行生成的文件。"
                         : "只复制这一份已保存脚本，不安装依赖，不带回运行生成的文件。")
                         + "脚本可能访问文件或网络，这不是沙箱。只运行你信任的代码。"))
                 .put("automaticChaining", false).put("steps", new JSONArray().put(step));
@@ -624,6 +656,8 @@ public final class OwnerPythonRun {
         private final Object rootKey, directoryKey;
         private final List<String> arguments;
         private final Map<Path, Object> files = new HashMap<>();
+        private Path packageDirectory;
+        private Object packageKey;
         private Stage(Path root, Object rootKey, Path directory, Object directoryKey, List<String> arguments) {
             this.root = root; this.directory = directory; this.rootKey = rootKey;
             this.directoryKey = directoryKey; this.arguments = arguments;
@@ -637,20 +671,27 @@ public final class OwnerPythonRun {
         }
         void requireReady() throws Exception {
             current();
+            int contained = entries(directory);
+            if (packageDirectory != null) contained += entries(packageDirectory);
+            if (contained != files.size() || contained < 1) throw new SecurityException("原 Python 暂存缺少已核对的源码");
+            current();
+        }
+        private int entries(Path folder) throws Exception {
             int contained = 0;
-            try (var entries = Files.newDirectoryStream(directory)) {
+            try (var entries = Files.newDirectoryStream(folder)) {
                 for (Path file : entries) {
+                    if (file.equals(packageDirectory)) continue; // Only the one positive stage directory.
                     Object expected = files.get(file);
                     if (expected == null || !expected.equals(regular(file).fileKey()))
                         throw new SecurityException("Python 暂存不是这次已核对的源码");
                     contained++;
                 }
             }
-            if (contained != files.size() || contained < 1) throw new SecurityException("原 Python 暂存缺少已核对的源码");
-            current();
+            return contained;
         }
         private void current() throws Exception {
-            if (!rootKey.equals(directoryKey(root)) || !directoryKey.equals(directoryKey(directory)))
+            if (!rootKey.equals(directoryKey(root)) || !directoryKey.equals(directoryKey(directory))
+                    || packageDirectory != null && !packageKey.equals(directoryKey(packageDirectory)))
                 throw new SecurityException("脚本暂存目录已变化");
         }
         @Override public void close() {
@@ -663,6 +704,12 @@ public final class OwnerPythonRun {
                     Path path = file.getKey();
                     if (Files.exists(path, LinkOption.NOFOLLOW_LINKS) && file.getValue().equals(regular(path).fileKey()))
                         Files.delete(path);
+                }
+                current();
+                if (packageDirectory != null) {
+                    Files.delete(packageDirectory); // No recursive cleanup of script-created contents.
+                    packageDirectory = null;
+                    packageKey = null;
                 }
                 current();
                 Files.delete(directory); // only when still this same empty directory
@@ -692,6 +739,14 @@ public final class OwnerPythonRun {
         Stage stage = new Stage(root, rootKey, directory, directoryKey(directory), source.commandArguments());
         boolean retained = false;
         try {
+            String packageName = source.selectedPackage();
+            if (packageName != null) {
+                stage.current();
+                Path selected = directory.resolve(packageName);
+                Files.createDirectory(selected, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+                stage.packageKey = directoryKey(selected);
+                stage.packageDirectory = selected;
+            }
             for (InputFile input : inputs) {
                 stage.current();
                 String name = source.stageName(input);

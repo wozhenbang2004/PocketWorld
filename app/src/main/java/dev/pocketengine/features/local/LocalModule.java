@@ -17,6 +17,7 @@ import dev.pocketengine.features.FeatureContext;
 import dev.pocketengine.features.workspace.JsonFiles;
 import dev.pocketengine.features.workspace.VersionedWorkspace;
 import dev.pocketengine.features.local.project.CheckoutTextMatches;
+import dev.pocketengine.features.local.project.CheckoutPathMatches;
 import dev.pocketengine.features.local.project.ProjectDevelopment;
 import dev.pocketengine.features.local.project.ProjectPackageArchive;
 import dev.pocketengine.features.local.project.ProjectSourceImport;
@@ -1541,6 +1542,18 @@ public final class LocalModule implements EngineModule {
      * It does not use an old directory page after saving or take a folder path from Web. */
     public synchronized dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(
             dev.pocketengine.features.local.project.ProjectFileDraft file,boolean directory,ProjectRuntime.LiveGate window)throws Exception{
+        return reviewOwnerPythonForOwner(file,directory,List.of(),window);
+    }
+    /** Exact hits from one published ordinary directory page, not a directory permission. */
+    public synchronized dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonPackageForOwner(
+             dev.pocketengine.features.local.project.ProjectFileDraft file,List<CheckoutPathMatches.Hit> selected,ProjectRuntime.LiveGate window)throws Exception{
+        if(selected.isEmpty()||selected.size()>=dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_PROGRAM_FILES)
+            throw new SecurityException("请选择一个包中的 1 至 7 个原 .py 文件");
+        return reviewOwnerPythonForOwner(file,false,List.copyOf(selected),window);
+    }
+    private dev.pocketengine.features.local.runtime.OwnerPythonRun.Review reviewOwnerPythonForOwner(
+             dev.pocketengine.features.local.project.ProjectFileDraft file,boolean directory,List<CheckoutPathMatches.Hit> selected,
+             ProjectRuntime.LiveGate window)throws Exception{
         var runtime=ownerPythonRuntime();
         window.check();
         if(file==null||!dev.pocketengine.features.local.runtime.OwnerPythonRun.supportsPath(file.path))
@@ -1554,8 +1567,10 @@ public final class LocalModule implements EngineModule {
         JSONObject scope=JsonFiles.read(record);
         if(!ordinaryPythonFileCheckout(scope,file.projectId,file.checkoutId))
             throw new SecurityException("这不是所选的普通私人开发副本");
+        if(!selected.isEmpty()&&!originalPhoneEditorImport(scope,editorSaveOrigin(scope,file.projectId,file.checkoutId)))
+            throw new SecurityException("只在原手机文件夹或 ZIP 的私人副本中核对所选包");
         // This only observes and freezes source. A writer fence would invalidate a running build's output observation.
-        if(directory)requireIdle(file.checkoutId);
+        if(directory||!selected.isEmpty())requireIdle(file.checkoutId);
         Object checkoutKey=pythonDirectoryKey(home.getParentFile()),homeKey=pythonDirectoryKey(home),filesKey=pythonDirectoryKey(files);
         var target=NativeCommandExecutor.within(files,file.path).toPath();
         List<Object> parentKeys=pythonParentKeys(files,file.path);
@@ -1568,6 +1583,7 @@ public final class LocalModule implements EngineModule {
         Map<String,byte[]> siblings=new LinkedHashMap<>();
         try{
             if(directory)capturePythonSiblings(files,file.path,before,observed.length,siblings,window);
+            if(!selected.isEmpty())capturePythonPackage(files,file.path,observed.length,selected,siblings,window);
             window.check();
             var after=Files.readAttributes(target,basic,noFollow);
             if(!target.equals(NativeCommandExecutor.within(files,file.path).toPath())||
@@ -1579,8 +1595,52 @@ public final class LocalModule implements EngineModule {
                     !ProjectSources.canonical(scope).equals(ProjectSources.canonical(JsonFiles.read(record))))
                 throw new SecurityException("原文件读取期间身份变化，未采用替代脚本");
             ProjectRuntime.LiveGate current=()->{window.check();if(closed)throw new SecurityException("原本机项目已关闭");};
-            return directory?runtime.reviewOwnerPythonDirectory(file,observed,siblings,current):runtime.reviewOwnerPython(file,observed,current);
+            return directory||!selected.isEmpty()?runtime.reviewOwnerPythonDirectory(file,observed,siblings,current):runtime.reviewOwnerPython(file,observed,current);
         }finally{Arrays.fill(observed,(byte)0);siblings.values().forEach(bytes->Arrays.fill(bytes,(byte)0));}
+    }
+    private record PythonPackageMember(java.nio.file.Path leaf,java.nio.file.attribute.BasicFileAttributes stamp,List<Object> parents){}
+    private static void capturePythonPackage(File root,String entry,int entryBytes,List<CheckoutPathMatches.Hit> selected,
+            Map<String,byte[]> captured,ProjectRuntime.LiveGate window)throws Exception{
+        var checked=new java.util.TreeMap<String,CheckoutPathMatches.Hit>();
+        String name=null;
+        boolean initialized=false;
+        long total=entryBytes;
+        for(var hit:selected){
+            String path=hit.path(),candidate=dev.pocketengine.features.local.runtime.OwnerPythonRun.packageName(entry,path);
+            if(candidate==null||name!=null&&!name.equals(candidate)||hit.binary()||hit.bytes()<0||
+                    hit.bytes()>dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_SOURCE||
+                    !OwnerDirectNodeBuild.digest(hit.sha())||checked.put(path,hit)!=null)
+                throw new SecurityException("所选内容不是同一份已显示的原包源码");
+            name=candidate;
+            initialized|=path.endsWith("/__init__.py");
+            total+=hit.bytes();
+        }
+        if(!initialized||total>dev.pocketengine.features.local.runtime.OwnerPythonRun.MAX_SOURCE)
+            throw new SecurityException("请选择原包的 __init__.py，包含入口的源码合计最多 256 KiB");
+        var observed=new java.util.TreeMap<String,PythonPackageMember>();
+        var basic=java.nio.file.attribute.BasicFileAttributes.class;
+        var noFollow=java.nio.file.LinkOption.NOFOLLOW_LINKS;
+        for(var hit:checked.values()){
+            window.check();
+            String path=hit.path();
+            List<Object> parents=pythonParentKeys(root,path);
+            var leaf=NativeCommandExecutor.within(root,path).toPath();
+            var before=Files.readAttributes(leaf,basic,noFollow);
+            if(!before.isRegularFile()||before.fileKey()==null||before.size()!=hit.bytes()||!pythonSingleLink(leaf))
+                throw new SecurityException("原包的所选源码已变化，请重新核对原目录");
+            byte[] bytes=ProjectFileBytes.read(leaf,before,(int)hit.bytes());captured.put(path,bytes);
+            if(!hit.sha().equals(ProjectSources.sha256(bytes)))
+                throw new SecurityException("原包的所选源码已变化，请重新核对原目录");
+            observed.put(path,new PythonPackageMember(leaf,before,parents));
+        }
+        for(var pair:observed.entrySet()){
+            window.check();
+            var member=pair.getValue();String path=pair.getKey();var leaf=member.leaf();
+            if(!leaf.equals(NativeCommandExecutor.within(root,path).toPath())||
+                    !member.parents().equals(pythonParentKeys(root,path))||!pythonSingleLink(leaf)||
+                    !samePythonStamp(member.stamp(),Files.readAttributes(leaf,basic,noFollow)))
+                throw new SecurityException("核对期间所选包的文件已变化，没有准备运行");
+        }
     }
     private static void capturePythonSiblings(File root,String entry,java.nio.file.attribute.BasicFileAttributes entryAttributes,
             int entryBytes,Map<String,byte[]> captured,ProjectRuntime.LiveGate window)throws Exception{
@@ -2277,6 +2337,9 @@ public final class LocalModule implements EngineModule {
                     row.opt("createdAt") instanceof Number createdAt&&createdAt.longValue()>0&&
                     row.opt("files") instanceof JSONArray baseline&&baseline.length()==0;
         }
+        return originalPhoneEditorImport(row,origin);
+    }
+    private static boolean originalPhoneEditorImport(JSONObject row,EditorSaveOrigin origin){
         JSONObject imported=row.optJSONObject("sourceImport");
         return origin==EditorSaveOrigin.IMPORTED_VERSIONED&&imported!=null&&
                 ("saf_tree".equals(imported.opt("sourceKind"))||"external_zip".equals(imported.opt("sourceKind")));
@@ -2420,6 +2483,7 @@ public final class LocalModule implements EngineModule {
             EditorSaveOrigin origin=editorSaveOrigin(observation.checkout(),project,id);
             if(origin==null)return listing;
             if(savedStaticOwnerCheckout(observation.checkout(),origin))listing.put("ownerSavedStaticPage",true);
+            if(originalPhoneEditorImport(observation.checkout(),origin))listing.put("ownerPythonPackage",true);
             ProjectFileSavePosition position=readEditorSavePosition(origin,project,id,listing);
             if(position==null)return listing;
             JSONArray actual=listing.getJSONArray("files");

@@ -93,7 +93,8 @@ export function OwnerPythonRun({work, released, notStarted, canRead, canSaveText
     <div className="pw-work-current-progress">
       <h3><bdi>{work.path}</bdi></h3>
       <p>{preparationFailed?'这部手机':'在这部手机运行'} · {work.programFiles?
-        <>{work.programFiles.length} 份同目录 .py 文件 · 源码版本 <code>{work.scriptInputDigest.slice(0,8)}</code></>:
+        <>{work.packageDirectory?<>所选包 <bdi>{work.packageDirectory}</bdi> · </>:null}
+          {work.programFiles.length} 份{work.packageDirectory?'':'同目录 '}.py 文件 · 源码版本 <code>{work.scriptInputDigest.slice(0,8)}</code></>:
         <>保存版本 <code>{work.sha256.slice(0,8)}</code></>}</p>
       <strong role="status">{preparationFailed?'没有启动 Python':exit?endText(exit):'尚未核对到本次运行结束'}</strong>
       {preparationFailed && <p>未能准备这份脚本的运行副本。原脚本没有被这次操作改写。</p>}

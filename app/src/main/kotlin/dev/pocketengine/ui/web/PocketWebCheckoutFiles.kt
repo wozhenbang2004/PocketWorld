@@ -29,6 +29,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var textUntil: Long = 0
         @Volatile var savedEdit: SavedEdit? = null
         @Volatile var savedStaticPageEligible = false
+        @Volatile var ownerPythonPackage = false
         @Volatile var savedStaticRoot: SavedStaticRoot? = null
         var priorSavedFile: ListedSave? = null // Main-thread selection from this exact list response.
         val git = PocketWebCheckoutGit(project, checkout)
@@ -239,9 +240,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         }
         val file = opened(original, args)
         if (action == PYTHON_REVIEW) {
-            val directory = args.has("sourceMode")
-            if (directory) require(args.opt("sourceMode") == "directory") { "请明确选择同目录 Python 程序" }
-            val keys = args.keys().asSequence().toSet() - "sourceMode"
+            val mode=args.opt("sourceMode")
+            require(!args.has("sourceMode") || mode=="directory" || mode=="package") { "请明确选择原 Python 源码" }
+            val directory=mode=="directory"
+            val packageMode=mode=="package"
+            val keys = args.keys().asSequence().toSet() - "sourceMode" - (if(packageMode)setOf("packageSelection") else emptySet())
             val common = setOf("viewHandle", "filesHandle", "fileHandle")
             val fromSave = keys == common + "saveId"
             require(fromSave || keys == common + "readRevision") { "请核对这次原文件读取或保存，不能混用" }
@@ -257,8 +260,25 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         OwnerPythonRun.supportsPath(value.path)) { "请从同一副本核对这一个已保存的 Python 文件" }
                 }
             }
+            val packagePage=if(packageMode){
+                val pick=args.getJSONObject("packageSelection")
+                fields(pick,"directoryHandle","hits")
+                check(original.ownerPythonPackage) { "请回到原手机导入的私人副本" }
+                original.directory?.takeIf { it.handle==text(pick,"directoryHandle") }
+                    ?:error("原包目录已变化，请重新选择文件")
+            }else null
+            val packageHits=if(packagePage!=null){
+                val hits=args.getJSONObject("packageSelection").getJSONArray("hits")
+                require(hits.length() in 1 until OwnerPythonRun.MAX_PROGRAM_FILES)
+                val indices=(0 until hits.length()).map { index ->
+                    (hits.opt(index) as? Int)?.takeIf{it in 0..39}?:error("请选择当前包目录页的文件")
+                }
+                require(indices.distinct().size==indices.size)
+                indices.map { packagePage.selected(it) }
+            }else emptyList()
             fun stillCurrent() = current(original) && controller.state.filePath == null && original.opened === file &&
                 (if (fromSave) original.savedEdit === saved else file.pythonRead === read) &&
+                (packagePage==null || original.directory===packagePage && original.ownerPythonPackage) &&
                 !file.saveUnknown && file.draft.let { now ->
                     now.revision == draft.revision && now.path == draft.path && now.baseHash == draft.baseHash &&
                         !now.creating && !now.dirty() && !now.conflict()
@@ -275,7 +295,10 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     view.put("reviewHandle", offer.id)
                 } finally { if (!kept) reviewed.close() }
             }, { reviewed -> reviewed.close() }) {
-                controller.projectDevelopmentForWeb().reviewOwnerPythonForOwner(draft, directory, java.util.function.BooleanSupplier { stillCurrent() })
+                val host=controller.projectDevelopmentForWeb()
+                val owner=java.util.function.BooleanSupplier { stillCurrent() }
+                if(packagePage!=null)host.reviewOwnerPythonPackageForOwner(draft,packageHits,owner)
+                else host.reviewOwnerPythonForOwner(draft,directory,owner)
             }
             return
         }
@@ -303,6 +326,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         check(original.sourcePath == null) { "原单文件入口不能读取副本文件列表" }
         val source = controller.projectDevelopmentForWeb().ordinaryEditorFilesForOwner(original.project, original.checkout)
         original.savedStaticPageEligible = source.opt("ownerSavedStaticPage") == true
+        original.ownerPythonPackage = source.opt("ownerPythonPackage") == true
         val digest = source.getString("sourceDigest")
         check(after.isBlank() || expected == digest) { "副本文件在翻页期间变化，请重新读取列表，不拼接不同版本" }
         val all = sortedMapOf<String, JSONObject>(); val files = source.getJSONArray("files")
@@ -320,6 +344,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             .put("nextPath", if (selected.size > 40) selected[39].key else "").put("draftError", cacheError).put("readOnly", true)
             .putOpt("priorSavedFile", source.optJSONObject("priorSavedFile"))
             .put("gitAvailable", runCatching { PocketWebCheckoutGit.available(controller, original.checkout) }.getOrDefault(false))
+        if(original.ownerPythonPackage)result.put("ownerPythonPackage",true)
         if(after.isBlank()) {
             // Same complete metadata already read for the ordinary Files page, not another disk scan.
             val directory=if(nested||refreshDirectory!=null)runCatching {

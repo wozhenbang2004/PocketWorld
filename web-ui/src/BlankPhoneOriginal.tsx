@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Button } from './forms-library';
 
@@ -9,7 +9,7 @@ const uuid=(id:unknown):id is string=>typeof id==='string'&&/^[a-f0-9]{8}(?:-[a-
 const number=(value:unknown):value is number=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const obj=(value:unknown):Record<string,any>=>value&&typeof value==='object'?value as Record<string,any>:{};
 
-function input(snapshot:PocketSnapshot,text:string,mode:PhoneMode|null):Input|null{
+export function blankPhoneOriginalInput(snapshot:PocketSnapshot,text:string,mode:PhoneMode|null):Input|null{
   const {state,composer}=snapshot,view=obj(snapshot.view),phone=obj(snapshot.phoneDraft);
   if(!mode||view.section!==null||view.taskId!==null||state.conversationId||state.conversationReader||
      !composer||composer.ready!==true||typeof composer.key!=='string'||!composer.key.startsWith('new:')||composer.conversationId!==''||
@@ -19,9 +19,9 @@ function input(snapshot:PocketSnapshot,text:string,mode:PhoneMode|null):Input|nu
   return {key:composer.key,epoch:composer.epoch,revision:composer.revision,phoneEpoch:phone.epoch,phoneRevision:phone.revision};
 }
 
-export function BlankPhoneOriginal({enabled,mode,text,editorText,navigation,navigationCurrent,arrived}:{
+export function BlankPhoneOriginal({enabled,mode,text,editorText,navigation,navigationCurrent,arrived,primary,children}:{
   enabled:boolean;mode:PhoneMode|null;text:string;editorText:()=>string;navigation:number;navigationCurrent:(navigation:number)=>boolean;
-  arrived:(stillHere:()=>boolean)=>void;
+  arrived:(stillHere:()=>boolean)=>void;primary:boolean;children:(action?:ReactElement,detail?:ReactNode)=>ReactNode;
 }){
   const alive=useRef(false),flight=useRef(false),visible=useRef(enabled);
   visible.current=enabled;
@@ -31,12 +31,12 @@ export function BlankPhoneOriginal({enabled,mode,text,editorText,navigation,navi
   const [pending,setPending]=useState(false),[saved,setSaved]=useState<Saved|null>(null);
   const [feedback,setFeedback]=useState<{visit:string;text:string}|null>(null);
   useLayoutEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
-  const snapshot=bridge.getState(),parent=enabled?input(snapshot,text,mode):null,documentId=bridge.getDocumentEpoch();
+  const snapshot=bridge.getState(),parent=enabled?blankPhoneOriginalInput(snapshot,text,mode):null,documentId=bridge.getDocumentEpoch();
   const visitOf=(value:Input|null)=>value?JSON.stringify([documentId,navigation,choice,value]):'';
   const visit=visitOf(parent);
   const original=saved?.visit===visit&&visit?saved:null;
   const here=()=>alive.current&&visible.current&&selection.current===choice&&!document.hidden&&bridge.getDocumentEpoch()===documentId&&navigationCurrent(navigation);
-  const sameInput=()=>here()&&visit!==''&&visit===visitOf(input(bridge.getState(),editorText(),mode));
+  const sameInput=()=>here()&&visit!==''&&visit===visitOf(blankPhoneOriginalInput(bridge.getState(),editorText(),mode));
   const commands=snapshot.capabilities.commands;
   const save=async()=>{
     if(!parent||!sameInput()||flight.current)return;
@@ -79,15 +79,18 @@ export function BlankPhoneOriginal({enabled,mode,text,editorText,navigation,navi
     }catch{if(sameInput())setFeedback({visit,text:'暂未打开这段原话。可在私聊列表核对已保存的记录。'});}
     finally{flight.current=false;if(alive.current)setPending(false);}
   };
-  if(!parent)return null;
-  return <div className="pw-action-row" aria-label="本机保存手机目标">
-    {original?<>
-      <p className="pw-field-hint" role="status">这次只保存了原话，没有创建任务。</p>
-      {commands.includes('conversation.select')&&<Button variant="secondary" size="small" disabled={pending} onClick={()=>void open()}>打开这段原话</Button>}
-    </>:<>
-      <Button variant="secondary" size="small" disabled={pending} onClick={()=>void save()}>{pending?'正在保存原话…':'保存为新私聊'}</Button>
-      <p className="pw-field-hint">只在这台手机保存目标，不发送、不调用模型，也不开始任务。</p>
-    </>}
+  if(!parent)return children();
+  const promoted=primary&&commands.includes('conversation.select');
+  const action=original&&!commands.includes('conversation.select')?undefined:
+    <Button variant={promoted?'primary':'secondary'} size="small" className={promoted?'min-h-11':undefined}
+      disabled={!promoted&&pending} aria-disabled={promoted&&pending||undefined} aria-busy={promoted&&pending||undefined}
+      onClick={()=>void (original?open():save())}>
+      {original?(promoted?(pending?'正在打开…':'打开原话'):'打开这段原话'):(pending?'正在保存原话…':promoted?'保存原话':'保存为新私聊')}
+    </Button>;
+  const detail=original?<p className="pw-field-hint" role="status">这次只保存了原话，没有创建任务。</p>:
+    <p className="pw-field-hint">{promoted?'只在本机保存为新私聊，不发送，也不开始任务。':'只在这台手机保存目标，不发送、不调用模型，也不开始任务。'}</p>;
+  return children(promoted?action:undefined,<div className="pw-action-row" aria-label="本机保存手机目标">
+    {original&&detail}{!promoted&&action}{!original&&detail}
     {feedback?.visit===visit&&<p className="pw-field-hint" role="status">{feedback.text}</p>}
-  </div>;
+  </div>);
 }

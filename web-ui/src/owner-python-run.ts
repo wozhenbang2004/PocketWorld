@@ -11,6 +11,8 @@ const key = (value: unknown): value is string => typeof value === 'string' && va
 const scopeFormat = 'pocketworld.owner-python-script.v1', resultFormat = 'pocketworld.owner-python-script-result.v1';
 const pythonSourceFolder = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}(?![\s\S])/;
 const pythonScriptLeaf = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,119}\.py(?![\s\S])/;
+const pythonModuleLeaf = /^[A-Za-z_][A-Za-z0-9_]{0,119}\.py(?![\s\S])/;
+const pythonPackageLeaf = /^[A-Za-z_][A-Za-z0-9_]{0,63}(?![\s\S])/;
 // Match the editor's native OwnerPythonRun path grammar and ProjectSources non-hidden exclusions.
 const nonSourcePythonFolders = new Set(['node_modules', 'venv', '__pycache__']);
 export function savedPythonPath(value: unknown): value is string {
@@ -19,13 +21,21 @@ export function savedPythonPath(value: unknown): value is string {
   return parts.length <= 4 && pythonScriptLeaf.test(leaf) && parts[0] !== 'build' && parts[0] !== 'dist' &&
     parts.every(part => pythonSourceFolder.test(part) && !nonSourcePythonFolders.has(part));
 }
+export function pythonPackageDirectory(entry:string,path:unknown):string|undefined {
+  if(!savedPythonPath(entry)||!savedPythonPath(path))return;
+  const prefix=entry.slice(0,entry.lastIndexOf('/')+1);
+  if(!path.startsWith(prefix))return;
+  const parts=path.slice(prefix.length).split('/');
+  if(parts.length===2&&pythonPackageLeaf.test(parts[0])&&pythonModuleLeaf.test(parts[1]))return prefix+parts[0];
+}
 export const ownerPythonFiles = 'projects.development.files.';
 export const ownerPythonRead = 'projects.pythonRun.read';
 export const ownerPythonSaveText = 'projects.pythonRun.saveOutput';
 
 export type SavedPython = {projectId: string; checkoutId: string; path: string; sha256: string};
 type PythonProgramFile = {path:string;sha256:string;bytes:number};
-type PythonSource = SavedPython & {requestId: string; bytes: number; runtimeIdentity: string; interpreterSha256: string; programFiles?: PythonProgramFile[]};
+type PythonSource = SavedPython & {requestId: string; bytes: number; runtimeIdentity: string; interpreterSha256: string;
+  programFiles?: PythonProgramFile[]; packageDirectory?: string};
 export type PythonReview = PythonSource & {reviewHandle: string};
 export type OriginalPythonRun = PythonSource & {taskId: string; runId: string; operationId: string; epoch: 1; scriptInputDigest: string; planDigest: string};
 export type PythonExit = {exitKind: 'exit_code' | 'signal' | 'no_child'; value: number; timedOut: boolean; cancelRequested: boolean};
@@ -53,23 +63,31 @@ function source(row: Data | undefined): PythonSource | undefined {
   if (!Object.hasOwn(row, 'programFiles')) return input;
   if (!Array.isArray(row.programFiles) || row.programFiles.length < 2 || row.programFiles.length > 8) return;
   const prefix = path.slice(0, path.lastIndexOf('/') + 1), files:PythonProgramFile[] = [];
-  let prior='', total=0, entry=false;
+  let prior='', total=0, entry=false, flat=false, initialized=false, packageDirectory:string|undefined;
   for (const item of row.programFiles) {
     const file=record(item);
-    if (!file || !savedPythonPath(file.path) || !file.path.startsWith(prefix) || file.path.slice(prefix.length).includes('/') ||
+    if (!file || !savedPythonPath(file.path) || !file.path.startsWith(prefix) ||
         file.path<=prior || !digest(file.sha256) || typeof file.bytes!=='number' || !Number.isSafeInteger(file.bytes) ||
         file.bytes<0 || file.bytes>262144) return;
     if (file.path===path) {
       if (file.sha256!==sha256 || file.bytes!==bytes) return;
       entry=true;
     } else {
-      const leaf=file.path.slice(prefix.length);
-      if (!/^[A-Za-z_][A-Za-z0-9_]{0,119}\.py(?![\s\S])/.test(leaf)) return;
+      const elsewhere=pythonPackageDirectory(path,file.path);
+      if(elsewhere){
+        if(packageDirectory&&packageDirectory!==elsewhere)return;
+        packageDirectory=elsewhere;
+        initialized ||= file.path===elsewhere+'/__init__.py';
+      }else{
+        if(!pythonModuleLeaf.test(file.path.slice(prefix.length)))return;
+        flat=true;
+      }
     }
     files.push({path:file.path,sha256:file.sha256,bytes:file.bytes});
     prior=file.path;total+=file.bytes;
   }
-  return entry&&total<=262144 ? {...input,programFiles:files} : undefined;
+  return entry&&total<=262144&&(!packageDirectory||initialized&&!flat)?
+    {...input,programFiles:files,...(packageDirectory?{packageDirectory}:{})}:undefined;
 }
 
 export function pythonReview(value: unknown, saved: SavedPython): PythonReview | undefined {

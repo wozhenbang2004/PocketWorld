@@ -31,6 +31,7 @@ export type ButlerHomeProps = {
   stagingLocal?: boolean;
   modelSetup: ReactNode;
   firstDraftConnect?: boolean;
+  firstPhoneOriginal?: boolean;
   firstHostSave?: { hint: string; disabled: boolean; busy: boolean; save: () => void };
   composer: ReactNode;
   preparations?: (visible: ButlerHomeTask[]) => ReactNode;
@@ -114,7 +115,7 @@ function partialFailureReport(task: ButlerHomeTask, view = workCollectionPresent
 /** Adapt the retained Affect AssistantHome / Composer composition around the
  * real shared input and BoardUI task rows. This view reads
  * the native private-work projection; only the original task owns decisions. */
-export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onReadPairedWindowsFile, onOpenDeviceInbox, onImportProject, stagingLocal=false, modelSetup, firstDraftConnect=false, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
+export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLocal, onReadLocalFiles, onReadPairedWindowsFile, onOpenDeviceInbox, onImportProject, stagingLocal=false, modelSetup, firstDraftConnect=false, firstPhoneOriginal=false, firstHostSave, composer, preparations, phoneActivity, phoneAttention=[], hasPreparations = false, tasks, canOpen, onOpen, onAllWork, onOpenSchedule, onScrollTop, initialScrollTop = 0, moreWork = false, active = true, canReadReports=false }: ButlerHomeProps) {
   const scroller = useRef<HTMLDivElement>(null), workRoot = useRef<HTMLElement>(null);
   const allWorkButton = useRef<HTMLButtonElement>(null), decisionHeading=useRef<HTMLHeadingElement>(null);
   const focused = useRef<{ node: HTMLElement; id: string } | null>(null);
@@ -357,7 +358,7 @@ export function ButlerHome({ ready, modelReady, localDisplayDraft=false, onTryLo
   const workFirst = !firstHostSave && !stagingLocal && (work.length > 0 || hasPhone);
   const firstUse = firstDraftConnect && empty;
   const showLocal = stagingLocal || empty && !!onTryLocal;
-  const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal;
+  const showSetup = ready && !modelReady && !localDisplayDraft && !stagingLocal && !firstPhoneOriginal;
   const showFiles = ready && active && !localDisplayDraft && !stagingLocal && !!onReadLocalFiles;
   const showPairedFile = ready && active && !localDisplayDraft && !stagingLocal && !!onReadPairedWindowsFile;
   const showDeviceInbox = ready && active && !localDisplayDraft && !stagingLocal && !!onOpenDeviceInbox;

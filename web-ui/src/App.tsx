@@ -164,7 +164,7 @@ import {PHONE_RECORD,PhoneOriginalActionReview} from './PhoneOriginalActionRevie
 import {EarlierDraftPhoneStarts,BlankPhoneReceiptActions,type BlankFirstRun} from './BlankPhoneStarts';
 import {PhoneNotificationReturn,originalPhoneNotice,type PhoneNotice} from './PhoneNotificationReturn';
 import {PhoneScopeReview,type PhoneReviewDisplay} from './PhoneScopeReview';
-import {BlankPhoneOriginal} from './BlankPhoneOriginal';
+import {BlankPhoneOriginal,blankPhoneOriginalInput} from './BlankPhoneOriginal';
 import {currentPhonePlaceInput,phonePlaceReturn,returnToPreparedPhoneDraft,samePhonePlaceDraft,type ReviewedPlace,type PhonePlaceReturn} from './phone-review-place';
 import {PhonePauseInstruction,isPrivateLocalPhone,interruptedPrivatePhone,InterruptedPhoneRecord,type MainPauseResume} from './PhonePauseInstruction';
 import {PhoneMainOwnerStep,mainPhoneStep} from './PhoneMainOwnerStep';
@@ -8443,6 +8443,11 @@ export default function App(){
     if(current())toast.error('填入示例尚未确认。请核对原输入，也可以直接输入。');
   }).finally(()=>{fillPhoneReadExampleFlight.current=false});
  };
+ const blankPhoneOriginalEnabled=(route==='butler'||route==='chat')&&ready&&!taskOpen&&!workOpen&&!commandOpen&&
+  !preparationTarget&&!phoneReview&&!phoneReviewPending&&!draftSwitching&&!reportDraftSwitching&&!voiceReview&&!isListening;
+ const firstHomePhoneOriginal=route==='butler'&&intent==='main_screen'&&!composerModelName&&blankPhoneOriginalEnabled&&
+  !taskOpening&&!document.hidden&&[localMainReadAction,'phone.start','conversation.select'].every(can)&&
+  !!blankPhoneOriginalInput(snapshot,text,intent);
  const composerRegion=<div className="pw-composer-region">
    {route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere)&&<div className="pw-butler-conversation-context">
     <Button variant="ghost" size="small" leadingIcon={homeHostMessage?IconServer:IconChat} onClick={homeHostMessage?continueSavedHostFromHome:foregroundTurn&&!pendingHere?returnToForegroundReply:()=>void navigate('chat')} aria-label={homeHostMessage?`${continueSavedHostLabel}：${currentConversation?.title||'原交办'}`:pendingHere?'核对当前输入':`继续话题：${currentConversation?.title||'当前对话'}`} title={currentConversation?.title||'当前对话'}>
@@ -8476,8 +8481,13 @@ export default function App(){
    {carriedTeamRoster&&rosterDraft&&!rosterDraft.teams.length&&rosterDraft.count<4&&
     <Button variant="ghost" size="small" leadingIcon={IconTeam} onClick={()=>void attachCarriedRoster(carriedTeamRoster)}>也关联这次用的编组</Button>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
-   <ChatComposer continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
-     contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={shownLocalMainRead?undefined:firstDraftConnect?
+   <BlankPhoneOriginal enabled={blankPhoneOriginalEnabled} primary={firstHomePhoneOriginal}
+     mode={intent==='chat'?null:intent} text={text} editorText={phoneText.currentValue} navigation={navigationRevision}
+     navigationCurrent={value=>navigationWindow.current===value}
+     arrived={same=>{if(route==='butler')void navigate('chat',undefined,{stillCurrent:same})}}>
+     {(primaryAction,originalDetail)=><ChatComposer primaryInputAction={primaryAction}
+       continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
+       contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={primaryAction||shownLocalMainRead?undefined:firstDraftConnect?
        <Button variant="secondary" size="small" className="min-h-11" leadingIcon={IconModel} data-workspace-entry="connect-model"
         disabled={modelSetupOpening||state.modelSelectionBusy||state.modelSaving||state.modelTesting||draftSwitching||reportDraftSwitching||
           state.chatSubmitting||registration.waiting||firstHostSaving||composer.saving===true||ordinaryDraftRevision===null}
@@ -8492,16 +8502,15 @@ export default function App(){
      if(pickTeamForCurrentDraft(chooseDraftTeam))setVoiceOptionsOpen(false);
      else setLocalError('原草稿已变化，未离开这条对话。');
     }}>选择协作编组</Button>}{can('voice.start')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!state.phoneSubmitting} onClick={()=>{setVoiceOptionsOpen(false);run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'})}}>{isListening?'结束听写':'语音输入'}</Button>}</Popover></PopoverTrigger>
-    <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} cloudGoalLabel={state.conversationId?'带目标去我的主机':'保存到本机（不发送）'} onCloudGoal={!firstHostSave&&!firstHostSaving&&intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.length<=(state.conversationId?8000:4000)&&
+    <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')}
+      showDestination={route==='butler'&&can('composer.intent')&&can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} cloudGoalLabel={state.conversationId?'带目标去我的主机':'保存到本机（不发送）'} onCloudGoal={!firstHostSave&&!firstHostSaving&&intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.length<=(state.conversationId?8000:4000)&&
       (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
    </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')&&!shownLocalMainRead||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
      {phoneReadExample&&<div className="pw-action-row"><Button variant="ghost" size="small" onClick={()=>fillPhoneReadExample(phoneReadExample)}>填入只读数字示例</Button></div>}
-     <BlankPhoneOriginal enabled={(route==='butler'||route==='chat')&&ready&&!taskOpen&&!workOpen&&!commandOpen&&
-       !preparationTarget&&!phoneReview&&!phoneReviewPending&&!draftSwitching&&!reportDraftSwitching&&!voiceReview&&!isListening}
-       mode={intent==='chat'?null:intent} text={text} editorText={phoneText.currentValue} navigation={navigationRevision} navigationCurrent={value=>navigationWindow.current===value}
-       arrived={same=>{if(route==='butler')void navigate('chat',undefined,{stillCurrent:same})}}/>
-   </ChatComposer>
+     {originalDetail}
+     </ChatComposer>}
+   </BlankPhoneOriginal>
    {stageTeamGoal?<ConversationStarters onDraft={stageTeamGoal} purpose="team"/>:route==='butler'&&ready&&!!composerModelName&&!messages.length&&!foregroundTurn&&!butlerWorkRows.length&&!homeHasPreparations&&!phoneActivity&&!homePhoneAttention.length&&
     stageExample&&<ConversationStarters onDraft={stageExample}/>}
    {intent!=='chat'&&['elsewhere','changed','unverified'].includes(phoneDraft.sourceState)&&<p className="pw-field-hint" role="status">{phoneDraft.sourceState==='elsewhere'?'手机草稿仍留在原输入，这里不会显示或提交它。':phoneDraft.sourceState==='changed'?'原消息已换版或不是最新交代。草稿已保留。要改用最新交代，请在那条消息的操作里选择「保留手机草稿，关联这条原话」。':'这份保留草稿缺少可核对的原消息。原文字还在，可在最新主人消息的操作里重新指定来源，或清空后另写。'}</p>}
@@ -9793,7 +9802,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onReadPairedWindowsFile={openHomeWindowsFile} onOpenDeviceInbox={openHomeDeviceInbox} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstDraftConnect={firstDraftConnect} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')}
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onReadPairedWindowsFile={openHomeWindowsFile} onOpenDeviceInbox={openHomeDeviceInbox} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstDraftConnect={firstDraftConnect} firstPhoneOriginal={firstHomePhoneOriginal} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')}
    onOpenSchedule={can('connections.enter')&&can('connections.leave')&&can('automation.list')&&can('plans.snapshot')?trigger=>{
     if(!document.hidden)void openRelatedWorkspace('automation',{...captureWorkspaceOrigin(),focus:trigger,focusKey:trigger.dataset.workspaceEntry});
    }:undefined}

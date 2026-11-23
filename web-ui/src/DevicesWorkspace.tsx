@@ -38,7 +38,8 @@ type Run = (action: string, args?: Data) => Promise<any>;
 // A presentation-only, one-use request from an explicit Home tap.
 export type HomeDeviceInboxVisit = { current: () => boolean; claim: () => boolean; retire: () => void };
 export type DeviceWorkspaceReading = DeviceReadingSlot & { homeWindowsFile?: boolean; homeDeviceInbox?: HomeDeviceInboxVisit };
-type OriginalPhoneAddress = { focus: SentPhoneGoalFocus; work: string; until: number; window: string; deviceRevision: number };
+type OriginalPhoneAddressBasis = 'missing' | 'saved_idle';
+type OriginalPhoneAddress = { focus: SentPhoneGoalFocus; work: string; until: number; window: string; deviceRevision: number; basis: OriginalPhoneAddressBasis };
 type AddressRepair = { place: DeviceReadingPlace; epoch: number; originalPhone?: OriginalPhoneAddress };
 type PresentedReceivedGoal = ReceivedPhoneGoalReturn & {
   waitingBack?: { waitingHandle: string; windowKey: string; trigger: HTMLButtonElement };
@@ -133,9 +134,14 @@ function originalPhoneAddressWork(state: Data, focus: SentPhoneGoalFocus | undef
     ? { key: JSON.stringify([row.ownerDeviceWork.requestDigest, scope.revision, scope.deadlineAt]), until: scope.deadlineAt as number } : undefined;
 }
 const retired = (peer: Data) => peer.revoked === true || peer.connection?.state === 'REVOKED';
-const missingPhoneEndpoint = (peer: Data | undefined) => peer?.revoked === false &&
-  peer.actions?.connect?.available === false && peer.actions.connect.code === 'missing_saved_endpoint' &&
-  peer.connection?.state === 'OFFLINE' && peer.connection.reconnectClientRunning === false;
+function originalPhoneAddressBasis(peer: Data | undefined): OriginalPhoneAddressBasis | undefined {
+  if (!peer || peer.revoked !== false || peer.connection?.state !== 'OFFLINE' || peer.connection.reconnectClientRunning !== false) return;
+  const connect = peer.actions?.connect;
+  if (connect?.available === false && connect.code === 'missing_saved_endpoint') return 'missing';
+  // Native may have a saved address without a channel. Offer a different, explicit choice;
+  // neither this fact nor the age of the record proves that its address is wrong.
+  if (connect?.available === true && peer.connection.unconfirmedTransportWrite === false) return 'saved_idle';
+}
 const peerPlatform = (peer: Data) => peer.windowsDesktop ? 'Windows' : peer.platform || '';
 const windowsDevice = (peer: Data) => !!peer.windowsDesktop || /windows/i.test(peer.platform || '');
 /** The Windows chooser's signed “仅目录和文本” scope, not inferred from platform or missing desktop metadata. */
@@ -564,7 +570,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
       originalPhoneAddressWork(live.state, pin.focus)?.key === pin.work;
   };
   const matchesAddressRepair = (pin: AddressRepair, here: Data | undefined, partner: Data | undefined) =>
-    addressRepair.current === pin && (pin.originalPhone ? missingPhoneEndpoint(partner) && originalPhoneAddressCurrent(pin.originalPhone)
+    addressRepair.current === pin && (pin.originalPhone ? originalPhoneAddressBasis(partner) === pin.originalPhone.basis && originalPhoneAddressCurrent(pin.originalPhone)
       : selectedPeer.current === pin.place.partner.deviceId) &&
     partner?.revoked === false && partner.authorizationEpoch === pin.epoch && sameDeviceReadingPlace(pin.place, here, partner);
   const matchesOriginalAddressReview = (pin: AddressRepair, value: Data) => {
@@ -901,15 +907,16 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, it))):undefined;
   const pinnedWorkspace = matchesPinnedWorkspaceWork(state, sourceFocus);
   const pinnedPhonePreparation = matchesPinnedPhonePreparation(state, sourceFocus);
-  const missingOriginalPhoneAddress = !!sourceFocus && !!focusedPeer && localReadCurrent && missingPhoneEndpoint(focusedPeer) &&
+  const phoneAddressBasis = originalPhoneAddressBasis(focusedPeer);
+  const canUpdateOriginalPhoneAddress = !!sourceFocus && !!focusedPeer && localReadCurrent && !!phoneAddressBasis &&
     state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && Number.isSafeInteger(state.deviceWorkspaceRevision) &&
     Number.isSafeInteger(focusedPeer.authorizationEpoch) && focusedPeer.authorizationEpoch > 0 &&
     supported('devices.reviewConnection') && supported('devices.confirm') && !!originalPhoneAddressWork(state, sourceFocus, now);
   const openOriginalPhoneAddress = () => {
-    if (busy || !sourceFocus || !missingOriginalPhoneAddress || !focusedPeer) return;
+    if (busy || !sourceFocus || !canUpdateOriginalPhoneAddress || !phoneAddressBasis || !focusedPeer) return;
     const place = deviceReadingPlace(local, focusedPeer), window = waitingGoalWindow(), work = originalPhoneAddressWork(state, sourceFocus);
     if (!place || !window || !work) return;
-    const originalPhone = { focus: sourceFocus, window, work: work.key, until: work.until, deviceRevision: state.deviceWorkspaceRevision };
+    const originalPhone = { focus: sourceFocus, window, work: work.key, until: work.until, deviceRevision: state.deviceWorkspaceRevision, basis: phoneAddressBasis };
     if (originalPhoneAddressCurrent(originalPhone)) openAddressForm({ place, epoch: focusedPeer.authorizationEpoch, originalPhone });
   };
   const originalAddress = addressRepair.current?.originalPhone ? addressRepair.current : undefined;
@@ -1585,7 +1592,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                     key={JSON.stringify([sourceFocus.taskId, pinnedScopePlace, focusedPeer.authorizationEpoch, state.webWorkspaceResumeRevision, localRead?.revision])}
                     here={local} peer={focusedPeer} busy={busy} read={readPinnedWorkScope} />
                 </>}
-                {missingOriginalPhoneAddress && <Button variant="secondary" disabled={busy} onClick={openOriginalPhoneAddress}>更新这台原手机的地址</Button>}
+                {canUpdateOriginalPhoneAddress && <Button variant={phoneAddressBasis === 'saved_idle' ? 'ghost' : 'secondary'} disabled={busy} onClick={openOriginalPhoneAddress}>更新这台原手机的地址</Button>}
                 {!deviceChannelWasConnected(focusedPeer) && available(focusedPeer.actions?.connect) && supported('devices.reviewAction') &&
                   <Button variant="secondary" disabled={busy} onClick={() => reviewPeerConnection(focusedPeer)}>核对并连接这台原设备</Button>}</>}
           <Accordion><AccordionItem id="pinned-connection-identity" title="这份工作固定的身份"><p className="pw-source-copy">原设备 {sourceFocus.deviceId}<br/>原证书 {fingerprint(sourceFocus.certificateFingerprint)}</p></AccordionItem></Accordion>

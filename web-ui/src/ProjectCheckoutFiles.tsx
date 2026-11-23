@@ -1,6 +1,6 @@
 import type { HostEditorFile } from './ProjectHostFileComparison';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Accordion, AccordionItem, Button, SettingsDialog, TextAreaField, TextField } from './forms-library';
+import { Accordion, AccordionItem, Button, CheckboxField, SettingsDialog, TextAreaField, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
 import { IconFolder, IconSearch } from './icons';
 import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectCheckoutTextSearch';
@@ -9,7 +9,7 @@ import {checkoutDirectoryPage,ProjectCheckoutDirectory,type DirectoryFile,type D
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { canOpenSavedStaticPreview, ProjectSavedStaticPreview, type SavedStaticEditor } from './ProjectSavedStaticPreview';
 import { bridge } from './bridge';
-import { originalPythonRun, ownerPythonFiles, pythonReview, savedPythonPath, type OriginalPythonRun, type PythonReview } from './owner-python-run';
+import { originalPythonRun, ownerPythonFiles, pythonPackageDirectory, pythonReview, savedPythonPath, type OriginalPythonRun, type PythonReview } from './owner-python-run';
 import { SavedMarkdownBody } from './library/MarkdownBody';
 import type { SourceMember } from './project-preview';
 import './project-development.css';
@@ -33,6 +33,7 @@ export type CheckoutPythonToolsDeparture = {position:CheckoutSavedPosition;saved
 export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandle: string; id: string; closeEditor:()=>Promise<boolean> };
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
+type PythonPackagePicker = {source:string;directoryHandle?:string;hits:number[]};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
 type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
@@ -118,6 +119,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const [checkingSavedSource, setCheckingSavedSource] = useState(false);
   const [pythonRunReview, setPythonRunReview] = useState<PythonReview>(), [uncertainPythonSource, setUncertainPythonSource] = useState('');
   const pythonReviewNow = useRef<PythonReview | undefined>(undefined), pythonHeading = useRef<HTMLHeadingElement>(null);
+  const [pythonPackagePicker,setPythonPackagePicker]=useState<PythonPackagePicker|null>(null);
+  const packageHeading=useRef<HTMLHeadingElement>(null), packageTrigger=useRef<HTMLButtonElement>(null);
   const editorHeading = useRef<HTMLHeadingElement>(null);
   const [orphan, setOrphan] = useState<string | null>(null), [choice, setChoice] = useState<'keep_mine' | 'use_latest' | null>(null);
   const [adoption, setAdoption] = useState<Data | null>(null), [adoptionExpired, setAdoptionExpired] = useState(false);
@@ -209,6 +212,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     if (!('formalFile' in value)) delete next.formalFile;
     if (currentFile.current?.fileHandle!==value.fileHandle) {
       setFileFind(null);
+      setPythonPackagePicker(null);
       if(folderEditorNow.current)holdFolderEditor(null);
     }
     currentFile.current = next; setFile(next);
@@ -644,16 +648,55 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     (finder==='directory' && directory?.path===pythonFolder || rows(listing?.files).some(row=>
       row.binary===false && row.change!=='deleted' && savedPythonPath(row.path) && row.path!==pythonSource.path &&
       row.path.slice(0,Math.max(0,row.path.lastIndexOf('/')))===pythonFolder));
+  const directoryPage=directory?.page;
+  const listedForPackage=canReviewPython&&!canPreparePythonTools&&pythonSource&&!listingStale&&finder==='directory'&&
+    listing?.ownerPythonPackage===true&&listing.filesHandle===handle.current&&listing.projectId===projectId&&listing.checkoutId===checkoutId&&
+    directoryPage&&directoryPage.sourceDigest===listing.sourceDigest?directoryPage:null;
+  const packageDirectory=listedForPackage&&pythonSource&&
+    pythonPackageDirectory(pythonSource.path,listedForPackage.directory+'/__init__.py')===listedForPackage.directory?
+    listedForPackage.directory:undefined;
+  const packageFolders=listedForPackage&&pythonSource&&listedForPackage.directory===pythonFolder?
+    listedForPackage.rows.filter(item=>item.kind==='directory'&&pythonPackageDirectory(pythonSource.path,item.path+'/__init__.py')===item.path):[];
+  const packageFiles=listedForPackage&&pythonSource&&packageDirectory?
+    listedForPackage.rows.filter((item):item is DirectoryFile=>item.kind==='file'&&!item.binary&&item.bytes<=262144&&
+      pythonPackageDirectory(pythonSource.path,item.path)===packageDirectory):[];
+  const choosingPackage=pythonPackagePicker?.source===pythonSource?.clickKey?pythonPackagePicker:null;
+  const pickedPackageFiles=choosingPackage?.directoryHandle===listedForPackage?.directoryHandle?
+    packageFiles.filter(item=>choosingPackage?.hits.includes(item.hit)):[];
+  const packageBytes=(typeof file?.latest?.bytes==='number'?file.latest.bytes:Infinity)+pickedPackageFiles.reduce((n,row)=>n+row.bytes,0);
+  const packageReady=!!packageDirectory&&pickedPackageFiles.length<=7&&packageBytes<=262144&&
+    pickedPackageFiles.some(item=>item.path===packageDirectory+'/__init__.py');
   const exactPythonEditor = () => canReviewPython && !!file && !!pythonSource && live(generation.current) &&
     currentFile.current===file && file.filesHandle===handle.current && currentText.current===pythonSource.content &&
     editorInput.current?.value===textareaText(pythonSource.content) && !entered.current && !edits.current &&
     !activeAdoption.current && !activeMarkdown.current && !choice && !file.draftError;
-  const readPythonReview = (directory=false) => {
+  const openPythonPackage=()=>{
+    if(!exactPythonEditor()||!pythonSource||folderEditorNow.current||(!packageDirectory&&!packageFolders.length))return;
+    setPythonPackagePicker({source:pythonSource.clickKey,hits:[]});
+    requestAnimationFrame(()=>packageHeading.current?.focus());
+  };
+  const closePythonPackage=()=>{
+    if(!choosingPackage)return false;
+    if(!entered.current&&!edits.current){
+      setPythonPackagePicker(null);
+      requestAnimationFrame(()=>(packageTrigger.current??editorHeading.current)?.focus({preventScroll:true}));
+    }
+    return true;
+  };
+  const readPythonReview = (mode?:'directory'|'package') => {
     if (!exactPythonEditor() || !file || !pythonSource || pythonReviewNow.current) return;
-    if (directory && !canReviewPythonDirectory) return;
-    void invoke('reviewPython', {fileHandle:file.fileHandle,...pythonSource.selection,...(directory?{sourceMode:'directory'}:{})}, value=>{
+    if (mode==='directory' && !canReviewPythonDirectory) return;
+    if (mode==='package' && (!listedForPackage||!choosingPackage||!packageReady)) return;
+    const packageSelection=mode==='package'&&listedForPackage?
+      {directoryHandle:listedForPackage.directoryHandle,hits:pickedPackageFiles.map(item=>item.hit)}:undefined;
+    void invoke('reviewPython', {fileHandle:file.fileHandle,...pythonSource.selection,...(mode?{sourceMode:mode}:{}),
+      ...(packageSelection?{packageSelection}:{})}, value=>{
       const review=pythonReview(value,{projectId,checkoutId,path:pythonSource.path,sha256:pythonSource.sha256});
-      if (!review || !!review.programFiles!==directory) throw Error('未核对到当前保存的原 Python 源码，没有运行。');
+      if (!review || !!review.programFiles!==!!mode || !!review.packageDirectory!==(mode==='package')||
+        (mode==='package'&&(review.packageDirectory!==packageDirectory||review.programFiles?.length!==pickedPackageFiles.length+1||
+          !pickedPackageFiles.every(picked=>review.programFiles?.some(row=>row.path===picked.path&&row.sha256===picked.sha256&&row.bytes===picked.bytes)))))
+        throw Error('未核对到当前保存的原 Python 源码，没有运行。');
+      if(mode==='package')setPythonPackagePicker(null);
       pythonReviewNow.current=review;setPythonRunReview(review);
       requestAnimationFrame(()=>pythonHeading.current?.focus());
     });
@@ -788,6 +831,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
     if (backFromStaticPreview()) return;
+    if (closePythonPackage()) return;
     if (activeMarkdown.current) closeMarkdown();
     else if (backFromChanges()) return;
     else if (localFind && !entered.current && !edits.current && !activeAdoption.current && !choice) closeFileFind();
@@ -850,7 +894,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const editState = orphan!==null || blockedEdit.current ? '界面文字尚未核对' : file?.saveUnknown ? '保存结果待核对' :
     editing ? '正在保留编辑文字，未写入副本' : file?.dirty ?
     file.draftDurable===true && !file.draftError ? '手机草稿已保留，未写入副本' : '草稿仍在当前会话，尚未确认写入手机' : '没有未保存修改';
-  const locked = busy || editing || !!adoption || !!pythonRunReview, nativeText = file?.text || '';
+  const locked = busy || editing || !!adoption || !!pythonRunReview || !!choosingPackage, nativeText = file?.text || '';
   const canDraftBeforeSave = !sourceMember && !hostFile && !!recentSave && !!file && showingSavedFile &&
     !locked && !choice && !file.draftError && fileHash(recentSave.beforeHash) && recentSave.before!==recentSave.after &&
     file.dirty===false && file.conflict===false && file.saveUnknown===false &&
@@ -904,8 +948,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   </section>;
   const changesBackLabel=file?'返回改动列表':'返回选文件';
   return <SettingsDialog isOpen title={showingStatic?'预览已保存网页':readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
-    onClose={() => {if(backFromStaticPreview())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
-    closeLabel={showingStatic||readingMarkdown?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+    onClose={() => {if(backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
+    closeLabel={showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
     {showingStatic&&staticPreview&&<ProjectSavedStaticPreview editor={staticPreview.editor}
       current={()=>activeStaticPreview.current===staticPreview&&sameStaticEditor(staticPreview)}
       onLeave={()=>leaveStaticPreview(staticPreview)} onVerifiedRoot={paths=>rememberStaticRoot(staticPreview,paths)}
@@ -1043,7 +1087,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
               `${localMatch.wrapped?'已回到开头 · ':''}第 ${localMatch.line} 行`}</p>}
           </section>}
         </>}
-        <TextAreaField ref={editorInput} label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || !!pythonRunReview || orphan !== null} className="pw-code-editor" />
+        <TextAreaField ref={editorInput} label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || !!pythonRunReview || !!choosingPackage || orphan !== null} className="pw-code-editor" />
         {(file.conflict || file.saveUnknown) && <p role="status">{file.saveUnknown ? '保存结果待核对，请读取同一文件。' : '副本文件与保留草稿的基线不同。请比较后决定，未自动覆盖。'}</p>}
         <Accordion>{(recentSave?.path!==file.path || file.dirty || file.conflict || orphan!==null) &&
           <AccordionItem id="checkout-file-diff" title="比较保留的修改"><InlineDiff before={file.baseContent || ''} after={text} versionLabel="草稿原基线" />{file.latest && file.conflict && <><h4>当前副本与保留草稿</h4><InlineDiff before={file.latest.content || ''} after={text} versionLabel="刚读取的副本" /></>}</AccordionItem>}
@@ -1064,7 +1108,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
             ? <Button disabled={locked} onClick={preparePythonTools}>{preparePythonToolsLabel || '查看手机工具准备'}</Button>
             : <Button disabled={locked} onClick={()=>readPythonReview()}>运行已保存的脚本…</Button>)}
           {canReviewPythonDirectory && !pythonRunReview &&
-            <Button variant="ghost" disabled={locked} onClick={()=>readPythonReview(true)}>核对同目录 Python 程序…</Button>}
+            <Button variant="ghost" disabled={locked} onClick={()=>readPythonReview('directory')}>核对同目录 Python 程序…</Button>}
+          {(packageDirectory||packageFolders.length>0)&&!pythonRunReview&&
+            <Button ref={packageTrigger} variant="ghost" disabled={locked} onClick={openPythonPackage}>选择 Python 包源码…</Button>}
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' : '已保存，回到项目工作区'}
@@ -1074,11 +1120,41 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
           {staticEligible&&<Button ref={staticPreviewTrigger} variant="secondary" disabled={locked} onClick={showStaticPreview}>
             {staticCompanion?'预览网页（带上本次保存）':'预览已保存网页'}</Button>}
         </div>}
+        {choosingPackage&&pythonSource&&<section className="pw-checkout-adoption" aria-label="选择 Python 包源码">
+          <h3 ref={packageHeading} tabIndex={-1}>入口：<bdi>{pythonSource.path}</bdi></h3>
+          <p>只带入所选包里的已保存 .py 文件，包括 __init__.py。入口和所选源码合计最多 8 个文件、256 KiB。</p>
+          {!packageDirectory?packageFolders.map(folder=><Button key={folder.path} variant="ghost" leadingIcon={IconFolder}
+            disabled={busy||editing} onClick={()=>void visitDirectory(folder.path,0)}><bdi>{folder.path}</bdi></Button>):<>
+            <h4><bdi>{packageDirectory}</bdi></h4>
+            {packageFiles.map(row=>{
+              const selected=pickedPackageFiles.includes(row);
+              return <CheckboxField key={row.path} isSelected={selected} isDisabled={busy||editing||!selected&&
+                (pickedPackageFiles.length>=7||packageBytes+row.bytes>262144)} onChange={checked=>{
+                  if(!listedForPackage||entered.current||edits.current)return;
+                  setPythonPackagePicker(previous=>{
+                    if(!previous||previous!==choosingPackage)return previous;
+                    const hits=previous.directoryHandle===listedForPackage.directoryHandle?previous.hits:[];
+                    return {...previous,directoryHandle:listedForPackage.directoryHandle,
+                      hits:checked?[...hits.filter(i=>i!==row.hit),row.hit]:hits.filter(i=>i!==row.hit)};
+                  });
+                }}><bdi>{row.path}</bdi></CheckboxField>;
+            })}
+            {!packageFiles.some(row=>row.path===packageDirectory+'/__init__.py')&&
+              <p role="status">这页没有可选的 __init__.py，没有自动查找或读取其他文件。</p>}
+            {pythonFolder!==undefined&&<Button variant="ghost" disabled={busy||editing}
+              onClick={()=>void visitDirectory(pythonFolder,0)}>选择别的包</Button>}
+          </>}
+          <div className="pw-form-actions">
+            <Button variant="secondary" disabled={busy||editing} onClick={()=>closePythonPackage()}>返回编辑</Button>
+            <Button disabled={busy||editing||!packageReady} onClick={()=>readPythonReview('package')}>核对所选源码</Button>
+          </div>
+        </section>}
         {pythonRunReview && <section className="pw-checkout-adoption" aria-label="核对本机运行脚本">
-          <h3 ref={pythonHeading} tabIndex={-1}>{pythonRunReview.programFiles?'同目录 Python 程序：':'在这部手机运行 '}<bdi>{pythonRunReview.path}</bdi>？</h3>
+          <h3 ref={pythonHeading} tabIndex={-1}>{pythonRunReview.packageDirectory?'Python 包入口：':pythonRunReview.programFiles?'同目录 Python 程序：':'在这部手机运行 '}<bdi>{pythonRunReview.path}</bdi>？</h3>
           {pythonRunReview.programFiles ? <>
-            <p>以选中的文件为入口。只带入以下同目录、已保存的 .py 文件，不带入子目录、数据文件或依赖。</p>
-            <ul>{pythonRunReview.programFiles.map(input=><li key={input.path}><bdi>{input.path.split('/').at(-1)}</bdi> · <code>{input.sha256.slice(0,8)}</code>{input.path===pythonRunReview.path?' · 入口':''}</li>)}</ul>
+            <p>{pythonRunReview.packageDirectory?'只带入下面已核对的入口与一个包的源码，保留包内路径，不带入其他文件或依赖。':
+              '以选中的文件为入口。只带入以下同目录、已保存的 .py 文件，不带入子目录、数据文件或依赖。'}</p>
+            <ul>{pythonRunReview.programFiles.map(input=><li key={input.path}><bdi>{pythonRunReview.packageDirectory?input.path:input.path.split('/').at(-1)}</bdi> · <code>{input.sha256.slice(0,8)}</code>{input.path===pythonRunReview.path?' · 入口':''}</li>)}</ul>
             <p>最多运行 60 秒，不需要模型。</p>
           </> : <p>仅使用这次已保存的脚本 <code>{pythonRunReview.sha256.slice(0,8)}</code>，最多运行 60 秒，不需要模型或安装依赖。</p>}
           <p>脚本可能联网，不保证限制其访问范围。只运行你信任的脚本。这里不挂载原副本，也不会导回运行生成的文件。</p>
