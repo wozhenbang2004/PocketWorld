@@ -1350,7 +1350,8 @@ internal class PocketWebAttachments(
             put("editorHandle", value?.editorHandle).put("versionHandle", value?.versionHandle)
         fun JSONObject.sourceUnavailable(unavailable: Boolean) = apply { if (unavailable) put("sourceAvailable", false) }
         fun saved(value: PocketWebStandaloneDocumentDrafts.Saved?) =
-            reply(value?.let { JSONObject().put("status", it.state.name).edit(it.edit).sourceUnavailable(it.sourceUnavailable) })
+            reply(value?.let { JSONObject().put("status", it.state.name).edit(it.edit)
+                .put("warmResumeKey", it.warmResumeKey).sourceUnavailable(it.sourceUnavailable) })
         fun documentInput(input: PocketWebStandaloneDocumentDrafts.GenerationInput, outputFormat: Format): JSONObject = content(input.fields).apply {
             // Select only this output; the saved editor's format and revision are never updated here.
             put("format", outputFormat.value)

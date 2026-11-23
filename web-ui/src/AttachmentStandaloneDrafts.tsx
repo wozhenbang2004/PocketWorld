@@ -176,7 +176,14 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
    if(result.editorHandle!==original.handle||!isHandle(result.versionHandle)||
       (checking?result.status!=='VERIFIED':result.status!=='SAVED'&&result.status!=='VERIFIED')||
       (!first&&(result.status==='VERIFIED')!==(result.versionHandle===original.version))){hold();return}
-   setEditor(value=>value===original?{...original,version:result.versionHandle,original:original.input,input:original.input,uncertain:undefined}:value);
+   // Later typing may use the existing warm recovery only from this new,
+   // acknowledged baseline. An uncertain write never restores the old key.
+   const warmResumeKey=!first&&!checking&&!original.sourceName&&!original.fromTxt&&result.sourceAvailable!==false&&
+    currentEditor.current===original&&writeAttempt.current===original.handle&&isHandle(original.warmResumeKey)&&
+    isHandle(result.warmResumeKey)&&result.warmResumeKey!==original.warmResumeKey?result.warmResumeKey:undefined;
+   if(warmResumeKey)writeAttempt.current=undefined;
+   setEditor(value=>value===original?{...original,version:result.versionHandle,original:original.input,input:original.input,
+    uncertain:undefined,warmResumeKey}:value);
    setNotice(checking?'已核对这份本机草稿':'草稿已保留在本机');
   }catch{hold()}
  });

@@ -61,7 +61,8 @@ internal class PocketWebStandaloneDocumentDrafts(
                       val sourceName: String? = null, val sourceUnavailable: Boolean = false, val warmResumeKey: String? = null)
     // A prior verified storage pin is only a locator; a fresh ordinary owner frame must read it again.
     data class WarmEditor(val key: String, val pin: Pin, val pendingDocument: String?)
-    data class Saved(val state: State, val edit: Edit? = null, val sourceUnavailable: Boolean = false)
+    data class Saved(val state: State, val edit: Edit? = null, val sourceUnavailable: Boolean = false,
+                     val warmResumeKey: String? = null)
     data class GenerationInput(val fields: Fields, val source: RevisionSource?, val pin: Pin)
     data class GenerationRead(val input: GenerationInput? = null, val sourceUnavailable: Boolean = false)
     data class Retention(val state: State, val sourceUnavailable: Boolean = false)
@@ -244,10 +245,13 @@ internal class PocketWebStandaloneDocumentDrafts(
     fun save(frame: Frame, shown: Edit, fields: Fields, done: (Saved?) -> Unit) {
         val current = admission(frame, allowPendingDocument = true)
         require(canonicalId(shown.editorHandle) && canonicalId(shown.versionHandle)) { "原草稿编辑版本无效" }
-        val original = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }?.copy(warmResumeKey = null)
+        val opened = editor?.takeIf { scope == current && it.edit == shown && !it.removalOnly }
             ?: error("这份本机草稿的编辑版本已变化")
         check(pending == null)
-        editor = original // A save attempt (including an uncertain result) is not an untouched warm editor.
+        val rearmWarm = opened.warmResumeKey != null && opened.source == null &&
+            !current.linkedEditor && current.textSource == null
+        val original = opened.copy(warmResumeKey = null)
+        editor = original // Retire the prior exact locator before the write can run.
         first = null
         blank = null
         val pin = original.pin
@@ -270,9 +274,12 @@ internal class PocketWebStandaloneDocumentDrafts(
                     (state == State.VERIFIED && next == pin ||
                      state == State.SAVED && next.revision() == pin.revision() + 1 && next.sha256() != pin.sha256())) {
                     val edit = if (state == State.VERIFIED) original.edit else Edit(original.edit.editorHandle, token())
-                    editor = original.copy(edit = edit, pin = next)
+                    // Only a settled CAS on an already warm-eligible editor
+                    // may offer the exact newly verified baseline on a later pause.
+                    val warmKey = if (rearmWarm && editor === original) token() else null
+                    editor = original.copy(edit = edit, pin = next, warmResumeKey = warmKey)
                     rows = emptyMap() // Retire the previous catalogue; do not re-read it automatically.
-                    return@let Saved(state, edit)
+                    return@let Saved(state, edit, warmResumeKey = warmKey)
                 }
                 if (state == State.QUOTA) return@let Saved(State.QUOTA)
                 editor = null

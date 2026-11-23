@@ -700,6 +700,7 @@ internal class PocketWebBridge(
     fun close() {
         if (closed) return
         closed = true
+        historyDeliveryLease = null
         retireActiveSpanSend()
         retireSavedModelTestWait()
         retireChatDefaults()
@@ -1034,6 +1035,7 @@ internal class PocketWebBridge(
     /** Synchronously invalidate queued commands and short-lived owner review handles. */
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
+        if(documentReplaced)historyDeliveryLease=null else historyDeliveryLease?.retired=true
         retireSavedModelTestWait()
         retireChatDefaults()
         retireKeptStaticPages()
@@ -2460,6 +2462,10 @@ internal class PocketWebBridge(
                 mutateRetainedDeliverySpan(id,action,args);return
             }
             if(action=="ownerWork.deliveryText.release"){
+                if(args.has("historyVisit")){
+                    retireHistoryDeliveryRead(id,args)
+                    return
+                }
                 checkedPayload(args,setOf("pageToken"))
                 if(retainedDeliveryOffer?.token==requiredString(args,"pageToken"))retainedDeliveryOffer=null
                 complete(id,accepted(),null,retainValue=false);return
@@ -5792,6 +5798,64 @@ internal class PocketWebBridge(
         return selected
     }
 
+    /** Detached ordinary History has its own already-loaded original row. It
+     * does not borrow live Chat rows or any claimed JS task/run/delivery. */
+    private fun originalCompletedHistoryWorkDelivery(conversation:String,message:String,revision:Long,
+            readerWindow:Long):UiTaskResult? {
+        val page=controller.conversationReader ?: return null
+        if(page.window!=readerWindow||page.conversation!=conversation||revision!=1L||
+            !ordinaryHistoryReplyPage(page)||controller.state.chatSubmitting||controller.state.phoneSubmitting||
+            attachmentPages.hasOpenWorkspace||controller.attachmentOutcomes.state.open) return null
+        val row=page.messages.singleOrNull { it.id==message } ?: return null
+        if(row.role!="assistant"||row.sourceRevision!=revision||row.content.isBlank()||
+            row.phoneResult!=null||row.originalHostFinal!=null||row.hostGoalTaskId!=null) return null
+        return row.taskResult?.takeIf { selected -> selected.kind=="owner_work"&&selected.status=="completed"&&
+            selected.noticeKind==null&&selected.summaryTruncated&&row.taskId==selected.taskId }
+    }
+
+    private data class HistoryDeliveryRead(val id:String,val order:Long,val reader:Long,val conversation:String,val message:String,val revision:Long)
+    private class HistoryDeliveryLease(val read:HistoryDeliveryRead,val document:String,val window:PocketWebWindowTicket,
+            val resume:Long,val readerSource:Long,val selected:UiTaskResult) {
+        @Volatile var retired=false
+    }
+    @Volatile private var historyDeliveryLease:HistoryDeliveryLease?=null
+    private fun historyDeliveryRead(args:JSONObject,conversation:String,message:String,revision:Long):HistoryDeliveryRead {
+        val visit=requiredString(args,"historyVisit").also {
+            require(it.matches(Regex("[1-9][0-9]{0,15}:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")))
+        }
+        val order=visit.substringBefore(':').toLong().also { require(it<=9_007_199_254_740_991L) }
+        return HistoryDeliveryRead(visit,order,requiredLong(args,"readerWindow").also { require(it>0L) },conversation,message,revision)
+    }
+
+    /** Exit precisely this child read, without closing the parent History or
+     * touching the live Chat's optional quote offer. The ACK is content-free. */
+    private fun retireHistoryDeliveryRead(id:String,args:JSONObject){
+        checkedPayload(args,setOf("historyVisit","readerWindow","conversationId","messageId","sourceRevision"))
+        val wanted=historyDeliveryRead(args,requiredString(args,"conversationId"),requiredString(args,"messageId"),
+            requiredLong(args,"sourceRevision"))
+        val doc=requireNotNull(documentId)
+        val frame=captureWindow()
+        val prior=historyDeliveryLease?.takeIf { it.document==doc }
+        val parent=controller.conversationReader
+        check(parent!=null&&parent.window==wanted.reader&&parent.conversation==wanted.conversation&&
+            section==null&&taskViewId==null&&taskReturnSection==null&&controller.webPrivateOwnerVisible()) { "原历史窗口已变化" }
+        val lease=prior?.takeIf { it.read==wanted } ?: run {
+            // A Back queued before the first native read may retire only
+            // this same already-loaded row, never a different live child.
+            check(prior==null||prior.read.order<wanted.order&&
+                (prior.retired||prior.read.reader!=wanted.reader||prior.window!=frame||prior.resume!=workspaceResumeRevision)) {
+                "尚未核对到这次原正文退出"
+            }
+            val selected=originalCompletedHistoryWorkDelivery(wanted.conversation,wanted.message,wanted.revision,wanted.reader)
+                ?:error("尚未核对到这次原正文退出")
+            HistoryDeliveryLease(wanted,doc,frame,workspaceResumeRevision,controller.historicalReplyReadVersion(),selected)
+                .also { historyDeliveryLease=it }
+        }
+        lease.retired=true
+        complete(id,JSONObject().put("retired",true).put("historyVisit",wanted.id).put("readerWindow",wanted.reader),
+            null,retainValue=false)
+    }
+
     private data class RetainedDeliveryOffer(val token:String,val conversation:String,val message:String,val revision:Long,
         val delivery:TaskStore.OwnerWorkDeliveryRef,val summaryChars:Int,val digest:String,val offset:Int,val end:Int,
         val fast:()->Boolean,val current:()->Boolean)
@@ -5869,32 +5933,54 @@ internal class PocketWebBridge(
         }
     }
     private fun readOriginalCompletedWorkDelivery(id: String, args: JSONObject) {
-        val serial=++retainedDeliveryReadSerial;retainedDeliveryOffer=null
-        checkedPayload(args,setOf("conversationId","messageId","sourceRevision","offset","expectedDigest"))
+        val fromHistory=args.has("readerWindow")||args.has("historyVisit")
+        val serial=if(fromHistory)null else (++retainedDeliveryReadSerial).also { retainedDeliveryOffer=null }
+        checkedPayload(args,setOf("conversationId","messageId","sourceRevision","offset","expectedDigest","readerWindow","historyVisit"))
         val conversation=requiredString(args,"conversationId").also { require(it.length<=240) }
         val message=requiredString(args,"messageId").also { require(it.matches(Regex("[a-f0-9-]{36}"))) }
         val revision=requiredLong(args,"sourceRevision").also { require(it>0) }
+        val history=if(fromHistory)historyDeliveryRead(args,conversation,message,revision) else null
         val offset=requiredInt(args,"offset").also { require(it in 0 until 240000) }
         val digest=if(args.has("expectedDigest")) requiredString(args,"expectedDigest") else ""
         require(digest.matches(Regex("[a-f0-9]{64}")) || digest.isEmpty() && offset==0)
-        val selected=originalCompletedWorkDelivery(conversation,message,revision) ?: error("请回到有这份交付的原私人对话")
+        fun selectedDelivery()=if(history==null)originalCompletedWorkDelivery(conversation,message,revision)
+            else originalCompletedHistoryWorkDelivery(conversation,message,revision,history.reader)
+        val selected=selectedDelivery() ?: error("请回到有这份交付的原私人对话")
         val delivery=TaskStore.OwnerWorkDeliveryRef(selected.taskId,selected.runId,selected.epoch,selected.deliveryId)
         val document=requireNotNull(documentId)
         val window=captureWindow()
         val foreground=controller.displayedPhoneWindowVersion()
         val composerEpoch=controller.composerViewEpochForScopedRead
         val sources=controller.conversationSourceRevision
+        val resume=workspaceResumeRevision
+        val historyLease=history?.let { owned ->
+            val source=controller.historicalReplyReadVersion()
+            val previous=historyDeliveryLease
+            if(previous!=null&&previous.document==document&&previous.read.id==owned.id){
+                check(previous.read==owned&&previous.window==window&&previous.resume==resume&&
+                    previous.readerSource==source&&previous.selected==selected&&!previous.retired) { "原正文阅读已关闭，请从原消息重新打开" }
+                previous
+            } else {
+                check(offset==0&&digest.isEmpty()&&
+                    (previous==null||previous.document!=document||previous.read.order<owned.order)) { "请先从原消息重新打开正文" }
+                HistoryDeliveryLease(owned,document,window,resume,source,selected).also { historyDeliveryLease=it }
+            }
+        }
         // Do not traverse mutable UI state on the SQL worker; recheck the typed
         // loaded row and actual private scope on main before emitting its body.
         fun fast() = !closed && documentId==document && commandFence.accepts(window.bridge) &&
             controller.displayedPhoneWindowAlive(foreground) && controller.composerViewEpochForScopedRead==composerEpoch &&
-            controller.conversationSourceRevision==sources
-        fun current() = fast() && acceptsWindow(window) && originalCompletedWorkDelivery(conversation,message,revision)==selected
+            controller.conversationSourceRevision==sources &&
+            (historyLease==null||historyDeliveryLease===historyLease&&!historyLease.retired&&workspaceResumeRevision==resume&&
+                controller.conversationReaderRevision==historyLease.read.reader&&
+                controller.historicalReplyReadVersion()==historyLease.readerSource)
+        fun current() = fast() && acceptsWindow(window) && selectedDelivery()==selected
         controller.readOriginalCompletedWorkDelivery(conversation,message,revision,delivery,selected.summaryChars,offset,digest,::fast,::current) { page,failure ->
             if(documentId!=document)return@readOriginalCompletedWorkDelivery
             if(!current())complete(id,null,"原交付或阅读窗口已变化，未读取其他版本",retainValue=false)
             else {
-                if(failure==null&&page!=null&&serial==retainedDeliveryReadSerial) {
+                if(failure==null&&page!=null&&history!=null)page.put("readerWindow",history.reader).put("historyVisit",history.id)
+                if(failure==null&&page!=null&&serial!=null&&serial==retainedDeliveryReadSerial) {
                     val token=java.util.UUID.randomUUID().toString()
                     retainedDeliveryOffer=RetainedDeliveryOffer(token,conversation,message,revision,delivery,selected.summaryChars,
                         page.getString("resultDigest"),offset,page.getInt("nextOffset"),::fast,::current)

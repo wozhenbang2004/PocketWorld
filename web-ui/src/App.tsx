@@ -222,6 +222,9 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
  savedTeamDefaultModel?:WorkIdentity&{state:'unconfigured';modelSelectionRevision:number}};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
+type WorkApprovalWindow={window:TaskReviewWindow;navigation:number;nativeTaskRequest:number;work:WorkIdentity;conversation:string};
+type WorkApprovalVisit=WorkApprovalWindow&{reviewHandle:string;approval:{id:string;tool:string;argumentsHash:string;expiresAt:number};
+ approved:boolean;phase:'submitting'|'queued'|'recorded'};
 type DirectoryResultRead={window:TaskReviewWindow;run:{runId:string;epoch:number};query:string;directoryScope:string;navigation:number;projectionRevision?:number;retired?:true};
 type DirectoryQuestionArrival=WorkIdentity&{reviewWindow?:TaskReviewWindow};
 type TeamReportVisit={parent:TeamReportParent;choice:TeamReportChoice;window:TaskReviewWindow;navigation:number;trigger:HTMLButtonElement|null;fromTeam?:{summarySha256:string;conversationId:string}};
@@ -457,6 +460,35 @@ function ordinaryChatWorkRow(task:Task|undefined,conversation:string,detail=fals
   raw.origin==null&&raw.parentTaskId==null&&raw.teamRunId==null&&raw.teamAssignment==null&&raw.memberId==null&&raw.developmentContext==null&&
   raw.ownerPhoneControl==null&&raw.ownerDeviceWork==null&&
   (!detail||raw.taskProjection==='detail_window'&&raw.auditBodyIncluded===true&&raw.taskCoreReadLimited===false)?work:null;
+}
+function ordinaryWorkApprovalTask(task:Task|undefined,conversation:string,detail=false){
+ const work=ordinaryChatWorkRow(task,conversation,detail),raw=task?.raw,source=obj(raw?.ownerWork);
+ return work?.runId&&work.epoch>0&&raw&&raw.status===task?.status&&raw.metadataLimited!==true&&
+  Array.isArray(raw.ownerWorkTeams)&&raw.ownerWorkTeams.length===0&&raw.ownerWorkTeamsUnavailable!==true&&
+  source.relatedSourcesUnavailable!==true&&(source.relatedTaskCount==null||source.relatedTaskCount===0)&&
+  (raw.relatedTasks==null||Array.isArray(raw.relatedTasks)&&raw.relatedTasks.length===0)&&
+  ['ownerWorkPreparation','ownerResultHandling','ownerWorkTakeover','deviceSourceScope','workProfileRef','workProfileIntent',
+   'teamWriteScope','sourceLearningJob','sshSelection','extensionSelection'].every(key=>raw[key]==null)?work:null;
+}
+const ordinaryApprovalTool=(tool:unknown):tool is string=>typeof tool==='string'&&!!tool&&
+ !/^(?:execution_plan_review$|teams?_|project_|work_profile_)/.test(tool);
+function exactWorkApprovalRow(task:Task|undefined,runId:string,id:string){
+ const rows=asArray<Json>(task?.raw?.approvals).filter(row=>row?.id===id),row=rows.length===1?rows[0]:undefined;
+ return row&&row.runId===runId&&ordinaryApprovalTool(row.tool)&&typeof row.argumentsHash==='string'&&
+  /^[a-f0-9]{64}$/.test(row.argumentsHash)&&Number.isSafeInteger(row.expiresAt)&&row.expiresAt>0?row:undefined;
+}
+const waitingForNextWorkApproval=(task:Task|undefined)=>task?.status==='awaiting_user'&&task.raw?.status==='awaiting_user'&&
+ task.raw.cancelRequested===false&&task.raw.hasUnresolvedOperations===false;
+function nextWorkApproval(task:Task|undefined,visit:WorkApprovalVisit){
+ if(!waitingForNextWorkApproval(task))return;
+ const candidate=asArray<Json>(task?.raw?.approvals).find(row=>typeof row?.id==='string'&&!!row.id&&row.id!==visit.approval.id&&
+  row.runId===visit.work.runId&&ordinaryApprovalTool(row.tool)&&row.state==='pending'&&row.expiresAt>Date.now());
+ return candidate?exactWorkApprovalRow(task,visit.work.runId,candidate.id):undefined;
+}
+function stillPendingWorkApproval(task:Task|undefined,visit:WorkApprovalVisit,expected:Json){
+ const row=exactWorkApprovalRow(task,visit.work.runId,expected.id);
+ return row&&waitingForNextWorkApproval(task)&&row.state==='pending'&&row.expiresAt>Date.now()&&
+  row.tool===expected.tool&&row.argumentsHash===expected.argumentsHash&&row.expiresAt===expected.expiresAt?row:undefined;
 }
 function settledOrdinaryWorkStop(task:Task|undefined,expected:WorkIdentity){
  const raw=task?.raw,source=obj(raw?.ownerWork);
@@ -1539,6 +1571,7 @@ export default function App(){
  const [projectQuestionLink,setProjectQuestionLink]=useState<ProjectQuestionLink|null>(null);
  const [localError,setLocalError]=useState(''),[localStatus,setLocalStatus]=useState(''),[review,setReview]=useState<Review|null>(null),[reviewPending,setReviewPending]=useState(false),[reviewSubmitted,setReviewSubmitted]=useState(false),[reviewNote,setReviewNote]=useState(''),[reviewFeedbackOpen,setReviewFeedbackOpen]=useState(false),[scopeTools,setScopeTools]=useState(''),[scopeModels,setScopeModels]=useState('');
  const [reviewReceipt,setReviewReceipt]=useState('');
+ const [workApprovalVisit,setWorkApprovalVisit]=useState<WorkApprovalVisit|null>(null);
  const [draftAcceptance,setDraftAcceptance]=useState<DraftAcceptanceClick|null>(null);
  const [projectFeedback,setProjectFeedback]=useState<Record<string,string>>({}),projectFeedbackRef=useRef<Record<string,string>>({});
  const putProjectFeedback=(key:string,text:string)=>{if(!key)return;const next={...projectFeedbackRef.current,[key]:text};projectFeedbackRef.current=next;setProjectFeedback(next)};
@@ -7475,6 +7508,66 @@ export default function App(){
    saveOnly={cold&&review.actions?.some(row=>row.action==='tasks.saveColdQuestionChoice')===true}
    onContinueSaved={cold&&review.actions?.some(row=>row.action==='tasks.continueColdQuestion')?confirmColdQuestionContinuation:undefined}
    submit={submit} onSaved={clearSavedQuestionAnswer}/>;
+ const workApprovalWindowCurrent=(visit:WorkApprovalWindow,live:ReturnType<typeof bridge.getState>)=>{
+  const view=obj(live?.view),owner=obj(live?.state);
+  return taskOpen&&!taskOpening&&taskLayer==='overview'&&taskId===visit.work.taskId&&['butler','chat','tasks'].includes(route)&&
+   !teamReportModeRef.current&&!workSupplementTarget&&reviewWindow.current===visit.window&&currentReviewWindow(visit.window)&&
+   navigationWindow.current===visit.navigation&&live?.host?.ready===true&&view.section===null&&view.taskId===visit.work.taskId&&
+   view.resumeRevision===visit.window.resumeRevision&&owner.requestedTaskRevision===visit.nativeTaskRequest&&
+   !owner.conversationReader&&!owner.filePath&&!owner.queuedInputsPage&&!owner.attachmentWorkspace?.open;
+ };
+ const workApprovalTask=(visit:WorkApprovalWindow,live:ReturnType<typeof bridge.getState>,detail=false)=>{
+  if(!workApprovalWindowCurrent(visit,live))return;
+  const rows=asArray<Task>(live.state.tasks).filter(row=>row.id===visit.work.taskId),task=rows.length===1?rows[0]:undefined;
+  const original=ordinaryWorkApprovalTask(task,visit.conversation,detail);
+  return original&&workIdentityKey(original)===workIdentityKey(visit.work)?task:undefined;
+ };
+ const captureWorkApproval=(value:Review,window:TaskReviewWindow,args:Json):WorkApprovalVisit|null=>{
+  const id=args.approvalId,conversation=value.task?.raw?.conversationId,native=bridge.getState();
+  if(typeof id!=='string'||!id||typeof args.approved!=='boolean'||typeof conversation!=='string'||!conversation||
+     reviewPending||value.ownerQuestion||!value.actions?.some(row=>row.action==='tasks.approve'))return null;
+  const work=ordinaryWorkApprovalTask(value.task,conversation,true);
+  const nativeTaskRequest=native.state.requestedTaskRevision;
+  if(!work||!Number.isSafeInteger(nativeTaskRequest))return null;
+  const shown=asArray<Json>(value.approvals).filter(row=>(row?.approvalId||row?.id)===id);
+  if(shown.length!==1||shown[0].webReview?.kind!=='operation'||shown[0].state!=='pending'||
+     args.approved&&shown[0].webReview.canApprove!==true)return null;
+  const visit:WorkApprovalWindow={window,navigation:navigationWindow.current,nativeTaskRequest,work,conversation};
+  const visible=workApprovalTask(visit,snapshot,true),current=workApprovalTask(visit,native,true);
+  const row=exactWorkApprovalRow(current,work.runId,id),painted=exactWorkApprovalRow(visible,work.runId,id);
+  const bounded=obj(value.capabilityApprovalRead);
+  const exactItem=bounded.format==='pocketworld.capability-approval-read.v1'&&bounded.approvalComplete===true&&bounded.approvalId===id?shown[0]:undefined;
+  const reviewed=exactWorkApprovalRow(value.task,work.runId,id)??exactItem;
+  if(!row||!painted||!reviewed||row.state!=='pending'||painted.state!=='pending'||row.expiresAt<=Date.now()||
+     taskBinding(current)!==taskBinding(value.task)||taskBinding(visible)!==taskBinding(value.task)||
+     [reviewed,painted].some(item=>item.runId!==row.runId||item.tool!==row.tool||item.expiresAt!==row.expiresAt||
+      item.argumentsHash!==row.argumentsHash))return null;
+  return {...visit,reviewHandle:value.reviewHandle,approval:{id,tool:row.tool,argumentsHash:row.argumentsHash,expiresAt:row.expiresAt},
+   approved:args.approved,phase:'submitting'};
+ };
+ useEffect(()=>{
+  const retire=()=>setWorkApprovalVisit(null),hidden=()=>{if(document.hidden)retire()};
+  const stop=bridge.subscribeDocumentEpoch(retire);
+  document.addEventListener('visibilitychange',hidden);window.addEventListener('pagehide',retire);
+  return()=>{stop();document.removeEventListener('visibilitychange',hidden);window.removeEventListener('pagehide',retire)};
+ },[]);
+ useLayoutEffect(()=>{
+  const visit=workApprovalVisit;
+  if(!visit)return;
+  const native=bridge.getState();
+  if(!workApprovalWindowCurrent(visit,native)){setWorkApprovalVisit(null);return;}
+  if(visit.phase!=='queued'||!reviewSubmitted||review?.reviewHandle!==visit.reviewHandle)return;
+  const recorded=(live:ReturnType<typeof bridge.getState>)=>{
+   const {id,tool,argumentsHash,expiresAt}=visit.approval;
+   const row=exactWorkApprovalRow(workApprovalTask(visit,live,true),visit.work.runId,id);
+   return row&&row.tool===tool&&row.argumentsHash===argumentsHash&&row.expiresAt===expiresAt&&
+    row.policyDecision==null&&row.source==null&&(visit.approved?['approved','consumed'].includes(row.state):row.state==='denied');
+  };
+  // The queue ACK is not the decision. Retire only this spent handle once
+  // the ordinary native refresh shows its exact saved row in this Work visit.
+  if(!recorded(snapshot)||!recorded(native))return;
+  setWorkApprovalVisit({...visit,phase:'recorded'});setReview(null);setReviewSubmitted(false);
+ });
  const reviewedAction=(action:string,args:Json={})=>{
   if(!taskId||!review||reviewStale||reviewSubmitted||!can(action))return;
   if(action==='tasks.confirm'&&taskLayer==='overview'){
@@ -7513,6 +7606,8 @@ export default function App(){
   const request=reviewRequest.current,originalTask=taskId;
   const planDecision=action==='tasks.plan.enter'||action==='tasks.approve'&&asArray<Json>(review.approvals).some(row=>(row.approvalId||row.id)===args.approvalId&&row.webReview?.kind==='execution_plan');
   const at=reviewWindow.current;
+  const approvalClick=action==='tasks.approve'&&!planDecision&&at?captureWorkApproval(review,at,args):null;
+  if(approvalClick)setWorkApprovalVisit(approvalClick);
   const draftClick=action==='tasks.confirm'&&typeof args.completed==='boolean'&&taskLayer==='overview'&&at&&currentReviewWindow(at)?draftAcceptanceClick(review,at,args.completed):null;
   const homeOrigin=homeWorkReturn.current, homePending=homeOrigin?.pendingReview;
   const homeClick=action==='tasks.confirm'&&args.completed===true&&route==='butler'&&taskLayer==='overview'&&
@@ -7524,6 +7619,8 @@ export default function App(){
   void (planDecision?bridge.command(action,payload):act(action,payload,taskId)).then(value=>{
    if(reviewRequest.current!==request)return;
    // This ACK is only admission. The exact persisted confirmation is checked in the task view.
+   if(approvalClick&&obj(value).accepted===true)
+    setWorkApprovalVisit(current=>current===approvalClick?{...approvalClick,phase:'queued'}:current);
    if(draftClick&&obj(value).accepted===true&&currentReviewWindow(draftClick.window))setDraftAcceptance(draftClick);
    if(homeClick&&homeOrigin&&homeWorkReturn.current===homeOrigin&&obj(value).accepted===true&&currentReviewWindow(homeClick))
     homeOrigin.positiveClick=homeClick;
@@ -7544,7 +7641,9 @@ export default function App(){
      setReviewReceipt(receipt.continuedOriginalRun===true?'这版计划已确认，宿主已确认续接原任务；实际执行结果请看原任务记录。':receipt.continuationScheduled===true?'这版计划的决定已保存，续接已排队；尚未确认开始执行。':'这版计划的决定已保存；尚未确认启动执行，请核对原任务记录。');
     }
    }
-  }).catch(error=>{if(reviewRequest.current!==request)return;setReviewSubmitted(false);setReview(null);if(planDecision){const message=error instanceof Error?error.message:'未确认原计划决定，请核对原任务；没有重复提交。';setReviewReceipt(message);setTaskErrors(previous=>({...previous,[originalTask]:message}))}});
+  }).catch(error=>{if(reviewRequest.current!==request)return;
+   if(approvalClick)setWorkApprovalVisit(current=>current===approvalClick?null:current);
+   setReviewSubmitted(false);setReview(null);if(planDecision){const message=error instanceof Error?error.message:'未确认原计划决定，请核对原任务；没有重复提交。';setReviewReceipt(message);setTaskErrors(previous=>({...previous,[originalTask]:message}))}});
  };
  const projectDirectory=useWorkDirectory({tasks,projectId:String(state.projectId||''),query:projectWorkView.query,filter:projectWorkView.filter,enabled:ready&&route==='projects'&&!!state.projectId&&!state.filePath&&projectSection==='work'&&!choosingSavedStaticFile&&!projectPreview.expanded&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:projectScroll});
  useLayoutEffect(()=>{
@@ -9150,7 +9249,19 @@ export default function App(){
    }
    loadTaskReview(task.id,pendingNodeCommand.approvalId);
   };
-  const reviewTools=(!fixedDraft||draftReviewReady)&&!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
+  const approvalNative=workApprovalVisit?.phase==='recorded'?bridge.getState():null;
+  const savedApproval=approvalNative&&workApprovalVisit&&workApprovalVisit.work.taskId===task.id&&workApprovalTask(workApprovalVisit,snapshot)&&
+   workApprovalTask(workApprovalVisit,approvalNative)?workApprovalVisit:null;
+  const nextCandidate=savedApproval&&can('tasks.review')?nextWorkApproval(workApprovalTask(savedApproval,snapshot,true),savedApproval):undefined;
+  const nextApproval=savedApproval&&approvalNative&&nextCandidate?
+   stillPendingWorkApproval(workApprovalTask(savedApproval,approvalNative,true),savedApproval,nextCandidate):undefined;
+  const readNextApproval=()=>{
+   if(!savedApproval||!nextApproval||readingReview||questionPending||!can('tasks.review'))return;
+   const exact=stillPendingWorkApproval(workApprovalTask(savedApproval,bridge.getState(),true),savedApproval,nextApproval);
+   if(!exact){setTaskErrors(previous=>({...previous,[task.id]:'下一项授权已变化，请重新核对原工作。'}));return;}
+   loadTaskReview(task.id,exact.id);
+  };
+  const reviewTools=!nextApproval&&(!fixedDraft||draftReviewReady)&&!readingReview&&(!review||teamDeclineSettlesReview||reviewStale&&!review.ownerQuestion||ordinaryResume&&(reviewSubmitted||!!reviewReceipt||!!state.taskActionErrors?.[task.id]))&&
     <div className="pw-section-heading pw-task-review-tools">{pendingNodeCommand?
       <Button disabled={questionPending} onClick={readPendingNodeCommand}>{pendingNodeCommand.action==='dependencies'?'核对本次依赖准备':'核对本机构建命令'}</Button>:
       <>{showProjectReview?<Button variant="secondary" onClick={showTaskReview}>{heldProfileApproval?'核对原项目与范围':heldBuildKey?'读取原执行状态':draftReviewReady?'核对本轮改稿':nextBuildObserved?'核对下一步本机构建':observedDraft?'核对原改稿的可用操作':'核对继续原项目任务'}</Button>:<span className="pw-grow"/>}{(!showProjectReview||!heldBuildKey&&!lateDependencyObserved&&!draftReviewReady&&!foldAcceptedDraftReview)&&refreshControl}</>}</div>;
@@ -9159,9 +9270,12 @@ export default function App(){
     {heldProfileApproval&&<p className="pw-field-hint" role="status">这一步的批准已保存，原步骤未派发。当前不能在这里续接原工作配置。</p>}
     {reviewStale&&!teamDeclineSettlesReview&&!draftAcceptanceSaved&&<p className="pw-error">任务已有新进展，请重新核对后再操作。</p>}
     {continuation&&<section aria-label="原项目续接回执"><p className="pw-muted" role="status">{continuation.message}</p>{!project&&projectNote&&<Accordion variant="divided"><AccordionItem id="continuation-feedback" title="本次反馈"><p className="pw-approval-copy">{projectNote}</p></AccordionItem></Accordion>}{continuation.status==='unknown'&&can('tasks.review')&&<Button variant="secondary" disabled={readingReview} onClick={showTaskReview}>核对原任务状态</Button>}{['continued','unknown'].includes(continuation.status)&&can('conversation.select')&&<Button variant="ghost" disabled={!!state.chatSubmitting||!!returningConversation} onClick={()=>returnToContinuationConversation(task,continuation)}>返回原对话，草稿保留</Button>}</section>}
-    {draftAcceptanceSaved?<p className="pw-muted" role="status" data-fixed-draft-decision-fallback={settledOriginalDraft?true:undefined}>{draftAcceptance?.completed?'验收已记录，原稿保留。':'已记录目标尚未达到，原稿保留。'}</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
+    {savedApproval?<div className="pw-form-flow">
+      <p className="pw-muted" role="status">{savedApproval.approved?'这次批准已记录，不代表操作已经执行。':'这次拒绝已记录。'}</p>
+      {nextApproval&&<Button variant="secondary" disabled={readingReview||questionPending} onClick={readNextApproval}>核对下一项授权</Button>}
+     </div>:draftAcceptanceSaved?<p className="pw-muted" role="status" data-fixed-draft-decision-fallback={settledOriginalDraft?true:undefined}>{draftAcceptance?.completed?'验收已记录，原稿保留。':'已记录目标尚未达到，原稿保留。'}</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
   </>;
-  const decision=(heldProfileApproval||declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||needsWorkReview(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
+  const decision=(savedApproval||heldProfileApproval||declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||needsWorkReview(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
       {taskLayer==='overview'&&reviewStatus}
       {teamReportChoice&&<Button variant="secondary" trailingIcon={IconChevronRight} data-team-evidence-entry={teamReportChoice.teamRunId}
        onClick={event=>selectTeamReport(task,teamReportChoice,event.currentTarget)}>用本轮团队汇总核对目标</Button>}
@@ -9234,7 +9348,7 @@ export default function App(){
      }</ConversationModelPickerVisibility>}
      {inspectResult?[earlyEditor,evidence,taskToolsInOverview&&taskTools,decision,workFacts]:
        decisionFirst?[earlyEditor,mainPhoneStep(task)&&!approved.length&&!unresolved.length&&!review?.ownerQuestion?null:decision,workFacts,evidence,taskToolsInOverview&&taskTools]:
-       [latestProgress,promoteSupplement&&workActions,earlyEditor,workFacts,evidence,taskToolsInOverview&&taskTools,decision]}
+       [latestProgress,promoteSupplement&&workActions,earlyEditor,savedApproval&&decision,workFacts,evidence,taskToolsInOverview&&taskTools,!savedApproval&&decision]}
      {dependencyBuild&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(dependencyBuild)}>核对这版的本机构建</Button></div>}
      {previousDependency&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(previousDependency,true)}>用这次准备记录对照当前锁</Button></div>}
      {!promoteSupplement&&workActions}
