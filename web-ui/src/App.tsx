@@ -10001,7 +10001,7 @@ export default function App(){
         draft.key!==shown.key||draft.epoch!==shown.epoch||draft.revision!==shown.revision||draft.mode!==shown.mode||
         chatDraft.currentValueFor(chatOwner)!==''||reportDraftFlight.current||!live.capabilities.commands.includes('composer.edit'))return;
      const prior=firstQuestionDraftFlight.current,navigation=navigationWindow.current,doc=bridge.getDocumentEpoch();
-     if(prior?.key===draft.key&&prior.epoch===draft.epoch&&prior.document===doc&&prior.navigation===navigation)return;
+     if(prior&&prior.key===draft.key&&prior.epoch===draft.epoch&&prior.document===doc&&prior.navigation===navigation)return;
      const attempt={key:draft.key,epoch:draft.epoch,document:doc,navigation},revision=draft.revision,mode=draft.mode;
      const edit=chatDraft.currentEditSequence(),review=reviewRequest.current,reading=readingSerial.current;
      firstQuestionDraftFlight.current=attempt;
