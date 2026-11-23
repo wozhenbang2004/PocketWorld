@@ -149,8 +149,12 @@ internal class PocketWebKeptStaticPages(
     fun portableBackground(){if(delivery.isInitialized())delivery.value.background()}
     fun retirePortable(){if(delivery.isInitialized())delivery.value.retire()}
     fun closePortable(){if(delivery.isInitialized())delivery.value.close()}
-    fun snapshot():JSONObject?=shelf?.takeIf{live(it)&&it.registration!=null&&it.catalog!=null}
-        ?.let{present(it,JSONObject())}
+    fun snapshot():JSONObject?=shelf?.takeIf{live(it)&&it.catalog!=null}?.let{opened->
+        val registered=opened.registration?:return@let null
+        val verified=if(delivery.isInitialized())
+            delivery.value.lastVerifiedFor(opened.one.project,registered.module,registered.createdAt) else null
+        present(opened,JSONObject().put("lastVerifiedPortableCopy",verified?:JSONObject.NULL))
+    }
 
     private fun projectRegistration(project:String):Registration{
         val workspace=controller.nativeButlerHost().features.module("workspace") as? WorkspaceModule

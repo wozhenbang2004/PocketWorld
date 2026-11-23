@@ -669,12 +669,19 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=!workReportOnly&&message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
     const result=messageTaskResult(message),fileResult=!workReportOnly&&!searchOnly&&onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
+    // This is the saved message's publication, not a fresh read of the Work's acceptance or current run.
+    const workDelivery=!workOverlay&&!searchOnly&&shown.detachedHistory===true&&readyPage(shown)&&
+     message.role==='assistant'&&message.sourceRevision===1&&typeof message.id==='string'&&!!message.id&&
+     typeof message.content==='string'&&!!message.content&&!message.phoneResult&&!message.originalHostFinal&&!message.hostGoalTaskId&&
+     result?.kind==='owner_work'&&message.taskId===result.taskId&&result.noticeKind===null&&
+     (result.status==='completed'||result.status==='needs_confirmation')?result:null;
     const historyOriginalFiles=onOpenHistoricalReplyFile&&!workOverlay&&!searchOnly&&readyPage(page)&&page.detachedHistory===true&&
      can('conversation.reader.openOriginalReplyDocument')?historicalReplyFiles(message):[];
     const canSelectQuote=canQuoteNew&&!pending&&!!newQuoteTarget(message);
     const readingFiles=!resultNotice?.index&&resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
-    return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
+    return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={workDelivery?'原工作交付':message.role==='assistant'?'助手回复':'你的消息'}>
     {shown.originalReportMessageId===message.id&&<p className="pw-field-hint">这件工作的原汇报</p>}
+    {workDelivery&&<p className="pw-field-hint">原工作交付 · 已保存{workDelivery.status==='needs_confirmation'?' · 原交付时待验收':''}</p>}
     {phone&&message.id?<PhoneMessageReturn result={phone} conversation={shown.conversation} reader={shown.window} messageId={message.id} revision={message.sourceRevision}
       body={message.content} locked={!page||page.window!==shown.window||page.loading||!!page.error||page.limited||pending}
       onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
@@ -737,8 +744,8 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
         onClick={event=>void chooseConfirmedWord(message,event.currentTarget)}>核对原 Word 附件…</Button>}
      {phone&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>所属工作的当前进展</Button>}
      {message.role==='assistant'&&!phone&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
-      <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{message.phoneResult?'所属工作':'任务详情'}</Button>
-      <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>{message.phoneResult?'当前进展':'执行轨迹'}</Button>
+      <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{workDelivery?'查看所属工作':message.phoneResult?'所属工作':'任务详情'}</Button>
+      <Button variant="ghost" size="small" leadingIcon={IconTool} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>{workDelivery?'查看所属工作的执行记录':message.phoneResult?'当前进展':'执行轨迹'}</Button>
      </>}
     </div>}
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}

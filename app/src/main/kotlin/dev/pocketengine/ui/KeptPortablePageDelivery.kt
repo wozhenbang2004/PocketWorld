@@ -27,6 +27,14 @@ internal class KeptPortablePageDelivery(private val activity:ComposeActivity,pri
     }
     private data class Target(val uri:Uri,val documentId:String,val name:String)
     data class Binding(val proof:Proof,val workspace:WorkspaceModule,val projectCreatedAt:Long)
+    /** An Activity-local observation only. It cannot address, reopen or grant access to a document. */
+    private data class VerifiedCopy(val project:String,val workspace:WorkspaceModule,val projectCreatedAt:Long,
+        val checkout:String,val version:String,val manifest:String,val basename:String,
+        val verifiedAt:Long,val verifiedBytes:Int,val sha:String){
+        fun summary()=JSONObject().put("kind","owner_kept_portable_verified_copy").put("projectId",project)
+            .put("checkoutId",checkout).put("versionId",version).put("manifestIdentity",manifest)
+            .put("basename",basename).put("verifiedAt",verifiedAt).put("verifiedBytes",verifiedBytes).put("sha256",sha)
+    }
     private class Attempt(val id:String,val binding:Binding,val route:()->Boolean){
         val proof=binding.proof
         val until=SystemClock.elapsedRealtime()+LIFETIME_MS
@@ -44,6 +52,7 @@ internal class KeptPortablePageDelivery(private val activity:ComposeActivity,pri
     private val io=Executors.newSingleThreadExecutor()
     private val picker=AttachmentExportPicker(activity.activityResultRegistry,"kept_portable_html",::picked)
     private var attempt:Attempt?=null
+    private var lastVerified:VerifiedCopy?=null
     private var closed=false
 
     fun busy()=attempt!=null
@@ -77,7 +86,33 @@ internal class KeptPortablePageDelivery(private val activity:ComposeActivity,pri
         }else clear(original)
     }
     fun retire(){attempt?.let(::clear)}
-    fun close(){closed=true;retire();picker.close();io.shutdownNow()}
+    fun close(){closed=true;lastVerified=null;retire();picker.close();io.shutdownNow()}
+
+    fun lastVerifiedFor(project:String,workspace:WorkspaceModule,createdAt:Long):JSONObject? =
+        lastVerified?.takeIf{!closed&&activity.keptPageExportOwnerCurrent()&&
+            it.project==project&&it.workspace===workspace&&it.projectCreatedAt==createdAt}?.summary()
+
+    private fun verifiedBasename(name:String):Boolean{
+        if(name.length !in 1..240 || name!=name.trim() || !name.endsWith(".html",ignoreCase=true))return false
+        var index=0
+        while(index<name.length){
+            val point=Character.codePointAt(name,index)
+            if(point=='/'.code||point=='\\'.code||point==':'.code||Character.isISOControl(point)||
+                Character.getType(point)==Character.FORMAT.toInt()||point==0x2028||point==0x2029||
+                point in 0xd800..0xdfff)return false
+            index+=Character.charCount(point)
+        }
+        return true
+    }
+
+    private fun rememberVerified(binding:Binding,actualName:String,at:Long){
+        val proof=binding.proof
+        val page=proof.page
+        // Refuse unsafe provider labels instead of showing a guessed or clipped filename.
+        lastVerified=if(verifiedBasename(actualName)&&at in 1L..8_640_000_000_000_000L)
+            VerifiedCopy(page.projectId(),binding.workspace,binding.projectCreatedAt,page.checkoutId(),page.versionId(),
+                page.manifestIdentity(),actualName,at,proof.bytes,proof.sha) else null
+    }
 
     private fun metadata(value:Attempt)=value.proof.metadata().put("kind","owner_kept_portable_delivery")
         .put("requestId",value.id).put("phase",value.phase)
@@ -160,6 +195,7 @@ internal class KeptPortablePageDelivery(private val activity:ComposeActivity,pri
         changed()
         try{io.execute{
             var entered=false
+            var verifiedAt=0L
             var effect:KeptStaticEffects.Flight?=null
             val status=try{
                 requireCurrent()
@@ -186,7 +222,10 @@ internal class KeptPortablePageDelivery(private val activity:ComposeActivity,pri
                         try{file.createInputStream()}catch(failure:Exception){file.close();throw failure}
                     }
                 },::requireCurrent)}finally{bytes.fill(0)}
-                if(result=="verified"&&inspect(target.uri,signal,proof.bytes.toLong())==target&&current())"verified"
+                if(result=="verified"&&inspect(target.uri,signal,proof.bytes.toLong())==target&&current()){
+                    verifiedAt=System.currentTimeMillis()
+                    "verified"
+                }
                 else if(entered)"unknown" else "not_written"
             }catch(_:Exception){if(entered)"unknown" else "not_written"}
             finally{effect?.let(KeptStaticEffects::end)}
@@ -199,6 +238,7 @@ internal class KeptPortablePageDelivery(private val activity:ComposeActivity,pri
                     done(null,"原写入回执未核对；请检查所选位置，不会重写")
                 }else{
                     original.phase=status
+                    if(status=="verified")rememberVerified(original.binding,target.name,verifiedAt)
                     done(metadata(original),null)
                 }
                 changed()

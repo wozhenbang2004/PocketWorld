@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button, SelectField } from './forms-library';
 
@@ -47,6 +47,18 @@ const exactShelf=(value:unknown,shelf:Shelf)=>{
   const r=row(value);
   return r.projectId===shelf.projectId&&r.visitId===shelf.visitId&&r.shelfHandle===shelf.shelfHandle;
 };
+function lastVerifiedFromShelf(value:unknown,shelf:Shelf){
+  if(!exactShelf(value,shelf))return null;
+  const copy=row(row(value).lastVerifiedPortableCopy);
+  const { basename, verifiedAt, verifiedBytes, checkoutId, versionId, manifestIdentity, sha256 }=copy;
+  if(copy.kind!=='owner_kept_portable_verified_copy'||copy.projectId!==shelf.projectId||
+    !uuid(checkoutId)||!uuid(versionId)||!hash(manifestIdentity)||!hash(sha256)||
+    typeof basename!=='string'||!basename||basename.length>240||basename.trim()!==basename||!/\.html$/i.test(basename)||
+    /[\\/:\u0000-\u001f\u007f-\u009f\u2028\u2029]|\p{Cf}|\p{Cs}/u.test(basename)||
+    typeof verifiedAt!=='number'||!Number.isSafeInteger(verifiedAt)||verifiedAt<1||verifiedAt>8.64e15||
+    typeof verifiedBytes!=='number'||!Number.isSafeInteger(verifiedBytes)||verifiedBytes<1||verifiedBytes>16*1024)return null;
+  return {basename,verifiedAt,verifiedBytes,versionId,sha256};
+}
 const keys=(value:Proof)=>({requestId:value.requestId,versionId:value.page.versionId,manifestIdentity:value.page.manifestIdentity,sha256:value.sha256});
 export async function leaveKeptPortableCopy(value:Delivery){
   try{
@@ -64,8 +76,19 @@ export function ProjectKeptPortableCopy({shelf,pages,delivery,active,current}:{s
   latest.current={active,current};
   useLayoutEffect(()=>()=>{work.current=null;},[]);
   useLayoutEffect(()=>{if(!active)setOffered(null);},[active]);
+  const publication=useSyncExternalStore(bridge.subscribe,()=>bridge.getState().state.keptStaticPageShelf);
   const now=()=>latest.current.active&&latest.current.current()&&supportsKeptPortableCopy()&&
     exactShelf(bridge.getState().state.keptStaticPageShelf,shelf);
+  const verified=!delivery&&now()?lastVerifiedFromShelf(publication,shelf):null;
+  const previousCopy=verified&&<section className="pw-form-flow" aria-label="上次核对成功的离线副本">
+    <p><strong>上次核对成功：</strong><bdi className="whitespace-pre-wrap [overflow-wrap:anywhere]">{verified.basename}</bdi></p>
+    <p className="pw-field-hint">
+      <time dateTime={new Date(verified.verifiedAt).toISOString()}>{new Date(verified.verifiedAt).toLocaleString()}</time>
+      {' · '}{verified.verifiedBytes.toLocaleString()} 字节 · 当时的保留版本 <code>{verified.versionId.slice(0,8)}</code>
+    </p>
+    <p className="pw-field-hint">当时回读的 SHA-256 <code className="[overflow-wrap:anywhere]">{verified.sha256}</code></p>
+    <p className="pw-field-hint">可在系统文件中按名称查找；未再次核对文件是否仍在。</p>
+  </section>;
   const candidates=pages.filter(page=>page.resourceCount===3);
   const fromList=delivery?pages.find(page=>samePage(page,delivery.page)):null;
   const selectedPage=candidates.find(page=>page.versionId===selected);
@@ -119,7 +142,7 @@ export function ProjectKeptPortableCopy({shelf,pages,delivery,active,current}:{s
         !samePage(actual.page,value.page)||actual.destinationName!==value.destinationName)throw Error();
     },allow?'本次写入回执未确认。请核对所选位置，不会重新写入。':'未确认退出原操作，没有重新提交写入。');
   };
-  if(!delivery&&!candidates.length)return null;
+  if(!delivery&&!candidates.length)return previousCopy;
   if(delivery){
     const {phase}=delivery;
     const canWrite=phase==='target_selected'&&!!fromList;
@@ -142,7 +165,7 @@ export function ProjectKeptPortableCopy({shelf,pages,delivery,active,current}:{s
       </div>}
     </section>;
   }
-  return <Accordion variant="divided" className="pw-compact-disclosures">
+  return <>{previousCopy}<Accordion variant="divided" className="pw-compact-disclosures">
     <AccordionItem id="kept-portable-html" title="保存单文件离线副本">
       <div className="pw-form-flow">
         <p className="pw-field-hint">只支持保留原样式和计数器的内置离线起步页。副本不改项目文件和这版保留网页。</p>
@@ -164,5 +187,5 @@ export function ProjectKeptPortableCopy({shelf,pages,delivery,active,current}:{s
         {note&&<p className="pw-field-hint" role="status">{note}</p>}
       </div>
     </AccordionItem>
-  </Accordion>;
+  </Accordion></>;
 }
