@@ -5,7 +5,7 @@ import { InlineDiff } from './shell-library';
 import { IconFolder, IconSearch } from './icons';
 import {checkoutEditorSelection,ProjectCheckoutTextSearch} from './ProjectCheckoutTextSearch';
 import {checkoutPathPage,ProjectCheckoutPathSearch,type CheckoutPathHit,type CheckoutPathPage} from './ProjectCheckoutPathSearch';
-import {checkoutDirectoryPage,ProjectCheckoutDirectory,type DirectoryFile,type DirectorySelection} from './ProjectCheckoutDirectory';
+import {checkoutDirectoryPage,checkoutFileParent,ProjectCheckoutDirectory,type DirectoryFile,type DirectorySelection} from './ProjectCheckoutDirectory';
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { canOpenSavedStaticPreview, ProjectSavedStaticPreview, type SavedStaticEditor } from './ProjectSavedStaticPreview';
 import { bridge } from './bridge';
@@ -40,6 +40,7 @@ type PythonPackagePicker = {source:string;directoryHandle?:string;hits:number[]}
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
 type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
+  reopenedProjectDirectory?: boolean;
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
   pythonSetupResume?: CheckoutSavedPosition; originalDirectoryOpening?: OriginalDirectoryOpening;
@@ -98,7 +99,7 @@ const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 type CheckpointMoving = 'returning' | 'unknown' | 'leaving' | 'close_unknown';
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening, checkpointArrival, checkpointHandoff }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, reopenedProjectDirectory, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening, checkpointArrival, checkpointHandoff }: Props) {
   const checkpoints = useSourceCheckpointFiles();
   const [checkpointMove, setCheckpointMove] = useState<CheckpointMoving>();
   const moving = useRef<CheckpointMoving | undefined>(undefined), departed = useRef(false), arrivalUsed = useRef(false);
@@ -401,6 +402,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       if(sourceEntry && value.latest.expectedHash!==sourceEntry.sha256)
         throw new Error('该入口文件已变化。请返回原项目重新核对，没有打开其他文件。');
       setChoice(null); setAdoption(null); apply(value); setTreeOpen(false);
+      if (reopenedProjectDirectory && priorSavedFileId && priorSave?.readId===priorSavedFileId &&
+          finder==='directory' && directory?.path==='' && directory.page?.start===0 &&
+          directory.page.sourceDigest===listing?.sourceDigest && bridge.getState().state.projectId===projectId) {
+        // The acknowledged file names its parent, not its siblings. Back must
+        // read that directory afresh; do not carry the root page's row handles.
+        const folder=checkoutFileParent(value.latest.path);
+        if (folder) setDirectory(current=>current===directory?{path:folder,page:null}:current);
+      }
       const sequence = generation.current, caret = position?.caret;
       requestAnimationFrame(() => {
         if (!live(sequence) || currentFile.current?.fileHandle !== value.fileHandle) return;
@@ -857,7 +866,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   // A folder return belongs only to the ordinary editor and its actual selected
   // directory. Leave uncertain/conflicting or unretained edits in the old flow.
   const editorDirectory=!sourceMember&&!hostFile&&finder==='directory'&&directory&&file&&
-    typeof file.path==='string'&&file.path.slice(0,Math.max(0,file.path.lastIndexOf('/')))===directory.path&&
+    checkoutFileParent(file.path)===directory.path&&
     listing?.readOnly===true&&listing.projectId===projectId&&listing.checkoutId===checkoutId&&listing.filesHandle===handle.current&&
     file.projectId===projectId&&file.checkoutId===checkoutId&&file.filesHandle===handle.current&&file.latest?.deleted===false&&
     file.conflict===false&&file.saveUnknown===false&&orphan===null&&!blockedEdit.current&&!file.draftError&&

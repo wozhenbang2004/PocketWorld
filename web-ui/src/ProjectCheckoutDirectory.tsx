@@ -11,6 +11,7 @@ const handle=(v:unknown)=>typeof v==='string'&&/^[a-f0-9-]{36}$/.test(v);
 const path=(v:unknown):v is string=>typeof v==='string'&&v.length<=240&&!/[\\:\u0000-\u001f]/.test(v)&&
   v.split('/').every(part=>part.length>0&&part!=='.'&&part!=='..');
 const parent=(v:string)=>v.slice(0,Math.max(0,v.lastIndexOf('/')));
+export const checkoutFileParent=(file:unknown):string|undefined=>path(file)?parent(file):undefined;
 
 export function checkoutDirectoryPage(value:Data,project:string,checkout:string,files:string,directory:string,start:number,digest:string,inventory?:string):CheckoutDirectoryPage {
   if(value.format!=='pocketworld.checkout-directory.v1'||value.projectId!==project||value.checkoutId!==checkout||value.filesHandle!==files||

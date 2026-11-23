@@ -46,6 +46,7 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const [accountsLoading, setAccountsLoading] = useState(false), [accountReadRevision, setAccountReadRevision] = useState<number | null>(null), [accountsError, setAccountsError] = useState('');
   const [showManagement, setShowManagement] = useState(false);
   const [completion, setCompletion] = useState<AIChoice | null>(null), pickerChoice = useRef<AIChoice | null>(null);
+  const draftReturnAttempt = useRef<{ choice: AIChoice; failed: boolean } | null>(null);
   const [unmatchedPhoneChoice, setUnmatchedPhoneChoice] = useState<AIChoice | null>(null);
   const [catalog, setCatalog] = useState<Data | null>(null), [query, setQuery] = useState('');
   const [modelReview, setModelReview] = useState<Data | null>(null), [selectionUnknown, setSelectionUnknown] = useState(false);
@@ -104,7 +105,17 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const back = () => {
     // The child starts its native write before React commits the busy render.
     if (pending.current || pickerPending.current || busy) return true;
-    if (completion) { if (returnToOrigin && !completion.accountOnly) returnToOrigin.go(); else setCompletion(null); return true; }
+    if (completion) {
+      const attempted = draftReturnAttempt.current;
+      // First Back carries the saved choice. After a failed check, pop only the
+      // completion layer: ordinary origin navigation may repeat the same check.
+      if (attempted?.choice === completion) {
+        if (attempted.failed) { setCompletion(null); setError(''); }
+      } else if (!completion.accountOnly && onReturnOriginalInput) void returnOriginalInput();
+      else if (!completion.accountOnly && returnToOrigin) returnToOrigin.go();
+      else setCompletion(null);
+      return true;
+    }
     if (childBack.current?.()) return true;
     if (serviceChange) { setServiceChange(null); return true; }
     if (modelReview) { setModelReview(null); return true; }
@@ -142,11 +153,14 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   const returnOriginalInput = async () => {
     if (!completion || !returnInput || pending.current || pickerPending.current) return;
     const ticket = generation.current;
+    const attempt = onReturnOriginalInput && !completion.accountOnly ? { choice: completion, failed: false } : null;
+    if (attempt) draftReturnAttempt.current = attempt;
     pending.current = true; setBusy(true); setError('');
     try {
       if (!await returnInput(completion)) throw new Error(phoneReturn ? '还没核对到同一原目标与模型。可以按原路径返回，没有提交任务。' : '原输入窗口已变化，未打开另一份草稿。');
     } catch (failure) {
       if (alive.current && ticket === generation.current) {
+        if (attempt) attempt.failed = true;
         if (phoneReturn) setUnmatchedPhoneChoice(completion);
         setError(failure instanceof Error ? failure.message : '原输入尚未核对，草稿仍保留。');
       }

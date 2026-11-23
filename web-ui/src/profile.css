@@ -118,6 +118,7 @@
 .pw-profile-memory-row > span { display: flex; flex: 1; min-width: 0; flex-shrink: 1; justify-content: flex-start; white-space: normal; }
 .pw-profile-memory-row > span > span { display: grid; min-width: 0; gap: 7px; }
 .pw-profile-memory-row strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 15px; line-height: 25px; font-weight: 450; overflow-wrap: anywhere; }
+.pw-profile-memory-row mark { color: inherit; background: transparent; font-weight: 650; text-decoration: underline; text-underline-offset: .14em; }
 .pw-profile-memory-row small { color: var(--pw-muted, #686868); font-size: 12px; line-height: 19px; font-weight: 400; }
 .pw-profile-memory-row > svg { width: 17px; height: 17px; color: var(--pw-muted, #686868); flex: none; }
 .pw-profile-memory-editor { display: grid; gap: 23px; }

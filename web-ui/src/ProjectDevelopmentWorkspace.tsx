@@ -1879,6 +1879,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       closeHostDiff(); setFileWindow({checkoutId:checkout});
     } : undefined}/>}
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={fileWindow.reopenedFiles?runReopenedFiles:run} hostFile={hostEditor || undefined}
+      reopenedProjectDirectory={fileWindow.reopenedFiles===true || fileWindow.originalImport?.openDirectory===true && fileWindow.originalImport.exactPhoneSource===true}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
       pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit} onClose={closeFiles}
       checkpointArrival={fileWindow.checkpointArrival} checkpointHandoff={checkpointFilesHandoff()}

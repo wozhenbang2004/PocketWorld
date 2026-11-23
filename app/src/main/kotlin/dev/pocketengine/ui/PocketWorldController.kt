@@ -2388,6 +2388,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val window: Pair<Triple<Long, Int, Long>, Long>
     )
     private var projectCreationNavigation: ProjectCreationNavigation? = null
+    private var latestWorkspaceFileList: String? = null
     private var fileRequestId: String? = null
     private var workspaceArtifactReadRequest: String? = null
     private var workspaceArtifactDiffRequest: String? = null
@@ -4016,7 +4017,28 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         ownerComposerStore.checkpointDetachedHistory(model,place).whenComplete { _,_ -> main.post { if(!closed)changed() } }
     }
     fun closeConversationReader(){conversationReader=null;++conversationReadSequence}
-    fun switchFromConversationReader(window:Long){val page=conversationReader?:return;if(page.window!=window||page.reminderSource!=null||state.chatSubmitting)return;closeConversationReader();if(page.conversation!=state.conversationId)openConversation(page.conversation)}
+    // A directory title alone is not a confirmed read. An accepted page proves the
+    // original ID even if its rows exceed the display limit; later pages need not finish.
+    internal fun readerContinueTargetReady(page: ConversationReadPage) =
+        page.conversation == state.conversationId || page.initialized || page.limited
+
+    fun switchFromConversationReader(window: Long) {
+        val page = conversationReader ?: return
+        if (page.window != window || page.reminderSource != null || state.chatSubmitting) return
+        check(readerContinueTargetReady(page)) {
+            if (page.loading) "正在读取所选对话，请稍候。原输入没有切换。"
+            else "尚未读到所选对话，请重试读取。原输入没有切换。"
+        }
+        val target = page.conversation
+        if (target != state.conversationId) {
+            openConversation(target)
+            val draft = composerDraft
+            check(state.conversationId == target && draft != null && draft.conversationId == target && draft.key == "conversation:$target") {
+                "未能打开所选对话的草稿。可以重试，也可以返回原输入。"
+            }
+        }
+        closeConversationReader()
+    }
     fun newConversation() {
         compatibilityChat=null
         if(state.chatSubmitting)return
@@ -6071,7 +6093,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         formalSaveFileList: Boolean = false): String {
         val id = UUID.randomUUID().toString()
         val key = "$feature.$command"
-        state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
+        val workspaceFileList = key == "workspace.list"
+        if (!workspaceFileList || (state.projectId != null && payload.opt("projectId") == state.projectId)) {
+            if (workspaceFileList) latestWorkspaceFileList = id
+            state = state.copy(moduleBusy = state.moduleBusy + key, moduleErrors = state.moduleErrors - key)
+        }
         val metadata = if (feature == "display") displayPendingMetadata(command, payload) else JSONObject(payload.toString())
         if (feature == "teams" && command == "probeMember") {
             val slot = state.feature("teams").optJSONArray("teams").objects().find { it.optString("id") == payload.optString("teamId") }?.optJSONArray("members").objects().find { it.optString("id") == payload.optString("memberId") }
@@ -6633,10 +6659,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                         if (action in setOf("observeTask", "takeoverTask", "ownerPhoneHandoff", "manualTaskAction", "ownerSecretInput") && viewerEpoch == inspectionEpoch && input.optString("taskId") == state.inspectionTaskId) state = state.copy(inspectionBusy = false, inspectionManualAllowed = false, inspectionError = message(error))
                         val webCancelFailure = action == "featureRequest" &&
                             webChatCancelCallbacks.containsKey(input.optString("requestId"))
+                        val workspaceListFailure = action == "featureRequest" &&
+                            input.optString("feature") == "workspace" && input.optString("command") == "list"
                         if (action == "featureRequest") {
                             featureResult(JSONObject().put("requestId", input.optString("requestId")).put("feature", input.optString("feature")).put("command", input.optString("command")).put("ok", false).put("message", message(error)))
                         }
-                        if (!webCancelFailure) state = state.copy(error = message(error), taskActionErrors = if (taskAction != null) state.taskActionErrors + (taskAction to message(error)) else state.taskActionErrors, phoneSubmitting = if (action in setOf("startRun", "startOwnedPhonePractice")) false else state.phoneSubmitting)
+                        if (!webCancelFailure && !workspaceListFailure) state = state.copy(error = message(error), taskActionErrors = if (taskAction != null) state.taskActionErrors + (taskAction to message(error)) else state.taskActionErrors, phoneSubmitting = if (action in setOf("startRun", "startOwnedPhonePractice")) false else state.phoneSubmitting)
                         if (action == "featureRequest" && input.optString("feature") == "assistant" && input.optString("command") == "send") refreshCurrentConversationTurn()
                     }
                     val originalPhoneFailure = createdPhoneTaskId?.let { JSONObject().put("taskId", it) }
@@ -6757,12 +6785,16 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val key = "$feature.$command"
         if (meta.first != key) return
         pending.remove(requestId)
+        val workspaceFileList = key == "workspace.list"
         val createdProjectNavigation = if (feature == "workspace" && command == "create")
             projectCreationNavigation?.takeIf { it.requestId == requestId } else null
         // Retire this navigation receipt on success or failure, without clearing a
         // newer creation. A late result still keeps its normal persisted/result data.
         if (createdProjectNavigation != null) projectCreationNavigation = null
-        state = state.copy(moduleBusy = if (pending.values.any { it.first == key }) state.moduleBusy else state.moduleBusy - key)
+        if (workspaceFileList) {
+            // Only the current selection's read owns its spinner, not older worker results.
+            if (latestWorkspaceFileList == requestId) state = state.copy(moduleBusy = state.moduleBusy - key)
+        } else state = state.copy(moduleBusy = if (pending.values.any { it.first == key }) state.moduleBusy else state.moduleBusy - key)
         if (feature == "workspace" && command in setOf("read", "write", "history") && requestId !in setOf(fileRequestId, historyRequestId, revisionRequestId)) return
         if (feature == "workspace" && (command == "listArtifacts" && requestId != workspaceArtifactsRequest || command == "readArtifact" && (requestId != workspaceArtifactReadRequest || state.workspaceArtifactView == null) || command == "diffArtifact" && (requestId != workspaceArtifactDiffRequest || state.workspaceArtifactView == null))) return
         val result = event.optJSONObject("result") ?: JSONObject()
@@ -6800,6 +6832,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         val webReceipt = webFeatureReceipts.remove(requestId)
         webReceipt?.invoke(if (failure == null) JSONObject(result.toString()) else null, failure)
+        // An original callback can consume its own receipt, but only the latest
+        // read for this project may update shared files, metadata, or errors.
+        if (workspaceFileList && (latestWorkspaceFileList != requestId || meta.second.opt("projectId") != state.projectId)) return
         // A private media input is for the requesting reading/review, not the shared module-result snapshot.
         if (webReceipt != null && feature == "media" && command == "getPreparedSubmission") return
         if (failure != null) {

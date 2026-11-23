@@ -64,6 +64,8 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  const backLabel=workOverlay?'返回原工作':searchOnly?'返回命中的原文':'返回原输入';
  const can=(action:string)=>available(action)&&(!workOverlay||action==='conversation.reader.close')&&
   (!searchOnly||action==='conversation.reader.close'||action==='conversation.reader.earlier');
+ const continueReady=page?.continueTargetReady===true;
+ const retryOriginal=!!page&&!continueReady&&!page.loading&&!!page.error&&can('conversation.reader.refresh');
  const scroll=useRef<HTMLDivElement>(null),live=useRef(page);live.current=page;
  const restored=useRef(''),position=useRef<Position>({index:0,offset:0,anchor:''});
  const detachedPlace=useRef<DetachedPlace|null>(null);
@@ -567,7 +569,11 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">当前窗口未读到可显示的消息。</p>}
   </div>
-  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':backLabel}</Button>{!workOverlay&&!searchOnly&&<Button variant="secondary" disabled={!page||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>{submitting?'原输入正在登记':'在此对话继续'}</Button>}</footer>
+  <footer className="pw-drawer-actions"><Button variant="ghost" disabled={pending} onClick={back}>{visibleVisit?'返回引用它的请求':backLabel}</Button>
+   {!workOverlay&&!searchOnly&&(retryOriginal
+    ?<Button variant="secondary" disabled={pending} onClick={()=>void invoke('conversation.reader.refresh')}>重试读取原对话</Button>
+    :<Button variant="secondary" disabled={!continueReady||submitting||pending||!can('conversation.reader.select')} onClick={()=>void invoke('conversation.reader.select')}>
+      {submitting?'原输入正在登记':continueReady?'在此对话继续':shown.loading?'正在读取原对话…':'尚未读到原对话'}</Button>)}</footer>
   {!workOverlay&&reviewing&&<MessageQuote key={`${scope}:${reviewing.messageId}:${reviewing.prior?.request||''}`} target={reviewing}
    onClose={()=>{setReuse(null);setFirstQuote(null)}} onStaged={()=>{if(readerScope(live.current)===scope)void invoke('conversation.reader.close')}}/>}
   {phoneOriginal&&page?.window===phoneOriginal.readerWindow&&<PhoneReturnedReport target={phoneOriginal} onClose={()=>setPhoneOriginal(null)}/>}

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconAccount, IconAdd, IconArrowLeft, IconArrowUpRight, IconCalendarCheck, IconChat, IconCheck, IconChevronRight, IconControls, IconGoal, IconHistory, IconRefresh, IconSettings, IconShieldCheck, IconSparkles, IconTrash, IconUndo } from './icons';
 import { Accordion, AccordionItem, Button, IconButton, SearchField, SelectField, SettingsDialog, StretchSwitch, TextAreaField, TextField } from './forms-library';
 import { Radio, RadioGroup } from './forms-library/boardui/components/base/radio/radio';
@@ -126,6 +126,35 @@ function canSetPriority(selection: MemorySelection | null): selection is MemoryS
     row.active === true && row.archiveOnly !== true && !historicalMemory(row) && typeof row.core === 'boolean';
 }
 const topicOf = (row: Data) => ({ id: string(row.topic?.id) || 'other', label: string(row.topic?.label) || '其他' });
+type MemoryFindHit = { body: RegExpExecArray | null; via: string[] };
+const memoryTerms = (query: string) => [...new Set(query.trim().split(/\s+/u).filter(Boolean))]
+  .map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
+function findInMemoryRow(row: Data, terms: RegExp[]): MemoryFindHit | null {
+  const body = string(row.text) || string(row.title);
+  // Only the fields already in the personal directory. Never read an original to find a match.
+  const details = [['标题', string(row.title)], ['主题', topicOf(row).label], ['来源说明', string(row.sourceSummary)]];
+  let anchor: RegExpExecArray | null = null;
+  const via = new Set<string>();
+  for (const term of terms) {
+    const match = term.exec(body);
+    if (match) {
+      if (!anchor || match[0].length > anchor[0].length) anchor = match;
+    } else {
+      const field = details.find(([, value]) => term.test(value));
+      if (!field) return null;
+      via.add(field[0]);
+    }
+  }
+  return { body: anchor, via: [...via] };
+}
+function matchExcerpt(text: string, at: RegExpExecArray) {
+  const match = at[0], end = at.index + match.length;
+  // The match offsets refer to the original text, not a lowercased copy. Keep the excerpt short on phones.
+  const before = Array.from(text.slice(Math.max(0, at.index - 26), at.index)).slice(-12).join('');
+  const shown = Array.from(match.slice(0, 82)).slice(0, 40).join('');
+  const after = Array.from(text.slice(end, end + 50)).slice(0, 24).join('');
+  return <>{before.length < at.index ? '…' : ''}{before}<mark>{shown}{shown.length < match.length ? '…' : ''}</mark>{after}{end + after.length < text.length ? '…' : ''}</>;
+}
 function memoryDates(row: Data): string {
   const expiry = dateLabel(row.expiresAt), updated = dateLabel(row.updatedAt || row.createdAt);
   return [updated ? `${updated} 更新` : '', expiry ? `${expiredMemory(row) ? '已到期' : '有效至'} ${expiry}` : ''].filter(Boolean).join(' · ');
@@ -171,7 +200,7 @@ function memoryReceiptPin(feedback: MemoryFeedback | null) {
   return { id: string(row.id), revision: Number(row.revision), candidate };
 }
 function feedbackLabel(feedback: MemoryFeedback): string {
-  if (feedback.needsQuery || feedback.value.status === 'unknown') return '这次修改的结果待核对';
+  if (feedback.needsQuery || feedback.value.status === 'unknown') return feedback.operation === 'forget' ? '这次遗忘的结果待核对' : '这次修改的结果待核对';
   if (feedback.value.status === 'expired_not_saved') return '这条建议已到期，本次没有保存为个人记忆';
   if (feedback.operation === 'create' && feedback.value.status === 'not_submitted' && feedback.value.reason === 'deadline_passed' && feedback.value.saved === false) return '所选期限已经过去，没有创建这条记忆';
   if (feedback.operation === 'shorten' && feedback.value.status === 'not_submitted') return '这次缩短期限尚未提交，原期限未改';
@@ -263,7 +292,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const [review, setReview] = useState<MemoryReview | CreateTermReview | null>(null);
   const [pending, setPending] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [avatarPicking, setAvatarPicking] = useState(false);
-  const [leaveOpen, setLeaveOpen] = useState(false), [memoryConflict, setMemoryConflict] = useState(false), [memoryUnknown, setMemoryUnknown] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false), [memoryConflict, setMemoryConflict] = useState(false), [uncertainMemory, setMemoryUnknown] = useState(false);
   const [latestMemory, setLatestMemory] = useState<Data | null>(null);
   const [query, setQuery] = useState(''), [topic, setTopic] = useState('all'), [showCandidates, setShowCandidates] = useState(false);
   const [newMemoryText, setNewMemoryText] = useState(''), [newMemoryExpiry, setNewMemoryExpiry] = useState('none'), [createUnknown, setCreateUnknown] = useState(false);
@@ -271,6 +300,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const [policy, setPolicy] = useState<MemoryPolicy | null>(null), [controlsError, setControlsError] = useState('');
   const [agentPreferences, setAgentPreferences] = useState<AgentPreferenceControl | null>(null);
   const [feedback, setFeedback] = useState<MemoryFeedback | null>(null);
+  const pendingForget = !!selection && !selection.candidate && feedback?.operation === 'forget' && feedback.targetId === selection.id &&
+    (feedback.needsQuery || feedback.value.status === 'unknown');
+  const memoryUnknown = uncertainMemory || pendingForget;
   const [duties, setDuties] = useState<Data | null>(null), [dutiesReading, setDutiesReading] = useState(false), [dutiesError, setDutiesError] = useState('');
   const [dutiesAttempt, setDutiesAttempt] = useState(0);
   const alive = useRef(true), busy = useRef(false), runRef = useRef(run), supportedRef = useRef(supported);
@@ -302,8 +334,15 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const expiredCandidate = usePendingCandidateDeadline(Number.isSafeInteger(pendingUntil) && pendingUntil > 0 ? pendingUntil : 0);
   const pendingCandidates = memories.candidates.filter(row => row.status === 'pending');
   const activeMemories = memories.current.filter(row => !historicalMemory(row));
-  const searchText = query.trim().toLocaleLowerCase();
-  const searched = (row: Data) => !searchText || [row.text, row.title, row.sourceSummary, topicOf(row).label].filter(Boolean).join(' ').toLocaleLowerCase().includes(searchText);
+  const searchText = query.trim();
+  const terms = useMemo(() => memoryTerms(query), [query]);
+  const hits = new Map<Data, MemoryFindHit>();
+  const searched = (row: Data) => {
+    if (!terms.length) return true;
+    const hit = findInMemoryRow(row, terms);
+    if (hit) hits.set(row, hit);
+    return hit !== null;
+  };
   const matchingMemories = activeMemories.filter(searched);
   const visibleMemories = topic === 'all' ? matchingMemories : matchingMemories.filter(row => topicOf(row).id === topic);
   const topics = [...new Map(activeMemories.map(row => [topicOf(row).id, topicOf(row)])).values()];
@@ -926,15 +965,17 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     setMemories(old => ({ ...old, complete: false, current: old.current.filter(stillCurrent), history: old.history.filter(stillCurrent), pendingConflicts: old.pendingConflicts.filter(stillCurrent) }));
   };
   const dropHandledEntry = (operation: Removal, id: string) => {
+    if (operation === 'forget') {
+      // A confirmed forget can retire siblings and suggestions, not just this id.
+      // The next native projection decides which rows may be shown again.
+      setMemories(emptyMemories()); setMemoryAvailable(false);
+      return;
+    }
     const others = (row: Data) => row.id !== id;
-    setMemories(old => ({ ...old, complete: false,
-      current: operation === 'forget' ? old.current.filter(others) : old.current,
-      history: operation === 'forget' ? old.history.filter(others) : old.history,
-      candidates: operation === 'reject' ? old.candidates.filter(others) : old.candidates,
-      pendingConflicts: old.pendingConflicts.filter(others) }));
+    setMemories(old => ({ ...old, complete: false, candidates: old.candidates.filter(others), pendingConflicts: old.pendingConflicts.filter(others) }));
   };
   const returnAfterRemoval = (operation: Removal, directory: MemoryDirectory = 'memories') => {
-    // Preserve the list's existing query, topic and scroll. Only the handled row is gone.
+    // Preserve the list's existing query, topic and scroll while storage is read again.
     clearSelection();
     if (directory === 'memories') setShowCandidates(operation === 'reject');
     go(directory);
@@ -988,7 +1029,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           clearSelection(); setShowCandidates(false); go('memories');
           await readSnapshot(); return;
         }
-        const valid = frozen.operation === 'forget' ? receipt.deleted >= 1 : receipt.candidate?.id === frozen.id && receipt.candidate?.status === (frozen.operation === 'accept' ? 'accepted' : 'rejected') && receipt.candidate?.revision > frozen.value.before.revision;
+        const valid = frozen.operation === 'forget' ? Number.isSafeInteger(receipt.deleted) && receipt.deleted >= 1 : receipt.candidate?.id === frozen.id && receipt.candidate?.status === (frozen.operation === 'accept' ? 'accepted' : 'rejected') && receipt.candidate?.revision > frozen.value.before.revision;
         if (!valid || receipt.status !== 'saved' || receipt.receiptHandle !== frozen.value.receiptHandle || (frozen.operation === 'accept' && !string(receipt.record?.id))) throw new Error('记忆处理回执尚未确认。');
         completed = true;
         if (!alive.current) return;
@@ -1177,12 +1218,12 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           const selected = current.current.selection;
           if (selected && selected.id === frozen.targetId) {
             if (frozen.operation === 'correct') { setMemoryUnknown(false); setMemoryConflict(true); setNotice('结果已核对。请读取最新记忆，当前输入仍保留。'); }
-            else if (!memoryDirty(selected)) {
-              if (result.status === 'saved' && removesFromList(frozen.operation)) returnAfterRemoval(frozen.operation, frozen.directory);
-              else {
-                if (frozen.operation === 'accept' && ['saved', 'already_saved'].includes(result.status) && result.record) setShowCandidates(false);
-                clearSelection(); go('memories');
-              }
+            else if (result.status === 'saved' && removesFromList(frozen.operation) && selected.candidate === (frozen.operation === 'reject')) {
+              // The original removal is now confirmed, including when this editor had an unsaved draft.
+              returnAfterRemoval(frozen.operation, frozen.directory);
+            } else if (!memoryDirty(selected)) {
+              if (frozen.operation === 'accept' && ['saved', 'already_saved'].includes(result.status) && result.record) setShowCandidates(false);
+              clearSelection(); go('memories');
             }
           }
           if (result.status === 'reverted' && selected?.id === frozen.value.record?.id && !memoryDirty(selected)) { clearSelection(); go('memories'); }
@@ -1251,7 +1292,13 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label="记忆设置" title="记忆设置" disabled={locked} onClick={openMemorySettings} />
           : view === 'home' ? <IconButton icon={IconSettings} aria-label="隐私与数据设置" title="隐私与数据" onClick={() => guarded(onSettings)} /> : <span />;
   const entry = (id: string, title: string, description: string, icon: typeof IconChat, open: () => void, badge?: ReactNode) => <Button variant="ghost" className="pw-profile-entry" leadingIcon={icon} trailingIcon={IconChevronRight} onClick={open} disabled={!loaded || locked} data-profile-entry={id}><span className="pw-profile-entry-copy"><strong>{title}</strong><small>{description}</small></span>{badge}</Button>;
-  const memoryRow = (row: Data, candidate: boolean) => <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight} data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}><span><strong>{string(row.text || row.title) || '未命名记忆'}</strong><small>{[memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span></Button>;
+  const memoryRow = (row: Data, candidate: boolean) => {
+    const hit = hits.get(row), text = string(row.text) || string(row.title) || '未命名记忆';
+    return <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight}
+      data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}>
+      <span><strong>{hit?.body ? matchExcerpt(text, hit.body) : text}</strong><small>{[hit?.via.length ? '匹配' + hit.via.join('、') : '', memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span>
+    </Button>;
+  };
   const followUp = object(duties?.policy), quietHours = object(followUp.quietHours);
   const followUpLabel = dutiesReading ? '正在核对跟进设置' : dutiesError ? '跟进设置待重新核对' : !duties ? '查看委托与跟进设置' : [followUp.enabled !== true ? '自动跟进已关闭' : Number(followUp.pausedUntil) > Date.now() ? '自动跟进已暂停' : '自动跟进已开启', quietHours.start && quietHours.end ? `安静时段 ${quietHours.start}–${quietHours.end}` : ''].filter(Boolean).join(' · ');
   const reminderData = object(state.features?.automation), reminderReady = Array.isArray(reminderData.rules);
@@ -1272,6 +1319,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {feedbackVisible && feedback && <MotionFeedback identity={JSON.stringify([feedback.operation, feedback.targetId, feedback.value.status, feedback.needsQuery, feedback.value.undoAvailable])} className="pw-profile-feedback pw-profile-memory-feedback" role="status">
           <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{feedbackLabel(feedback)}</span></div>
           {!feedback.needsQuery && feedback.value.status === 'saved' && (feedback.operation === 'correct' || feedback.operation === 'forget') && <p>不会重新生成以前的回答。原回答若有「本次记忆」，可在那里核对当时的提供回执。</p>}
+          {pendingForget && <p>先查询原回执，再决定下一步。查询不会再次提交遗忘。</p>}
           {retention && <p>{retention}</p>}
           {feedback.value.undoUnavailableReason && <p>{string(feedback.value.undoUnavailableReason)}</p>}
           <div className="pw-profile-actions">
@@ -1336,13 +1384,14 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           <p className="pw-profile-intro">这里是已保存的个人记忆，可以纠正或忘记。待选建议单独显示，不算已保存。</p>
           {memoryError && <div className="pw-profile-feedback is-error" role="alert"><p>{memoryError}</p><Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>重新读取记忆</Button></div>}
           {(hasMemoryRows || !!query || showCandidates) && <div className="pw-profile-collection-tools">
-            <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label={showCandidates ? '搜索待确认建议' : '搜索已读取的个人记忆'} placeholder={showCandidates ? '搜索待确认建议' : '搜索个人记忆'} clearLabel="清除搜索" value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />
+            <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label={showCandidates ? '搜索待确认建议' : '搜索已读取的个人记忆'} placeholder={showCandidates ? '搜索待确认建议，空格分词' : '搜索个人记忆，空格分词'} clearLabel="清除搜索" maxLength={256} value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />
             <div className="pw-profile-collection-nav">
               <Button variant="secondary" leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button>
               {!candidateMatchLink && (pendingCandidates.length > 0 || showCandidates) && <Button variant="ghost" aria-pressed={showCandidates} disabled={locked} onClick={() => setShowCandidates(value => !value)}>{showCandidates ? '查看已保存' : `待确认 ${pendingCandidates.length} 条`}</Button>}
             </div>
             {!showCandidates && topics.length > 1 && <SelectField className="pw-profile-topic-select" label="主题" value={topic} options={[{ id: 'all', label: '所有主题' }, ...topics]} onChange={setTopic} isDisabled={locked} />}
-            {!memories.complete && <p className="pw-profile-list-hint">当前搜索范围为已读取的个人记忆。</p>}
+            {memoryAvailable && !showCandidates && searchText && visibleMemories.length > 0 && <p className="pw-profile-list-hint" role="status">已保存 · 当前筛选匹配 {visibleMemories.length} 条</p>}
+            {!memories.complete && memoryAvailable && <p className="pw-profile-list-hint">当前搜索范围为已读取的个人记忆。</p>}
           </div>}
           {showCandidates ? memoryAvailable && <section className="pw-profile-memory-group"><h2>待你确认<span>{searchText ? `${visibleCandidates.length} 条匹配` : pendingCandidates.length}</span></h2><p className="pw-profile-list-hint">这些建议还不是已保存的个人记忆。有原文时可先核对，不必现在决定。</p><div className="pw-profile-memory-list">{visibleCandidates.map(row => memoryRow(row, true))}</div>{!visibleCandidates.length && <p className="pw-profile-list-hint">{searchText ? '已读取的建议中没有匹配项。' : '暂未读到待确认的内容。'}</p>}</section>
             : topics.filter(item => visibleMemories.some(row => topicOf(row).id === item.id)).map(item => <section className="pw-profile-memory-group" key={item.id}><h2>{item.label}</h2><div className="pw-profile-memory-list">{visibleMemories.filter(row => topicOf(row).id === item.id).map(row => memoryRow(row, false))}</div></section>)}
@@ -1379,7 +1428,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         </div>}
         {loaded && view === 'memory-history' && <>
           <p className="pw-profile-intro">这里显示仍可查看、但不在当前背景中的个人记忆。</p>
-          {(memories.history.length > 0 || !!query) && <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label="搜索过去的记忆" placeholder="搜索过去的记忆" clearLabel="清除搜索" value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />}
+          {(memories.history.length > 0 || !!query) && <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label="搜索过去的记忆" placeholder="搜索过去的记忆，空格分词" clearLabel="清除搜索" maxLength={256} value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />}
           <div className="pw-profile-memory-list">{historyRows.map(row => memoryRow(row, false))}</div>
           {memoryAvailable && !historyRows.length && <div className="pw-profile-empty"><IconHistory aria-hidden="true" /><h2>{searchText ? '已读取的过去记忆中没有匹配项' : '暂未读到过去的记忆'}</h2>{searchText && <Button variant="ghost" onClick={() => setQuery('')}>清除搜索</Button>}</div>}
           {memoryError && <p className="pw-profile-list-hint" role="alert">{memoryError}</p>}
@@ -1399,7 +1448,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
               ? '只提交这条已保存记忆的修改。返回时会重新核对原建议是否仍可查看。'
               : '如需修改已有记忆，请从已保存列表单独打开。'}</p><h2>待确认内容</h2></section>}
             {!retiredSuggestion && <p className="pw-profile-candidate-copy">{selection.originalText}</p>}
-          </> : selection.historical ? <><p className="pw-profile-intro">这条内容已退出当前背景。</p><p className="pw-profile-candidate-copy">{selection.originalText}</p></> : <TextAreaField className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="记忆内容" value={selection.draft} onChange={value => { if (!busy.current) { setSelection(old => old ? { ...old, draft: value } : old); setNotice(''); } }} rows={5} maxLength={4000} resize="none" isDisabled={locked} />}
+          </> : selection.historical ? <><p className="pw-profile-intro">这条内容已退出当前背景。</p><p className="pw-profile-candidate-copy">{selection.originalText}</p></> : <TextAreaField className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="记忆内容" value={selection.draft} onChange={value => { if (!busy.current) { setSelection(old => old ? { ...old, draft: value } : old); setNotice(''); } }} rows={5} maxLength={4000} resize="none" isDisabled={locked || pendingForget} />}
           {!selection.candidate && !selection.historical && <p className="pw-profile-list-hint">保存表示可以作为个人记忆参考，不代表内容已经核实。</p>}
           <p className="pw-profile-memory-meta">私人对话 · 关于你{memoryDates(selection.record) ? ` · ${memoryDates(selection.record)}` : ''}</p>
           {sourceHandle && canSetPriority(selection) && supported('profile.memory.review') && supported('profile.memory.confirm') && <div className="pw-profile-actions">
@@ -1408,7 +1457,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           {!selection.candidate && !selection.historical && selection.value.canReviewShorterTerm === true && sourceHandle && supported('profile.memory.review') && supported('profile.memory.confirm') &&
             <OriginalMemoryTerm key={sourceHandle} prior={selection.record.expiresAt} disabled={locked || memoryConflict || memoryUnknown || memoryDirty(selection) || !!unresolvedTerm(selection.id)} onReview={prepareShorterTerm} />}
           {!selection.candidate && !selection.historical && memoryDirty(selection) && <Accordion className="pw-profile-disclosure"><AccordionItem id="personal-changes" title="查看修改前后"><div className="pw-profile-memory-comparison"><section><h3>原来记住的内容</h3><p>{selection.originalText}</p></section><section><h3>准备更新为</h3><p>{selection.draft}</p></section></div></AccordionItem></Accordion>}
-          {(memoryConflict || memoryUnknown) && <section className="pw-profile-conflict" role="alert"><h2>{memoryUnknown ? '请先核对保存结果' : '这条记忆已有变化'}</h2><p>当前输入已保留，重新读取不会自动覆盖。</p>{latestMemory ? <><div className="pw-profile-latest"><h3>最新内容</h3><p>{string(latestMemory.record?.text)}</p></div><div className="pw-profile-actions"><Button variant="secondary" size="small" disabled={locked} onClick={() => adoptLatestMemory(true)}>保留我的输入</Button><Button variant="ghost" size="small" disabled={locked} onClick={() => adoptLatestMemory(false)}>使用最新内容</Button></div></> : <Button variant="secondary" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={reloadMemory}>读取最新记忆</Button>}</section>}
+          {!pendingForget && (memoryConflict || memoryUnknown) && <section className="pw-profile-conflict" role="alert"><h2>{memoryUnknown ? '请先核对保存结果' : '这条记忆已有变化'}</h2><p>当前输入已保留，重新读取不会自动覆盖。</p>{latestMemory ? <><div className="pw-profile-latest"><h3>最新内容</h3><p>{string(latestMemory.record?.text)}</p></div><div className="pw-profile-actions"><Button variant="secondary" size="small" disabled={locked} onClick={() => adoptLatestMemory(true)}>保留我的输入</Button><Button variant="ghost" size="small" disabled={locked} onClick={() => adoptLatestMemory(false)}>使用最新内容</Button></div></> : <Button variant="secondary" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={reloadMemory}>读取最新记忆</Button>}</section>}
           {!retiredSuggestion && <PersonalMemorySources key={JSON.stringify([selection.id, selection.candidate, selection.record.revision, sourceHandle, presentationKey, state.memoryRefreshRevision, state.conversationId])}
             references={memorySources} manual={manualMemory(selection.record)} pending={locked} reload={reloadMemory}
             disabled={!memoryAvailable || memoryConflict || memoryUnknown || !sourceHandle || !supported('profile.memory.source') || locked && pending !== '正在读取来源'}
@@ -1446,7 +1495,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         <div className="pw-profile-actions"><Button variant="secondary" disabled={locked} onClick={clearReview}>返回</Button><Button disabled={locked} onClick={confirmReview}>{review.value.core ? '设为优先参考' : '取消优先参考'}</Button></div>
       </div>}
     </SettingsDialog>
-    <SettingsDialog isOpen={review?.operation === 'forget'} title="忘记这条记忆？" onClose={() => { if (!busy.current) clearReview(); }}><div className="pw-profile-dialog"><p className="pw-profile-review-text">{string(review?.value.before?.text) || selection?.originalText}</p><p>以后不再参考这条记忆，也会处理依赖它的旧内容。原聊天保留。这次遗忘不能撤销。</p><div className="pw-profile-actions"><Button variant="secondary" disabled={locked} onClick={clearReview}>取消</Button><Button disabled={locked} onClick={confirmReview}>忘记</Button></div></div></SettingsDialog>
+    <SettingsDialog isOpen={review?.operation === 'forget'} title="忘记这条记忆？" onClose={() => { if (!busy.current) clearReview(); }}><div className="pw-profile-dialog"><p className="pw-profile-review-text">{string(review?.value.before?.text) || selection?.originalText}</p><p>以后不再参考这条记忆，其他依赖同一来源的记忆和建议也可能退出列表。原聊天保留。这次遗忘不能撤销。</p>{memoryDirty(selection) && <p>当前未保存的编辑也会放弃。</p>}<div className="pw-profile-actions"><Button variant="secondary" disabled={locked} onClick={clearReview}>取消</Button><Button disabled={locked} onClick={confirmReview}>忘记</Button></div></div></SettingsDialog>
   </section>;
 }
 
