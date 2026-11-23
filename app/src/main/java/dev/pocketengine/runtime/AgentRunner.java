@@ -66,6 +66,13 @@ public final class AgentRunner {
     private MainAuthorizationFailure initialChatAuthorizationFailure;
     public void observeInitialChatFailure(){if(lifecycleBegun)throw new IllegalStateException("原对话已开始");observeInitialChatFailure=true;}
     public MainAuthorizationFailure initialChatAuthorizationFailure(){return initialChatAuthorizationFailure;}
+    private boolean observeInitialDefaultProjectFailure;
+    private MainAuthorizationFailure initialProjectAuthorizationFailure;
+    public void observeInitialDefaultProjectFailure(){
+        if(lifecycleBegun)throw new IllegalStateException("原项目已开始");
+        observeInitialDefaultProjectFailure=true;
+    }
+    public MainAuthorizationFailure initialProjectAuthorizationFailure(){return initialProjectAuthorizationFailure;}
     public void bindApprovedCall(ApprovedCall call){if(lifecycleBegun||approvedCall!=null)throw new IllegalStateException("审批续接只能在启动前绑定一次");approvedCall=java.util.Objects.requireNonNull(call);}
     private static final int MAX_IMAGES = 2;
     private static final int MAX_IMAGE_CHARS = 8 * 1024 * 1024;
@@ -578,6 +585,8 @@ public final class AgentRunner {
         java.util.List<dev.pocketengine.core.NativeToolObservation.Image> nativeImages=new java.util.ArrayList<>();
         java.util.List<dev.pocketengine.core.NativeToolObservation.ProjectRequestPin> projectImages=new java.util.ArrayList<>();
         int steps = 0;
+        Exception exactProjectMainException=null;
+        MainAuthorizationFailure matchedProjectMainAuthorizationFailure=null;
         dev.pocketengine.runtime.usage.ExecutionTraceCapture executionTrace = new dev.pocketengine.runtime.usage.ExecutionTraceCapture(taskId,control,event->{if(sink!=null)sink.emit(event);});
         RepeatToolNotice repeatedTools=new RepeatToolNotice();
         ContextBudgetPolicy.Source runBudgets=ContextBudgetPolicy.forRun(contextBudgets,control);
@@ -905,7 +914,7 @@ public final class AgentRunner {
                             terminalMain[0]=null;executionTrace.request(receipt.callId,nativeTraceSite[0],originalHistory,traceSteps);
                         }
                         public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){
-                            if(observeInitialChatFailure||plainCallScope!=null)terminalMain[0]=receipt; // native durable sink ran first
+                            if(observeInitialChatFailure||observeInitialDefaultProjectFailure||plainCallScope!=null)terminalMain[0]=receipt; // native durable sink ran first
                         }
                     });
                     // Each physical call gets a fresh target/receipt and rechecks the original native
@@ -1010,7 +1019,12 @@ public final class AgentRunner {
                         // Restore fences uncertain original operations; current permission and
                         // physical-call budget are checked again by inferenceTarget before POST.
                         if(delay<0||journal==null||!journal.reserveModelRecovery(nativeRequest[0],delay)){
-                            rememberInitialChatFailure(terminalMain[0],nativeRequest[0],failed,control);
+                            MainAuthorizationFailure observed=(observeInitialChatFailure||observeInitialDefaultProjectFailure&&steps==0)
+                                    ?matchedMainAuthorizationFailure(terminalMain[0],nativeRequest[0],failed,control):null;
+                            if(observeInitialChatFailure&&observed!=null)initialChatAuthorizationFailure=observed;
+                            if(observeInitialDefaultProjectFailure&&observed!=null){
+                                exactProjectMainException=failed;matchedProjectMainAuthorizationFailure=observed;
+                            }
                             throw failed;
                         }
                         journal.restore();
@@ -1743,7 +1757,10 @@ public final class AgentRunner {
             if (control != null && control.isCancelled()) return finishQuietly(taskId, "cancelled", "已停止后续操作；已经发生的操作不会自动撤销。", evidence, steps, initialConfig, sink);
             if (openOperation != null) return finishQuietly(taskId, "awaiting_user", "能力操作已登记但没有确认回执，已停止自动执行。请核对结果后再恢复，勿直接重试。", evidence, steps, initialConfig, sink);
             if(evidence.has("planningReadUnconfirmed"))return finishQuietly(taskId,"awaiting_user","规划读取未完整结束；原读取编号与已用预算保留，请核对后再决定，不会自动重读或执行。",evidence,steps,initialConfig,sink);
-            return finishQuietly(taskId, "failed", ModelGateway.safeMessage(error, initialConfig), evidence, steps, initialConfig, sink);
+            RunOutcome outcome=finishQuietly(taskId, "failed", ModelGateway.safeMessage(error, initialConfig), evidence, steps, initialConfig, sink);
+            if(exactProjectMainException==error&&steps==0&&outcome.evidence.opt("steps") instanceof Integer recordedSteps&&recordedSteps==0)
+                initialProjectAuthorizationFailure=matchedProjectMainAuthorizationFailure;
+            return outcome;
         } finally {
             if(routes!=null)routes.close();
             if(screens!=null)screens.close();
@@ -2285,22 +2302,23 @@ public final class AgentRunner {
         JSONObject result=new JSONObject(evidence.toString());RunControl.HostRunIdentity run=control.hostRunIdentity();
         result.put("nativeStopReason","step_limit");if(run!=null)result.put("nativeStopRunId",run.runId()).put("nativeStopEpoch",run.epoch());return result;
     }
-    private void rememberInitialChatFailure(dev.pocketengine.runtime.usage.InferenceReceipt receipt,String callId,Exception failed,RunControl control){
-        if(!observeInitialChatFailure||receipt==null||!receipt.callId.equals(callId)||
+    private static MainAuthorizationFailure matchedMainAuthorizationFailure(dev.pocketengine.runtime.usage.InferenceReceipt receipt,String callId,Exception failed,RunControl control){
+        if(receipt==null||!receipt.callId.equals(callId)||
                 receipt.outcome!=dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.FAILED||
-                !(failed instanceof ModelGateway.GatewayException gateway))return;
+                !(failed instanceof ModelGateway.GatewayException gateway))return null;
         var at=receipt.context;var original=gateway.observation();
         if(at.purpose!=dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN||
                 at.bindingKind!=dev.pocketengine.runtime.usage.InferenceReceipt.BindingKind.HOST_RUN||!at.memberId.isEmpty()||
                 !control.matchesHostRun(at.taskId,at.runId,at.epoch)||original==null||
                 original.kind!=dev.pocketengine.runtime.usage.InferenceFailure.Kind.HTTP||
-                original.httpStatus!=401&&original.httpStatus!=403)return;
+                original.httpStatus!=401&&original.httpStatus!=403)return null;
         try {
             var committed=dev.pocketengine.runtime.usage.InferenceFailure.checked(receipt.toJson().getJSONObject("failure"));
             if(committed.kind==original.kind&&committed.httpStatus==original.httpStatus&&
                     committed.observedAt==original.observedAt&&committed.nativeCode.equals(original.nativeCode))
-                initialChatAuthorizationFailure=new MainAuthorizationFailure(at.taskId,at.runId,at.epoch,committed.httpStatus);
+                return new MainAuthorizationFailure(at.taskId,at.runId,at.epoch,committed.httpStatus);
         }catch(Exception unavailable){/* Optional presentation, never a reason to change the original failure. */}
+        return null;
     }
 
     private static RunOutcome finish(String taskId, String status, String summary, JSONObject evidence, int steps,

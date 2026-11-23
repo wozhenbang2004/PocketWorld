@@ -69,8 +69,11 @@ function directAssets(html:string):string[] {
 type SavedStaticCompanion={path:string;sha256:string;savedEditId:string;reviewedPaths:readonly string[]};
 export type SavedStaticEditor={projectId:string;checkoutId:string;viewHandle:string;filesHandle:string;fileHandle:string;
   revision:number;editSequence:number;entrySha256:string;documentEpoch:number;html:string;listedPaths:readonly string[];companion?:SavedStaticCompanion};
-type Snapshot={sessionId:string;manifestIdentity:string;resourceIdentity:string;ready:boolean;visible:boolean;generation:number;error:string|null;canKeep:boolean};
-type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;keep?:{sessionId:string;generation:number;manifest:string};published:boolean;verifiedRoot?:true;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
+type VerifiedAsset={path:string;bytes:number;sha256:string};
+type Snapshot={sessionId:string;manifestIdentity:string;resourceIdentity:string;resources:readonly VerifiedAsset[];
+  ready:boolean;visible:boolean;generation:number;error:string|null;canKeep:boolean};
+type Adjusting={sessionId:string;afterRevision:number;acknowledged:boolean;backToEditor:boolean;timer?:number};
+type Visit={paths:readonly string[];ack?:Snapshot;publicationTimer?:number;adjusting?:Adjusting;keep?:{sessionId:string;generation:number;manifest:string};published:boolean;verifiedRoot?:true;returning:boolean;closing:boolean;dismissed:boolean;closed:boolean};
 function missingResourceReview(value:unknown,editor:SavedStaticEditor,paths:readonly string[]):string[]|null {
   const review=row(value), sent=review.resourcePaths, missing=review.missingPaths;
   if(review.kind!=='saved_static_resource_review'||review.opened!==false||Object.hasOwn(review,'sessionId')||
@@ -86,6 +89,10 @@ function clearPublicationTimer(original:Visit) {
   if(original.publicationTimer!==undefined)window.clearTimeout(original.publicationTimer);
   original.publicationTimer=undefined;
 }
+function clearAdjustment(original:Visit){
+  if(original.adjusting?.timer!==undefined)window.clearTimeout(original.adjusting.timer);
+  original.adjusting=undefined;
+}
 function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly string[]):Snapshot|null {
   const view=row(value), resources=view.resources, companion=editor.companion;
   if((companion&&!paths.includes(companion.path))||view.kind!=='saved_static_page'||view.projectId!==editor.projectId||view.checkoutId!==editor.checkoutId||
@@ -95,7 +102,7 @@ function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly st
     !Number.isSafeInteger(view.documentGeneration)||Number(view.documentGeneration)<0||
     (view.ready&&Number(view.documentGeneration)<1)||!Array.isArray(resources)||resources.length!==paths.length+1)return null;
   const remaining=new Set(paths);
-  const identities:string[]=[];
+  const identities:string[]=[],verified:VerifiedAsset[]=[];
   let bytes=0,entry=false;
   for(const value of resources){
     const resource=row(value),path=resource.path;
@@ -107,9 +114,10 @@ function nativeSnapshot(value:unknown,editor:SavedStaticEditor,paths:readonly st
       (companion&&path===companion.path&&resource.sha256!==companion.sha256))return null;
     bytes+=Number(resource.bytes);
     identities.push(JSON.stringify([path,resource.sha256,resource.bytes,resource.mimeType]));
+    verified.push({path,bytes:Number(resource.bytes),sha256:resource.sha256});
   }
   return entry&&remaining.size===0&&bytes<=maximumPreviewBytes?{sessionId:view.sessionId,manifestIdentity:view.manifestIdentity,
-    resourceIdentity:JSON.stringify(identities.sort()),ready:view.ready,visible:view.visible,generation:Number(view.documentGeneration),error:view.error,canKeep:view.canKeep===true}:null;
+    resourceIdentity:JSON.stringify(identities.sort()),resources:verified,ready:view.ready,visible:view.visible,generation:Number(view.documentGeneration),error:view.error,canKeep:view.canKeep===true}:null;
 }
 
 /** Same editor and BoardUI surface. The viewport is only a slot for the native session. */
@@ -126,6 +134,7 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
   const [shown,setShown]=useState<Snapshot|null>(null), [error,setError]=useState('');
   const [keepStatus,setKeepStatus]=useState('');
   const visit=useRef<Visit|null>(null), mounted=useRef(false), heading=useRef<HTMLHeadingElement>(null);
+  const focusResources=useRef(false);
   const callbacks=useRef({current,onLeave,onVerifiedRoot});callbacks.current={current,onLeave,onVerifiedRoot};
   const viewport=useProjectPreviewViewport(stage==='preview',shown?.sessionId||'',!shown||!!shown.error,available,
     `${editor.documentEpoch}:${editor.filesHandle}:${editor.fileHandle}:${editor.revision}`,'.pw-settings-dialog-content');
@@ -138,14 +147,40 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
   };
   const leave=(original?:Visit)=>{
     if(!mounted.current||(original&&visit.current!==original))return;
-    if(original){clearPublicationTimer(original);original.dismissed=true;}
+    if(original){clearPublicationTimer(original);clearAdjustment(original);original.dismissed=true;}
     visit.current=null;
     callbacks.current.onLeave();
+  };
+  const failAdjustment=(original:Visit,request:Adjusting)=>{
+    if(!live(original)||original.adjusting!==request)return;
+    clearAdjustment(original);original.closing=false;
+    setStage('error');
+    setError('尚未确认关闭本次预览，未调整资源。可以返回原编辑器，不会重新打开网页。');
+  };
+  const reconcileAdjustment=(original:Visit)=>{
+    const request=original.adjusting;
+    if(!request||!live(original)||document.hidden||original.keep)return;
+    const snapshot=bridge.getState(),revision=snapshot.revision;
+    if(snapshot.host?.ready!==true||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<=request.afterRevision)return;
+    const frame=snapshot.state.projectPreview;
+    if(frame!==null){
+      const id=row(frame).sessionId;
+      if(typeof id==='string'&&id!==request.sessionId)failAdjustment(original,request);
+      return;
+    }
+    if(!request.acknowledged)return;
+    // Both the exact stock close and a fresh empty native presentation agree.
+    clearAdjustment(original);original.closed=true;
+    if(request.backToEditor){leave(original);return;}
+    original.dismissed=true;visit.current=null;focusResources.current=true;
+    setSelected([...original.paths]);setMissing(previous=>previous.filter(path=>!original.paths.includes(path)));
+    setShown(null);setKeepStatus('');setError('');setStage('review');
   };
   const sync=()=>{
     const original=visit.current;
     if(!owns()){if(original)release(original);leave(original??undefined);return;}
     if(!original?.ack||original.dismissed)return;
+    if(original.adjusting){reconcileAdjustment(original);return;}
     const state=nativeSnapshot(bridge.getState().state.projectPreview,editor,original.paths);
     if(state?.sessionId===original.ack.sessionId&&state.manifestIdentity===original.ack.manifestIdentity&&
       state.resourceIdentity===original.ack.resourceIdentity&&state.generation>=original.ack.generation){
@@ -194,11 +229,42 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
         '本次预览未能受理保留。没有再次提交。':keepUnconfirmed);
     });
   };
+  const currentMounted=(original:Visit,snapshot=bridge.getState())=>{
+    const ack=original.ack;
+    if(stage!=='preview'||!ack||!original.published||original.returning||!live(original)||document.hidden||snapshot.host?.ready!==true)return null;
+    const confirmed=nativeSnapshot(snapshot.state.projectPreview,editor,original.paths);
+    return confirmed&&confirmed.ready&&confirmed.visible&&!confirmed.error&&confirmed.sessionId===ack.sessionId&&
+      confirmed.manifestIdentity===ack.manifestIdentity&&confirmed.resourceIdentity===ack.resourceIdentity&&
+      confirmed.sessionId===shown?.sessionId&&confirmed.generation===shown?.generation?confirmed:null;
+  };
+  const adjust=()=>{
+    const original=visit.current,native=bridge.getState(),revision=native.revision;
+    if(!original||original.keep||original.adjusting||!canOpenSavedStaticPreview()||
+      typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1)return;
+    const verified=currentMounted(original,native);
+    if(!verified)return;
+    const request:Adjusting={sessionId:verified.sessionId,afterRevision:revision,acknowledged:false,backToEditor:false};
+    original.returning=true;original.closing=true;original.adjusting=request;
+    setShown(null);setStage('closing');setError('');
+    request.timer=window.setTimeout(()=>failAdjustment(original,request),publicationWaitMs);
+    void bridge.command(closePreview,{sessionId:request.sessionId}).then(value=>{
+      if(!live(original)||original.adjusting!==request)return;
+      const receipt=row(value);
+      if(receipt.closed!==true||receipt.sessionId!==request.sessionId){failAdjustment(original,request);return;}
+      request.acknowledged=true;reconcileAdjustment(original);
+    }).catch(()=>failAdjustment(original,request));
+  };
   const dismiss=()=>{
     const original=visit.current;
     if(!original?.ack||!live(original)){
       if(original)release(original);
       leave(original??undefined);return;
+    }
+    if(original.adjusting){
+      // Back still returns to the editor. Do not send a second close while this one is pending.
+      original.adjusting.backToEditor=true;
+      reconcileAdjustment(original);
+      return;
     }
     if(original.closing)return;
     clearPublicationTimer(original);
@@ -216,7 +282,10 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
   };
   const closeNow=useRef(dismiss);closeNow.current=dismiss;
   useLayoutEffect(()=>{
-    if(stage==='review'&&missing.length)heading.current?.focus({preventScroll:true});
+    if(stage==='review'&&(missing.length||focusResources.current)){
+      focusResources.current=false;
+      heading.current?.focus({preventScroll:true});
+    }
   },[stage,missing]);
   useLayoutEffect(()=>{
     mounted.current=true;registerBack(()=>closeNow.current());
@@ -229,7 +298,7 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
     return ()=>{
       mounted.current=false;registerBack(null);events();epochs();document.removeEventListener('visibilitychange',sync);
       const original=visit.current;
-      if(original){clearPublicationTimer(original);original.dismissed=true;release(original);}
+      if(original){clearPublicationTimer(original);clearAdjustment(original);original.dismissed=true;release(original);}
       visit.current=null;
     };
   },[editor]);
@@ -273,6 +342,12 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
     {path===companion?.path&&<span className="pw-field-hint"> · 本次保存</span>}
     {missing.includes(path)&&<span className="pw-field-hint"> · 本次未找到</span>}
   </CheckboxField>);
+  const native=bridge.getState(),revision=native.revision,original=visit.current;
+  const mountedManifest=original?currentMounted(original,native):null;
+  const canAdjust=!!mountedManifest&&!!original&&!original.keep&&typeof revision==='number'&&
+    Number.isSafeInteger(revision)&&revision>0&&canOpenSavedStaticPreview();
+  const canKeep=stage==='preview'&&shown?.canKeep&&shown.ready&&shown.visible&&!shown.error&&
+    !original?.keep&&supportsKeptStaticPages(available);
   return stage==='review'?<section className="pw-form-flow" aria-label="核对本机网页预览">
     <h3 ref={heading} tabIndex={-1}>index.html</h3>
     <p>{companion?<>核对刚才打开的同一网页，并带上这次保存的 <bdi>{companion.path}</bdi>。</>:'用当前已保存的入口和你选中的资源。'}预览只在本机打开，不联网、不构建，也不改动文件。</p>
@@ -289,11 +364,21 @@ export function ProjectSavedStaticPreview({editor,current,onLeave,onVerifiedRoot
       <Button disabled={hasSelectedMissing||!hasRequiredAsset} onClick={show}>打开本机预览</Button></div>
   </section>:<section className="pw-preview-pane pw-original-local-web" aria-label="已保存网页的本机预览" aria-busy={stage==='opening'||stage==='closing'||stage==='preview'&&!shown?.ready&&!shown?.error}>
     <p className="pw-reading-note">index.html · 此次已保存版本</p>
-    {stage==='preview'&&shown?.canKeep&&shown.ready&&shown.visible&&!shown.error&&!visit.current?.keep&&supportsKeptStaticPages(available)&&
-      <div className="pw-form-actions"><Button variant="ghost" size="small" onClick={keep}>保留此网页</Button></div>}
+    {mountedManifest&&<Accordion variant="divided" className="pw-compact-disclosures">
+      <AccordionItem id="saved-static-verified-files" title={`此次已读取 ${mountedManifest.resources.length} 个文件`}>
+        <ul className="pw-form-flow" aria-label="本次预览实际读取的已保存文件">
+          {mountedManifest.resources.map(file=><li key={file.path}><bdi className="pw-preview-entry-path">{file.path}</bdi>
+            <small> · {file.bytes.toLocaleString()} 字节 · <code>{file.sha256.slice(0,8)}</code></small></li>)}
+        </ul>
+      </AccordionItem>
+    </Accordion>}
+    {(canAdjust||canKeep)&&<div className="pw-form-actions">
+      {canAdjust&&<Button variant="ghost" size="small" onClick={adjust}>调整所选资源</Button>}
+      {canKeep&&<Button variant="ghost" size="small" onClick={keep}>保留此网页</Button>}
+    </div>}
     {stage==='preview'&&keepStatus&&<p className="pw-reading-note" role="status">{keepStatus}</p>}
     {stage!=='error'&&<div ref={viewport} className="pw-preview-viewport" aria-label="原生隔离预览画面" data-preview-session={shown?.sessionId}>
-      {(!shown?.ready||!shown.visible)&&<p className="pw-preview-placeholder" role="status">{shown?.error?'本机网页画面暂不可读。':stage==='closing'?'正在返回编辑…':'正在打开本机网页…'}</p>}
+      {(!shown?.ready||!shown.visible)&&<p className="pw-preview-placeholder" role="status">{shown?.error?'本机网页画面暂不可读。':stage==='closing'?(original?.adjusting?'正在关闭原预览…':'正在返回编辑…'):'正在打开本机网页…'}</p>}
     </div>}
     {(error||shown?.error)&&<p className="pw-error" role="alert">{error||shown?.error}</p>}
   </section>;

@@ -82,6 +82,24 @@ const pending = new Map<string, { action: string; resolve(value: any): void; rej
 // Ordinary reads/writes remain concurrent once the navigation has settled.
 const navigationActions = new Set(['remoteTask.open', 'remoteTask.close', 'remoteSessions.open', 'attachmentWorkspace.open', 'connections.enter', 'connections.leave', 'channels.open', 'channels.close', 'skills.open', 'skills.close', 'routeReference.open', 'routeReference.close', 'tasks.open', 'groups.openTask', 'devices.openTask', 'tasks.close', 'ownerWork.report.followUp.resume', 'ownerWork.report.followUp.discardEmpty', 'projects.select', 'projectWork.open', 'projects.preview', 'projects.package.preview.inspect', 'projects.package.preview.open', 'projects.firstWebOutput.open', 'projects.preview.return', 'projects.preview.close', 'conversation.new', 'conversation.select', 'conversation.reader.select', 'archives.open', 'archives.close', 'storage.open', 'storage.close']);
 let navigationTail: Promise<void> | null = null;
+type ProjectReturnNavigation = { serial: number; document: string; started: boolean; disarmed?: true };
+let projectReturnNavigation: ProjectReturnNavigation | null = null;
+const projectReturnOpenKeys = ['id', 'requestNavigation', 'expectedRunId', 'expectedEpoch', 'expectedProjectId',
+  'expectedCheckoutId', 'expectedProjectModelFailureStatus', 'projectModelReturnVisit'];
+const projectReturnSerial = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+function projectReturnOpen(action: string, args: Record<string, unknown>): ProjectReturnNavigation | null {
+  if (action !== 'tasks.open' || !projectReturnSerial(args.projectModelReturnVisit) || args.requestNavigation !== false ||
+      args.expectedEpoch !== 1 || args.expectedProjectModelFailureStatus !== 401 && args.expectedProjectModelFailureStatus !== 403 ||
+      Object.keys(args).length !== projectReturnOpenKeys.length || !projectReturnOpenKeys.every(key => Object.hasOwn(args, key)))
+    return null;
+  return { serial: args.projectModelReturnVisit, document: documentId, started: false };
+}
+function setNavigationTail(settled: Promise<void>, owner: ProjectReturnNavigation | null) {
+  navigationTail = settled;
+  projectReturnNavigation = owner;
+  void settled.then(() => { if (navigationTail === settled) { navigationTail = null; projectReturnNavigation = null; } });
+}
 acceptHostDocumentToken(window.__pocketDocumentToken);
 
 function publish() { listeners.forEach(listener => listener()); }
@@ -151,7 +169,7 @@ function receive(input: NativeMessage | string) {
   }
 }
 
-function sendCommand<T>(action: string, args: Record<string, unknown>): Promise<T> {
+function sendCommand<T>(action: string, args: Record<string, unknown>, projectOpen?: ProjectReturnNavigation): Promise<T> {
   const native = window.PocketNative;
   if (!native || typeof native.postMessage !== 'function') return Promise.reject(new NativeCommandError('界面尚未连接应用，请保留当前输入。', 'not_sent'));
   if (action !== 'app.ready' && action !== 'app.refresh' && !current.capabilities.commands.includes(action)) {
@@ -168,6 +186,7 @@ function sendCommand<T>(action: string, args: Record<string, unknown>): Promise<
       const encoded = JSON.stringify({ v: 1, id, documentId, hostDocumentToken, action, args: action === 'app.ready' ? { ...args, documentId } : args });
       if (encoded.length > 16 * 1024 * 1024) throw new Error('当前请求过长，请保留原文件后缩小本次内容。');
       native.postMessage(encoded);
+      if (projectOpen) projectOpen.started = true;
     } catch (error) {
       clearTimeout(timeout); pending.delete(id);
       reject(error instanceof Error ? error : new NativeCommandError('请求未能登记，当前输入仍保留。', 'not_sent'));
@@ -208,6 +227,30 @@ export const bridge = {
   command<T = any>(action: string, args: Record<string, unknown> = {}): Promise<T> {
     const prior = action === 'app.ready' ? null : navigationTail;
     const originalToken = hostDocumentToken;
+    const owner = projectReturnNavigation;
+    const serial = args.projectModelReturnVisit;
+    if (prior && owner?.document === documentId && action === 'tasks.close' && projectReturnSerial(serial) &&
+        Object.keys(args).length === 1 && Object.hasOwn(args, 'projectModelReturnVisit') && owner.serial === serial) {
+      if (owner.started) {
+        // This exact read is the current tail. Native retires its one visit before the
+        // acquired read can enter. No other navigation may pass without that receipt.
+        const operation = sendCommand<T>(action, args);
+        const settled = operation.then(value => {
+          const receipt = value as Record<string, unknown> | null;
+          return receipt?.retired === true && receipt.projectModelReturnVisit === serial &&
+            typeof receipt.closedOriginal === 'boolean' && typeof receipt.taskWindowOccupied === 'boolean' ? undefined : prior;
+        }, () => prior);
+        setNavigationTail(settled, null);
+        return operation;
+      }
+      // Our read has not been posted; disarm it without preempting the different earlier navigation.
+      owner.disarmed = true;
+    }
+    const projectOpen = projectReturnOpen(action, args);
+    const send = (payload: Record<string, unknown>) => {
+      if (projectOpen?.disarmed) return Promise.reject(new NativeCommandError('已离开原项目返回窗口，未发送原工作读取。', 'not_sent'));
+      return sendCommand<T>(action, payload, projectOpen ?? undefined);
+    };
     let operation: Promise<T>;
     if (prior) {
       let frozen: string;
@@ -215,14 +258,10 @@ export const bridge = {
       catch { return Promise.reject(new NativeCommandError('请求未能登记，请保留原内容。', 'not_sent')); }
       operation = prior.then(() => {
         if (hostDocumentToken !== originalToken) throw new NativeCommandError('原页面已恢复或变化，排队中的操作没有发送，请重新核对。', 'not_sent');
-        return sendCommand<T>(action, JSON.parse(frozen));
+        return send(JSON.parse(frozen));
       });
-    } else operation = sendCommand<T>(action, args);
-    if (navigationActions.has(action)) {
-      const settled = operation.then(() => {}, () => {});
-      navigationTail = settled;
-      void settled.then(() => { if (navigationTail === settled) navigationTail = null; });
-    }
+    } else operation = send(args);
+    if (navigationActions.has(action)) setNavigationTail(operation.then(() => {}, () => {}), projectOpen);
     return operation;
   },
 };

@@ -6774,6 +6774,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     /** Opening a bounded owner view is distinct from accepting a complete result review. */
     internal fun readTaskForOpen(id: String, current: () -> Boolean, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, false, current, complete)
+    internal fun originalProjectMainFailure(task: UiTask): JSONObject? {
+        if (closed || webTaskViewId != task.id || !webPrivateOwnerVisible() || conversationReader != null ||
+            state.filePath != null || state.tasks.singleOrNull { it.id == task.id } !== task) return null
+        return app.projectMainFailureForOriginalView(task.raw)
+    }
+    /** Same transient MAIN failure proof, on the already acquired detail before its window opens. */
+    internal fun originalProjectMainFailureBeforeOpen(task: JSONObject, status: Int): Boolean {
+        if (closed || webTaskViewId != null || !webPrivateOwnerVisible() || conversationReader != null || state.filePath != null)
+            return false
+        val proof = app.projectMainFailureForOriginalView(task) ?: return false
+        if (proof.opt("httpStatus") != status) return false
+        // A newer round already observed by the host also prevents a stale read overwriting it.
+        return state.tasks.none { row ->
+            val epoch = row.raw.optInt("coordinatorEpoch", -1)
+            row.id == proof.opt("taskId") && (epoch > 1 || epoch == 1 && row.raw.opt("runId") != proof.opt("runId"))
+        }
+    }
+
     /** A scoped navigation must reject another run before its task body is merged. */
     internal fun readTaskForOpen(id: String, current: () -> Boolean, verifySource: (JSONObject) -> Unit, complete: (UiTask?, String?) -> Unit) =
         readTaskForWeb(id, false, current, complete, verifySource = verifySource)

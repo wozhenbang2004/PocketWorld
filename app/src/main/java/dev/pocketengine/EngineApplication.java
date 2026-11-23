@@ -148,7 +148,10 @@ public final class EngineApplication extends Application implements dev.pocketen
     public ModelConfig captureConversationModel(String conversationId,String clientMessageId)throws Exception {
         settings.modelSelection().requireAvailable();
         JSONObject target=conversationModels().targetForAdmission(conversationId,clientMessageId);
-        return captureConversationPreferenceTarget(target);
+        ModelConfig captured=captureConversationPreferenceTarget(target);
+        if(target==null&&projectOwnerWorkflows!=null&&conversationId!=null&&clientMessageId!=null)
+            projectOwnerWorkflows.observeOrdinaryDefaultCapture(conversationId,clientMessageId);
+        return captured;
     }
     private ModelConfig captureConversationPreferenceTarget(JSONObject target)throws Exception {
         if(target==null)return settings.get();
@@ -3508,10 +3511,49 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 "capabilities".equals(task.opt("executionMode"))&&task.isNull("origin")&&task.isNull("parentTaskId")&&
                 task.isNull("developmentContext")&&task.isNull("projectMemoryRead")&&task.isNull("ownerWorkTakeover")&&task.isNull("executionRole");
     }
+    /** Exact new ordinary Project MAIN authorization outcome, not generic task evidence.
+     * Retain only a small in-process presentation window of content-free tuples. */
+    private record ProjectMainFailure(String task,String run,int epoch,String project,String checkout,int status) {
+        boolean sameTask(JSONObject row) {
+            JSONObject scope=row.optJSONObject("developmentContext");
+            return task.equals(row.opt("id"))&&run.equals(row.opt("runId"))&&epoch==row.optInt("coordinatorEpoch",-1)&&
+                    scope!=null&&project.equals(scope.opt("projectId"))&&checkout.equals(scope.opt("checkoutId"))&&
+                    "owner".equals(row.opt("actorId"))&&"private".equals(row.opt("spaceId"))&&"assistant".equals(row.opt("kind"))&&
+                    "capabilities".equals(row.opt("executionMode"))&&"failed".equals(row.opt("status"))&&!row.optBoolean("cancelRequested")&&
+                    row.isNull("origin")&&row.isNull("parentTaskId")&&row.isNull("executionRole")&&row.isNull("projectMemoryRead")&&
+                    row.isNull("workProfileRef")&&row.isNull("workProfileIntent")&&row.isNull("ownerWorkPreparation")&&row.isNull("teamAssignment")&&
+                    row.isNull("teamRunId")&&!scope.has("draftOnly")&&!scope.has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD)&&
+                    !scope.has(dev.pocketengine.features.local.project.OwnerRevisionSource.FIELD);
+        }
+    }
+    private final java.util.LinkedHashMap<String,ProjectMainFailure> projectMainFailures=new java.util.LinkedHashMap<>();
+    private TaskStore projectMainFailureStore;
+    private void rememberProjectMainFailure(TaskStore originalStore,ProjectMainFailure fact,JSONObject settled) {
+        if(!fact.sameTask(settled))return;
+        synchronized(projectMainFailures){
+            if(tasks!=originalStore||!businessReady())return;
+            if(projectMainFailureStore!=originalStore){projectMainFailures.clear();projectMainFailureStore=originalStore;}
+            projectMainFailures.put(fact.task(),fact);
+            if(projectMainFailures.size()>32)projectMainFailures.remove(projectMainFailures.keySet().iterator().next());
+        }
+    }
+    /** Existing private detailed Project open only. Does not read storage, model state, or any audit body. */
+    public JSONObject projectMainFailureForOriginalView(JSONObject detail) {
+        if(!businessReady()||!"detail_window".equals(detail.opt("taskProjection"))||
+                !Boolean.FALSE.equals(detail.opt("taskCoreReadLimited"))||!Boolean.FALSE.equals(detail.opt("hasUnresolvedOperations"))||
+                Boolean.FALSE.equals(detail.opt("contextAvailable"))||detail.optBoolean("contextWithdrawn")||detail.optBoolean("sourceCurrentReadRequired"))return null;
+        synchronized(projectMainFailures){
+            ProjectMainFailure fact=projectMainFailureStore==tasks?projectMainFailures.get(detail.optString("id")):null;
+            return fact!=null&&fact.sameTask(detail)
+                    ?json("taskId",fact.task(),"runId",fact.run(),"epoch",fact.epoch(),"projectId",fact.project(),"checkoutId",fact.checkout(),
+                          "kind","main_model_authorization","httpStatus",fact.status()):null;
+        }
+    }
     private static final class AssistantInputBinding {
         final String task,run,conversation;final int epoch;final RunControl control;final ModelConfig config;
         final boolean continuation,ordinaryFirst;final JSONObject reservedTask;
         final OrdinaryDirectInput ordinaryDirect;
+        dev.pocketengine.features.local.project.ProjectOwnerWorkflows.OrdinaryDefaultStart ordinaryDefaultProject;
         final java.util.concurrent.atomic.AtomicInteger phase=new java.util.concurrent.atomic.AtomicInteger();Runnable admissionCancel;
         AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control)throws Exception{this(task,conversation,config,control,false);}
         AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control,boolean continuation)throws Exception{this(task,conversation,config,control,continuation,false,null);}
@@ -3923,7 +3965,10 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             control.onCancel(binding.admissionCancel);
             if(projectStart!=null){
                 if(projectOwnerWorkflows==null)throw new SecurityException("原项目启动宿主不可用");var access=projectOwnerWorkflows.bindMemoryAttempt(task,control,config,projectStart);tasks.bindProjectMemoryRead(access,control);projectMemoryReads.put(control,access);control.onCancel(()->{if(projectMemoryReads.remove(control,access))access.close();});
-            }else if(projectOwnerWorkflows!=null)projectOwnerWorkflows.bindNewAttempt(task,control,config);
+            }else if(projectOwnerWorkflows!=null){
+                projectOwnerWorkflows.bindNewAttempt(task,control,config);
+                binding.ordinaryDefaultProject=projectOwnerWorkflows.takeOrdinaryDefaultStart(message.optString("clientMessageId"));
+            }
             if(sshOwnerWorkflows!=null)sshOwnerWorkflows.bindNewAttempt(task,control);
             tasks.openOwnerInputMailbox(binding.task,binding.run,binding.epoch,conversation,control);
             if(hasAttachments(message))attachmentRoutePins.require(binding.task,config,true);
@@ -4490,6 +4535,24 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             }
             if(plainOrdinaryRun&&direct!=null&&plainHistory!=null&&plainHistory.belongsTo(originalInput.conversation))
                 runner.bindPlainBookPauseHistory(plainHistory);
+            var originalProject=originalInput==null?null:originalInput.ordinaryDefaultProject;
+            JSONObject projectContext=originalProject==null?null:attempt.optJSONObject("developmentContext");
+            JSONObject projectGoal=originalProject!=null&&admitted!=null&&admitted.length()==1?admitted.optJSONObject(0):null;
+            TaskStore projectFailureStore=originalProject==null?null:tasks;
+            boolean initialProjectFailure=ownerMailbox&&originalProject!=null&&projectContext!=null&&projectGoal!=null&&
+                    firstInput!=null&&!firstMessage.isEmpty()&&"user".equals(firstInput.opt("role"))&&
+                    !firstInput.has("ownerAttachmentRefs")&&!firstInput.has("ownerSourceRefs")&&!firstInput.has("ownerPreviewRefs")&&!firstInput.has("ownerObjectRefs")&&
+                    "task_goal".equals(projectGoal.opt("queueRole"))&&firstMessage.equals(projectGoal.opt("messageId"))&&
+                    originalProject.clientMessageId().equals(projectGoal.opt("clientMessageId"))&&
+                    firstInput.optLong("ownerMessageRevision",-1)>0&&firstInput.optLong("ownerMessageRevision")==projectGoal.optLong("ownerMessageRevision",-1)&&
+                    id.equals(projectGoal.opt("acceptedTaskId"))&&admittedRun.equals(projectGoal.opt("acceptedRunId"))&&admittedEpoch==projectGoal.optInt("acceptedEpoch",-1)&&
+                    originalProject.projectId().equals(projectContext.opt("projectId"))&&originalProject.checkoutId().equals(projectContext.opt("checkoutId"))&&
+                    originalProject.clientMessageId().equals(projectContext.opt("clientMessageId"))&&
+                    admittedEpoch==1&&originalInput.phase.get()==1&&!originalInput.continuation&&originalInput.control==control&&
+                    id.equals(originalInput.task)&&admittedRun.equals(originalInput.run)&&admittedEpoch==originalInput.epoch&&
+                    originalInput.conversation.equals(attempt.opt("conversationId"))&&control.matchesHostRun(id,admittedRun,admittedEpoch)&&
+                    attempt.isNull("origin")&&selectedProfile==null&&project==null&&ownerSkill==null&&approval==null;
+            if(initialProjectFailure)runner.observeInitialDefaultProjectFailure();
             if(independentBuild&&(ownerSkill!=null||approval!=null&&approval.attachmentCall))throw new SecurityException("首次构建不能接管其他技能或附件调用");
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
             RetainedDevelopmentRun development=ownerMailbox&&!selectedRevision&&!independentBuild&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;
@@ -4513,8 +4576,25 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             else tasks.finishCapabilityAttempt(id,admittedRun,admittedEpoch,control,result);
             // Response projection can fail after the original durable outcome committed.
             // It must not turn that delivery failure into a second execution settlement.
-            settlementCommitted=true;pushTask(id);
-            JSONObject settled=tasks.get(id,false);status=settled.getString("status");
+            settlementCommitted=true;
+            var projectAuth=initialProjectFailure?runner.initialProjectAuthorizationFailure():null;
+            boolean publishProjectAuth=projectAuth!=null&&"failed".equals(status)&&lastOwnerReplyAttempted[0]==null&&
+                    id.equals(projectAuth.taskId())&&admittedRun.equals(projectAuth.runId())&&admittedEpoch==projectAuth.epoch()&&
+                    capabilityControls.get(id)==control;
+            if(!publishProjectAuth)pushTask(id);
+            JSONObject settled;
+            try{
+                settled=tasks.get(id,false);
+                JSONArray finalInputs=publishProjectAuth?settled.optJSONArray("ownerInputs"):null;
+                JSONObject finalGoal=finalInputs!=null&&finalInputs.length()==1?finalInputs.optJSONObject(0):null;
+                if(finalGoal!=null&&firstMessage.equals(finalGoal.opt("messageId"))&&
+                        originalProject.clientMessageId().equals(finalGoal.opt("clientMessageId"))&&
+                        "task_goal".equals(finalGoal.opt("queueRole"))&&firstInput.optLong("ownerMessageRevision")==finalGoal.optLong("ownerMessageRevision",-1)&&
+                        id.equals(finalGoal.opt("acceptedTaskId"))&&admittedRun.equals(finalGoal.opt("acceptedRunId"))&&admittedEpoch==finalGoal.optInt("acceptedEpoch",-1)&&
+                        originalInput.conversation.equals(settled.opt("conversationId"))&&!control.isCancelled())
+                    rememberProjectMainFailure(projectFailureStore,new ProjectMainFailure(id,admittedRun,admittedEpoch,originalProject.projectId(),originalProject.checkoutId(),projectAuth.httpStatus()),settled);
+            }finally{if(publishProjectAuth)pushTask(id);}
+            status=settled.getString("status");
             RuntimeDiagnostics.taskStateObserved(control,settled.optString("id"),settled.optString("runId"),settled.optInt("coordinatorEpoch"),status);
             JSONObject response=json("content",status.matches("cancelled|reconciling")?settled.optString("summary"):result.evidence.optString("modelSummary",result.summary),"taskId",id,"status",status);
             JSONArray settledInputs=directFailure?settled.optJSONArray("ownerInputs"):null;

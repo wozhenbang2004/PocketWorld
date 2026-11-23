@@ -19,11 +19,13 @@ type Run = (action: string, args?: Record<string, unknown>) => Promise<any>;
 type LeaveGuard = (next: () => void) => boolean;
 export type OriginalMemoryConversation = { id: string; key: string; epoch: number; revision: number; resumeRevision: number };
 type OriginalMemoryEntry = { conversation: OriginalMemoryConversation; current: () => boolean };
+type ExactChatProfileVisit = { enter: () => Promise<void>; dispose: () => void; current: () => boolean; back: (record?: ConfirmedManualSave) => void };
 export type AnswerMemoryForgetReceipt = { id: string; revision: number };
 type AnswerMemoryForgetEntry = AnswerMemoryForgetReceipt & { current: () => boolean };
 export type PersonalTarget = { view: 'home' | 'memories' | 'memory-settings' } | {
-  view: 'memory'; id: string; candidate: boolean; expectedRevision?: number; originalAnswer?: OriginalMemoryEntry; originalForget?: AnswerMemoryForgetEntry
-} | { view: 'memory-new'; fromChat: { enter: () => Promise<void>; dispose: () => void; current: () => boolean; back: (record?: ConfirmedManualSave) => void } };
+  view: 'memory'; id: string; candidate: boolean; expectedRevision?: number; originalAnswer?: OriginalMemoryEntry; originalForget?: AnswerMemoryForgetEntry;
+  fromSavedChat?: ExactChatProfileVisit & OriginalMemoryEntry
+} | { view: 'memory-new'; fromChat: ExactChatProfileVisit };
 export type PersonalProfile = {
   revision: number;
   nickname: string;
@@ -319,6 +321,9 @@ function Segmented({ label, value, options, disabled, onChange }: { label: strin
 /** Personal views share the existing host-owned profile and memory records. */
 export function ProfileWorkspace({ state, supported, run, onBack, onSettings, registerBack, registerBeforeLeave, presentationKey, initialTarget, targetRequestKey, onOpenAdvancedMemory, onOpenCommitments, onOpenReminders }: Props) {
   const manualEntry = initialTarget?.view === 'memory-new' ? initialTarget.fromChat : undefined;
+  const savedChatTarget = initialTarget?.view === 'memory' && initialTarget.fromSavedChat ? initialTarget : undefined;
+  const savedChat = savedChatTarget?.fromSavedChat;
+  const chatEntry = manualEntry ?? savedChat;
   const directVersion = initialTarget?.view === 'memory' && initialTarget.expectedRevision !== undefined;
   const originalAnswer = initialTarget?.view === 'memory' && initialTarget.expectedRevision !== undefined ? initialTarget.originalAnswer : undefined;
   const originalForget = initialTarget?.view === 'memory' ? initialTarget.originalForget : undefined;
@@ -328,6 +333,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const [memoryError, setMemoryError] = useState(''), [memoryAvailable, setMemoryAvailable] = useState(false);
   const [loaded, setLoaded] = useState(false), [view, setView] = useState<View>(() => manualEntry ? 'memory-new' : directVersion ? 'memory' : 'home');
   const [enteredProfile, setEnteredProfile] = useState(false), [entryAttempt, setEntryAttempt] = useState(0);
+  const [savedChatObservation, setSavedChatObservation] = useState<number | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null), [selection, setSelection] = useState<MemorySelection | null>(null);
   const [review, setReview] = useState<MemoryReview | CreateTermReview | null>(null);
   const [pending, setPending] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -374,6 +380,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const profileConflict = !!editor && !!profile && editor.original.revision !== profile.revision && !sameSection(editor.original, profile, editor.section);
   const pendingUntil = selection?.candidate && selection.record.status === 'pending' ? selection.record.expiresAt : null;
   const expiredCandidate = usePendingCandidateDeadline(Number.isSafeInteger(pendingUntil) && pendingUntil > 0 ? pendingUntil : 0);
+  const savedUntil = savedChat ? timeValue(selection?.record.expiresAt) : NaN;
+  const savedChatExpired = usePendingCandidateDeadline(Number.isFinite(savedUntil) ? savedUntil : 0);
   const pendingCandidates = memories.candidates.filter(row => row.status === 'pending');
   const activeMemories = memories.current.filter(row => !historicalMemory(row));
   const searchText = query.trim();
@@ -400,7 +408,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     notice, error, feedback?.value.status, feedback?.needsQuery,
   ]), { active: loaded && enteredProfile && memoryAvailable });
 
-  const closeHandle = (handle: string) => { if (handle && (!manualEntry || manualEntry.current()) && supportedRef.current('profile.memory.close')) void runRef.current('profile.memory.close', { handle }).catch(() => {}); };
+  const closeHandle = (handle: string) => { if (handle && (!chatEntry || chatEntry.current()) && supportedRef.current('profile.memory.close')) void runRef.current('profile.memory.close', { handle }).catch(() => {}); };
   const closeAvatar = () => {
     const picker = avatarPicker.current; avatarPicker.current = null;
     avatarPoll.current = null; avatarWaitingForPresentation.current = null;
@@ -417,6 +425,10 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     finally { busy.current = false; if (alive.current) setPending(''); }
   };
   const call = async (name: string, args: Record<string, unknown> = {}) => {
+    if (savedChat && (!savedChat.current() || !(name === 'profile.memory.close' || name === 'profile.memory.get' &&
+      args.id === savedChatTarget?.id && args.candidate === false && args.expectedRevision === savedChatTarget?.expectedRevision &&
+      args.originalConversation === savedChat.conversation)))
+      throw new Error('只能核对这次保存的原记忆版本。');
     if (manualEntry && (!manualEntry.current() || !['profile.memory.createReview', 'profile.memory.confirm', 'profile.memory.close', 'profile.memory.query'].includes(name)))
       throw new Error('原私人对话窗口已变化。没有继续保存，也没有打开其他记忆。');
     if (!supportedRef.current(name)) throw new Error('当前版本暂不支持此操作，请更新应用后重试。');
@@ -478,25 +490,25 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     alive.current = true;
     let active = true;
     setEnteredProfile(false);
-    if (canEnter) void action(manualEntry ? '正在打开记忆表单' : '正在打开个人资料', async () => {
-      if (manualEntry) await manualEntry.enter();
+    if (canEnter) void action(savedChat ? '正在打开这条记忆' : manualEntry ? '正在打开记忆表单' : '正在打开个人资料', async () => {
+      if (chatEntry) await chatEntry.enter();
       else await runRef.current('connections.enter', { section: 'profile' });
       if (active && alive.current) setEnteredProfile(true);
     });
     return () => {
       active = false; alive.current = false;
-      if (manualEntry) manualEntry.dispose();
+      if (chatEntry) chatEntry.dispose();
       else {
         closeAvatar(); closeHandle(readHandle.current); closeHandle(reviewHandle.current);
         if (canEnter) void runRef.current('connections.leave', { section: 'profile' }).catch(() => {});
       }
       readHandle.current = ''; reviewHandle.current = ''; pendingLeave.current = null;
     };
-  }, [canEnter, entryAttempt, manualEntry]);
+  }, [canEnter, entryAttempt, chatEntry, savedChat, manualEntry]);
   useEffect(() => {
     // Scoped entries never open the memory catalogue.
-    if (!manualEntry && !originalAnswer && enteredProfile && canRead && !loaded && !busy.current) void action('正在读取资料', async () => { await readSnapshot(); });
-  }, [manualEntry, originalAnswer, enteredProfile, canRead, loaded]);
+    if (!chatEntry && !originalAnswer && enteredProfile && canRead && !loaded && !busy.current) void action('正在读取资料', async () => { await readSnapshot(); });
+  }, [chatEntry, originalAnswer, enteredProfile, canRead, loaded]);
   useEffect(() => {
     if (!enteredProfile || !loaded || view !== 'home') return;
     let active = true; const original = livePresentation.current;
@@ -675,6 +687,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     const selected = current.current.selection;
     if (selected?.fromSuggestion) { returnToSuggestion(selected, selected.fromSuggestion); return; }
     if (atDirectEntry()) {
+      if (savedChat) { savedChat.back(); return; }
       // The shell owns the originating route. Never search for or select another conversation.
       if (directEntry.current && directEntry.current.conversation !== current.current.conversation) {
         directEntry.current = null; clearSelection(); setEditor(null); go('home'); setNotice('进入时的对话已变化，未打开其他对话。'); return;
@@ -840,13 +853,17 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     const presentation = livePresentation.current, memoryRevision = liveMemoryRevision.current;
     const conversation = current.current.conversation, origin = current.current.view;
     const priorSave = receipt?.priorSave, privateWindow = priorSave ? privateProfileReadWindow() : null;
-    const unavailable = receipt ? '回执指向的原版本已经变化或暂时不可读，没有打开其他记忆。可从列表查看当前内容。'
+    const readObservation = savedChat ? bridge.getState().state.memoryRefreshRevision : undefined;
+    const savedScopeCurrent = () => !savedChat || Number.isSafeInteger(readObservation) &&
+      bridge.getState().state.memoryRefreshRevision === readObservation;
+    const unavailable = savedChat ? '这条记忆曾保存。原版本可能已变化、到期或暂不可读，没有打开其他内容。'
+      : receipt ? '回执指向的原版本已经变化或暂时不可读，没有打开其他记忆。可从列表查看当前内容。'
       : '未能核对原回答选中的记忆版本，没有打开其他内容。请返回原回答。';
     const sameWindow = () => !document.hidden && (expected?.kind === 'receipt'
       ? previousPresentation.current === presentation && livePresentation.current === presentation
         && liveMemoryRevision.current === memoryRevision && current.current.conversation === conversation && current.current.feedback === receipt
         && (!priorSave || privateWindow !== null && privateProfileReadWindow() === privateWindow && current.current.view === origin)
-      : expected?.conversation === current.current.conversation && (!exact || exact.current()));
+      : expected?.conversation === current.current.conversation && savedScopeCurrent() && (!exact || exact.current()));
     void action('正在读取记忆', async () => {
       if (expected?.kind === 'answer') {
         clearSelection(); setEditor(null); go('memory');
@@ -861,7 +878,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       if (expected && (result.row.revision !== expected.revision || !sameWindow() || (candidate
         ? result.row.status !== 'pending' || expiredMemory(result.row)
         : result.row.active !== true || historicalMemory(result.row) ||
-          !!priorSave && (result.row.archiveOnly === true || result.row.assertionStatus !== 'current')))) {
+          (!!priorSave || !!savedChat) && (result.row.archiveOnly === true || result.row.assertionStatus !== 'current' ||
+            !!savedChat && !manualMemory(result.row))))) {
         closeHandle(result.handle); throw new Error(unavailable);
       }
       clearSelection(); readHandle.current = result.handle; returnMemory.current = row.id;
@@ -869,8 +887,14 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       const historical = !expected && !candidate && (historicalMemory(result.row) || memories.history.some(item => item.id === row.id) && !memories.current.some(item => item.id === row.id));
       setSelection({ id: row.id, candidate, value: result.value, record: result.row, originalText: string(result.row.text), draft: string(result.row.text), historical });
       if (exact) setMemoryAvailable(true);
+      if (savedChat && typeof readObservation === 'number') setSavedChatObservation(readObservation);
       setEditor(null); go('memory');
     });
+  };
+  const readOriginalSavedChatMemory = () => {
+    const revision = savedChatTarget?.expectedRevision;
+    if (!savedChat?.current() || !savedChatTarget || revision !== 1) return;
+    openMemory({ id: savedChatTarget.id }, false, { kind: 'answer', revision, conversation: savedChat.conversation.id, originalAnswer: savedChat });
   };
   const reloadMemory = () => {
     const frozen = current.current.selection;
@@ -1381,18 +1405,32 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   useEffect(() => {
     if (!initialTarget || !targetKey || manualEntry) return;
     if (targetArrival.current.key !== targetKey)
-      targetArrival.current = { key: targetKey, conversation: originalAnswer?.conversation.id ?? current.current.conversation };
-    if (targetKey === handledTarget.current || (!loaded && !originalAnswer) || !enteredProfile || busy.current) return;
+      targetArrival.current = { key: targetKey, conversation: (savedChat ?? originalAnswer)?.conversation.id ?? current.current.conversation };
+    if (targetKey === handledTarget.current || (!loaded && !originalAnswer && !savedChat) || !enteredProfile || busy.current) return;
     handledTarget.current = targetKey;
     const target = initialTarget, conversation = targetArrival.current.conversation;
     guarded(() => {
       directEntry.current = target.view === 'home' ? null : { target, conversation };
-      if (target.view === 'memory-settings') enterMemorySettings();
+      if (savedChat) readOriginalSavedChatMemory();
+      else if (target.view === 'memory-settings') enterMemorySettings();
       else if (target.view === 'memory') openMemory({ id: target.id }, target.candidate, target.expectedRevision === undefined ? undefined
         : { kind: 'answer', revision: target.expectedRevision, conversation, originalAnswer });
       else { clearSelection(); setEditor(null); go(target.view); }
     });
-  }, [targetKey, loaded, enteredProfile, pending, originalAnswer, manualEntry]);
+  }, [targetKey, loaded, enteredProfile, pending, originalAnswer, manualEntry, savedChat]);
+  const savedChatReady = !!savedChat && enteredProfile && savedChat.current();
+  const savedChatRetired = !!savedChat && !savedChatReady && !locked && (enteredProfile || !!error || !canEnter);
+  // A confirmed save is history. Keep showing text only while this exact active read is still current.
+  const shownSavedChatRecord = savedChatReady && !savedChatExpired && savedChatObservation !== null &&
+    savedChatObservation === state.memoryRefreshRevision && savedChatObservation === bridge.getState().state.memoryRefreshRevision &&
+    selection?.id === savedChatTarget?.id && selection?.record.revision === savedChatTarget?.expectedRevision ? selection : null;
+  useLayoutEffect(() => {
+    if (savedChat && selection && !shownSavedChatRecord) {
+      clearSelection();
+      setSavedChatObservation(null);
+      if (savedChatReady) setNotice('原版本需重新核对，暂不显示记忆内容。');
+    }
+  }, [savedChat, selection, shownSavedChatRecord, savedChatReady]);
   const confirmUnknownExit = createUnknown || unresolvedDirectExit();
   const expiredTermReview = usePendingCandidateDeadline(review?.operation === 'shorten' || review?.operation === 'createAt' ? Math.min(review.value.expiresAt, review.value.reviewExpiresAt) : 0);
   const currentSection = editor?.draft;
@@ -1431,9 +1469,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const returnForgottenToAnswer = feedbackVisible && atDirectEntry() && !!confirmedAnswerForget(feedback, originalForget);
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
   const manualSaved = manualEntry ? confirmedManualSave(feedback) : null;
-  const headingLabel = view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
+  const headingLabel = savedChat ? '这次保存的记忆' : view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
   const missingDirectVersion = directVersion && view === 'memory' && !selection;
-  const headerSave = editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || pendingSavedRead || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
+  const headerSave = savedChat ? null : editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || pendingSavedRead || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
     : view === 'memory-new' && !manualSaved && !manualRetired ? <Button className="pw-profile-save" size="small" disabled={locked || !!manualEntry && !manualReady || createUnknown || !newMemoryText.trim() || newMemoryExpiry === 'custom' && (!newMemoryCalendar || !validCalendarTime(newMemoryCalendar)) || settingsRequiredFor(feedback, 'create', undefined, newMemoryText.trim()) || !supported('profile.memory.createReview') || !supported('profile.memory.confirm')} onClick={saveNewMemory}>{pending === '正在保存记忆' ? '保存中' : newMemoryExpiry === 'custom' ? '核对' : '保存'}</Button>
       : view === 'memory' && selection && !selection.candidate && !selection.historical ? <Button className="pw-profile-save" size="small" disabled={locked || !memoryDirty(selection) || !selection.draft.trim() || memoryConflict || memoryUnknown || settingsRequiredFor(feedback, 'correct', selection.id, selection.draft.trim()) || !supported('profile.memory.confirm')} onClick={saveMemory}>{pending === '正在保存记忆' ? '保存中' : '保存'}</Button>
         : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label={labels['memory-settings']} title={labels['memory-settings']} disabled={locked} onClick={openMemorySettings} />
@@ -1456,7 +1494,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const receiptLabel = recentReceipt ? ({ delivery_unknown: '投递待核对', awaiting_user: '等待你查看', blocked_notifications: '通知受阻', notified: '已通知', delivered: '已投递', cancelled: '已取消', failed: '未完成' }[string(recentReceipt.status)] || '查看原发生记录') : '';
 
   return <section className="pw-profile-workspace pw-route-workspace" data-profile-view={view} aria-label={headingLabel}>
-    <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={manualEntry ? manualRetired ? '返回管家' : '返回原对话' : view === 'memory' && selection?.fromSuggestion ? '返回这条记忆建议' : view === 'memories' && showCandidates ? '返回已保存的记忆' : atDirectEntry() ? originalAnswer ? '返回原回复' : '返回进入时的页面' : view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><div className="pw-profile-header-copy"><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1><WorkingStatus active={locked && (loaded || !!originalAnswer || !!manualEntry) || avatarPicking && !locked}>{locked ? `${pending}…` : '正在等候所选头像…'}</WorkingStatus></div>{headerSave}</header>
+    <header className="pw-profile-header"><IconButton icon={IconArrowLeft} aria-label={savedChat ? savedChatRetired ? '返回管家' : '返回原对话' : manualEntry ? manualRetired ? '返回管家' : '返回原对话' : view === 'memory' && selection?.fromSuggestion ? '返回这条记忆建议' : view === 'memories' && showCandidates ? '返回已保存的记忆' : atDirectEntry() ? originalAnswer ? '返回原回复' : '返回进入时的页面' : view === 'home' ? '返回' : '返回上一级'} onClick={requestBack} /><div className="pw-profile-header-copy"><h1 ref={heading} tabIndex={-1}>{headingLabel}</h1><WorkingStatus active={locked && (loaded || !!originalAnswer || !!chatEntry) || avatarPicking && !locked}>{locked ? `${pending}…` : '正在等候所选头像…'}</WorkingStatus></div>{headerSave}</header>
     <div className="pw-profile-scroll" ref={scroller}>
       <div className="pw-profile-content">
         {!canEnter && <div className="pw-profile-empty"><IconAccount aria-hidden="true" /><h2>个人资料暂不可用</h2><p>请更新应用后重新打开。</p></div>}
@@ -1468,8 +1506,18 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           {!manualSaved && !!newMemoryText.trim() && <p>原输入仍留在下面；离开前可自行复制。</p>}
           <Button variant="secondary" size="small" onClick={requestBack}>返回管家</Button>
         </div>}
-        {canEnter && !loaded && !originalAnswer && !manualEntry && <div className="pw-profile-loading" role="status">{locked || !enteredProfile || !canRead ? '正在打开个人资料…' : '个人资料尚未读取。'}{!locked && <Button variant="ghost" leadingIcon={IconRefresh} onClick={refresh}>重新读取</Button>}</div>}
-        {error && <MotionFeedback identity={error} className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!manualEntry && !locked && !missingDirectVersion && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</MotionFeedback>}
+        {savedChat && <div className="pw-profile-memory-editor">
+          {shownSavedChatRecord ? <>
+            <span className="pw-profile-memory-status">已核对原保存版本 · 手动添加</span>
+            <p className="pw-profile-candidate-copy">{shownSavedChatRecord.originalText}</p>
+            {memoryDates(shownSavedChatRecord.record) && <p className="pw-profile-memory-meta">{memoryDates(shownSavedChatRecord.record)}</p>}
+            <p className="pw-profile-list-hint">可在「我与管家 → 个人记忆」更正或忘记。这次只查看，不会带入对话。</p>
+          </> : savedChatRetired ? <p role="status">原对话窗口已变化。返回不会打开其他对话。</p>
+            : locked || !savedChatReady ? <p role="status">正在核对这条记忆的原版本…</p>
+              : <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={readOriginalSavedChatMemory}>重新核对原版本</Button>}
+        </div>}
+        {canEnter && !loaded && !originalAnswer && !chatEntry && <div className="pw-profile-loading" role="status">{locked || !enteredProfile || !canRead ? '正在打开个人资料…' : '个人资料尚未读取。'}{!locked && <Button variant="ghost" leadingIcon={IconRefresh} onClick={refresh}>重新读取</Button>}</div>}
+        {error && <MotionFeedback identity={error} className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!chatEntry && !locked && !missingDirectVersion && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</MotionFeedback>}
         {notice && <MotionFeedback identity={notice} className="pw-profile-feedback" role="status">{['已保存', '记忆已删除', '已记住', '已忽略', '当前内容已核对'].includes(notice) && <IconCheck size={15} aria-hidden="true" />}{notice}</MotionFeedback>}
         {feedbackVisible && feedback && <MotionFeedback identity={JSON.stringify([feedback.operation, feedback.targetId, feedback.value.status, feedback.needsQuery, feedback.value.undoAvailable])} className="pw-profile-feedback pw-profile-memory-feedback" role="status">
           <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{feedbackLabel(feedback)}</span></div>
@@ -1594,7 +1642,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           {memoryError && <p className="pw-profile-list-hint" role="alert">{memoryError}</p>}
           <Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button>
         </>}
-        {view === 'memory' && selection && <div className="pw-profile-memory-editor">
+        {!savedChat && view === 'memory' && selection && <div className="pw-profile-memory-editor">
           <span className="pw-profile-memory-status">{memoryOrigin(selection.record, selection.candidate)}</span>
           {selection.candidate ? <>
             <p className="pw-profile-intro">{selection.record.status === 'pending' ? expiredCandidate ? '已过这条建议的采纳期限。你仍可核对来源、暂不处理或忽略它。' : '这是一条建议，还没有作为个人记忆保存。采纳只是决定记住，不是核实为事实。' : retiredSuggestion ? '这条建议当前不可处理，不显示旧内容或原文。' : '这条建议已经处理，不能再次采纳或忽略。'}</p>

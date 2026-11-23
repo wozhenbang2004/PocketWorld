@@ -33,7 +33,12 @@ internal class PocketWebWorkspaceEndpoint(
     override fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>) = bridge.resource(uri, method, headers)
     override fun captureDispatch(raw: String, stale: () -> Unit): () -> Unit {
         val original = bridge.captureWindow()
-        return { if (bridge.acceptsWindow(original)) bridge.postMessage(raw, original, stale) else stale() }
+        val closeProjectReturn = bridge.captureProjectModelReturnClose(raw, original)
+        return {
+            if (closeProjectReturn?.invoke() != true) {
+                if (bridge.acceptsWindow(original)) bridge.postMessage(raw, original, stale) else stale()
+            }
+        }
     }
     override fun invalidatePresentation(documentReplaced: Boolean) = bridge.invalidatePresentation(documentReplaced)
     override fun restorePresentationState(saved: JSONObject?) = bridge.restorePresentationState(saved)

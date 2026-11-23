@@ -374,6 +374,22 @@ public final class ProjectOwnerWorkflows {
         synchronized(selected){if(selected.boundTask!=null)throw new SecurityException("原项目选择已用于一项任务，请重新核对");selected.boundTask=task.getString("id");}
         tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(selected.context));
     }
+    /** Presentation provenance only; never a model preference, credential or execution grant. */
+    public record OrdinaryDefaultStart(String projectId,String checkoutId,String clientMessageId) { }
+    private final ThreadLocal<OrdinaryDefaultStart> ordinaryDefaultStart=new ThreadLocal<>();
+    public void observeOrdinaryDefaultCapture(String conversation,String client) {
+        JSONObject original=selection.get();
+        if(original!=null&&ownerStartFence.get()!=null&&butlerPreparation.get()==null&&ownerConvention.get()==null&&
+                teamRound.get()==null&&conversation.isEmpty()&&client.equals(original.opt("clientMessageId"))&&
+                original.optJSONObject("deliveryContract")!=null&&!original.has("draftOnly")&&
+                !original.has(OwnerRevisionSource.FIELD)&&!original.has(OwnerDraftFirstBuild.FIELD))
+            ordinaryDefaultStart.set(new OrdinaryDefaultStart(original.optString("projectId"),original.optString("checkoutId"),client));
+    }
+    public OrdinaryDefaultStart takeOrdinaryDefaultStart(String client) {
+        OrdinaryDefaultStart captured=ordinaryDefaultStart.get();
+        ordinaryDefaultStart.remove();
+        return captured!=null&&captured.clientMessageId().equals(client)?captured:null;
+    }
     /** Native presentation fence is checked again after the original Assistant
      * captures its model, before Engine binds/schedules this project's attempt. */
     public JSONObject startReviewedForOwner(JSONObject ownerInput,java.util.function.BooleanSupplier current)throws Exception {
@@ -464,7 +480,7 @@ public final class ProjectOwnerWorkflows {
             JSONObject ack=assistant.handle("send",message);
             if(ack.optString("status").matches("accepted|queued"))verifyAcknowledgement(ack,context);
             return ack;
-        }finally{selection.remove();}
+        }finally{ordinaryDefaultStart.remove();selection.remove();}
     }
     /** Typed native owner submission, not JSON or a ThreadLocal authorization carrier. */
     public static final class NativeStart {
