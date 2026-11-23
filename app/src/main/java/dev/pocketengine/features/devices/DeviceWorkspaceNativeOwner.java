@@ -554,6 +554,14 @@ public final class DeviceWorkspaceNativeOwner implements AutoCloseable {
             if(existingIdentity()!=local)throw new SecurityException("本机原身份已变化，未显示结果。");
             return value;
         }
+        public JSONObject readOriginalWindowsDirectory(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current current)throws Exception {
+            current.require(); DeviceIdentity.LocalIdentity local=existingIdentity();
+            if(local==null)throw new SecurityException("本机原身份不可核对，未联系电脑。");
+            JSONObject value=NativeDeviceTaskHistoryHost.readOriginalWindowsDirectory(tasks,local,task,run,epoch,operation,current,
+                    (proof,window)->network.readOriginalWindowsText(proof,local,window));
+            if(existingIdentity()!=local)throw new SecurityException("本机原身份已变化，未显示结果。");
+            return value;
+        }
         public JSONObject readOriginalSentPhoneResult(String task,String run,int epoch,String operation,String child,String childRun,
                                                         long childEpoch,DeviceArtifactTransfer.Current current)throws Exception {
             current.require(); DeviceIdentity.LocalIdentity local=existingIdentity();

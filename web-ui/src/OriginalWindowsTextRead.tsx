@@ -315,16 +315,38 @@ function overviewWindowsRead(snapshot: PocketSnapshot, taskId: string): WindowsO
   if (received) return { kind: 'directory' as const, received, resumeRevision };
 }
 
+type LostWindowsDirectory = { original: Original; key: string };
+function lostWindowsDirectoryAt(snapshot: PocketSnapshot, taskId: string): LostWindowsDirectory | undefined {
+  const shown = originalWindowsOverviewTask(snapshot, taskId);
+  if (!shown || shown.raw.status !== 'reconciling') return;
+  const marker = ownerWindowsPickerMarker(shown.task), audit = originalWindowsOverviewAudit(shown.task);
+  if (!marker || marker.phase !== 'ended' || marker.directoryOperationId || marker.liveChoice ||
+      !audit || audit.page.entries.length !== 1 || audit.calls.length !== 1 ||
+      !snapshot.capabilities.commands.includes('devices.queryHistory')) return;
+  const row = audit.calls[0], receipt = record(row.receipt), send = record(receipt?.nativeDeviceSend);
+  const original = originalWindowsReadAt(shown.task, row, 'workspace.list');
+  if (!original || audit.page.entries[0].operationId !== original.operationId || row.state !== 'unknown' ||
+      !receipt || receipt.code !== 'owner_windows_list_unknown' || receipt.ok !== false || receipt.accepted !== null ||
+      receipt.requiresReconciliation !== true || receipt.retrySubmitted !== false || Object.hasOwn(receipt, 'nativeDeviceAcceptedBinding') ||
+      !send || !digest(send.wireSha256) || !Number.isSafeInteger(send.claimedAt) || send.claimedAt <= 0) return;
+  return { original, key: JSON.stringify([original, shown.resumeRevision, shown.raw.ownerDeviceWork.requestDigest,
+    row.position, send.wireSha256, send.claimedAt]) };
+}
+
 type RegisterTextBack = (handler: (() => boolean) | null) => void;
-/** Mount only in the active Work overview. Explicitly disclose an already-received
- * result; never open Process, ask the Windows peer, or start a new audit read. */
+/** Mount only in the active Work overview. Already-received results stay local;
+ * the closed unknown list has a separate, deliberate historical readback. */
 export function OriginalWindowsWorkspaceOverview({ taskId, managePicker = false, registerBack }: {
   taskId: string; managePicker?: boolean; registerBack?: RegisterTextBack;
 }) {
   const snapshot = usePocketSnapshot();
   const documentEpoch = useSyncExternalStore(bridge.subscribeDocumentEpoch, bridge.getDocumentEpoch, bridge.getDocumentEpoch);
   const source = documentEpoch > 0 ? overviewWindowsRead(snapshot, taskId) : undefined;
-  if (!source || source.kind === 'directory' && source.managedPicker && managePicker) return null;
+  if (!source) {
+    const lost = documentEpoch > 0 ? lostWindowsDirectoryAt(snapshot, taskId) : undefined;
+    return lost ? <OriginalWindowsDirectoryRead key={JSON.stringify([documentEpoch, lost.key])} lost={lost} documentEpoch={documentEpoch}/> : null;
+  }
+  if (source.kind === 'directory' && source.managedPicker && managePicker) return null;
   const { resumeRevision } = source, sourceRevision = String(snapshot.state.traceSourceRevision ?? 0);
   if (source.kind === 'files') {
     const key = JSON.stringify([documentEpoch, resumeRevision, sourceRevision, source.files.map(file => [file.position, file.received.identity])]);
@@ -362,6 +384,80 @@ export function OriginalWindowsWorkspaceOverview({ taskId, managePicker = false,
       return current?.kind === 'text' && current.resumeRevision === resumeRevision && current.exactPath === source.exactPath &&
         sameReceived(current.received, source.received);
     }}/>;
+}
+
+type DirectoryReadback = { entries: DirectoryEntry[]; returned: number; truncated: boolean; recordedAt: number };
+function directorySnapshotOf(value: unknown, original: Original): DirectoryReadback {
+  const item = record(value);
+  const invalid = '这次没有取得可核对的原目录回执，不能判断目录是否为空。';
+  if (item?.format !== 'pocketworld.original-windows-directory.v1' || item.readOnly !== true || item.taskId !== original.taskId ||
+      item.runId !== original.runId || item.epoch !== original.epoch || item.operationId !== original.operationId ||
+      item.deviceId !== original.deviceId || item.instanceId !== original.instanceId ||
+      !Number.isSafeInteger(item.recordedAt) || item.recordedAt <= 0 || item.recordedAt > 8_640_000_000_000_000 ||
+      !Number.isSafeInteger(item.returned) || item.returned < 0 || item.returned > 200 || typeof item.truncated !== 'boolean' ||
+      !Array.isArray(item.entries) || item.entries.length !== Math.min(8, item.returned)) throw new Error(invalid);
+  const entries = item.entries.map((value: unknown): DirectoryEntry => {
+    const row = record(value);
+    if (!row || typeof row.name !== 'string' || !row.name || [...row.name].length > 255 || /[/\\]/.test(row.name) ||
+        typeof row.kind !== 'string' || !Object.hasOwn(directoryKinds, row.kind)) throw new Error(invalid);
+    return { name: row.name, kind: row.kind as DirectoryEntry['kind'] };
+  });
+  return { entries, returned: item.returned, truncated: item.truncated, recordedAt: item.recordedAt };
+}
+
+/** Historical readback beside the exact ended Work. It cannot restore the file chooser or start a new list. */
+function OriginalWindowsDirectoryRead({ lost, documentEpoch }: { lost: LostWindowsDirectory; documentEpoch: number }) {
+  const [received, setReceived] = useState<DirectoryReadback | null>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const active = useRef(true), request = useRef(0), reading = useRef(false);
+  const clear = () => { request.current++; reading.current = false; setBusy(false); setReceived(null); setError(''); };
+  useEffect(() => {
+    active.current = true;
+    const hide = () => { if (document.hidden) clear(); };
+    document.addEventListener('visibilitychange', hide);
+    window.addEventListener('pagehide', clear);
+    return () => {
+      active.current = false; request.current++;
+      document.removeEventListener('visibilitychange', hide);
+      window.removeEventListener('pagehide', clear);
+    };
+  }, []);
+  const { original } = lost;
+  const current = () => active.current && !document.hidden && bridge.getDocumentEpoch() === documentEpoch &&
+    lostWindowsDirectoryAt(bridge.getState(), original.taskId)?.key === lost.key;
+  const observe = async () => {
+    if (reading.current || !current()) return;
+    reading.current = true; const sequence = ++request.current;
+    setBusy(true); setError(''); setReceived(null);
+    const owns = () => request.current === sequence && current();
+    try {
+      const { taskId, runId, epoch, operationId } = original;
+      const value = await bridge.command('devices.queryHistory', { originalWindowsDirectory: true, taskId, runId, epoch, operationId });
+      if (owns()) setReceived(directorySnapshotOf(value, original));
+    } catch {
+      if (owns()) setError('仍未核对到原电脑保存的目录。请确认是同一台电脑的连接；不能据此判断目录是否为空。');
+    } finally {
+      if (active.current && request.current === sequence) { reading.current = false; setBusy(false); }
+    }
+  };
+  if (!current()) return null;
+  return <section className="pw-operation-entry" aria-label="原电脑目录只读回执" aria-busy={busy}>
+    {received ? <>
+      <h4>当时列出的目录</h4>
+      <p className="pw-muted">原电脑记录于 {new Date(received.recordedAt).toLocaleString('zh-CN')}。这是历史回执，不是当前目录。</p>
+      {received.returned === 0 ? <p>这份原回执没有返回目录项。</p> :
+        <ul>{received.entries.map((row, index) => <li key={index}><bdi>{row.name}</bdi> · {directoryKinds[row.kind]}</li>)}</ul>}
+      {received.entries.length < received.returned && <p>当时返回 {received.returned} 项，这里只显示前 8 项。</p>}
+      {received.truncated && <p>电脑当时只返回了部分目录。</p>}
+      <Button variant="ghost" onClick={clear}>关闭目录回执</Button>
+    </> : <>
+      <Button variant="secondary" disabled={busy} onClick={() => void observe()}>
+        {busy ? '正在向原电脑核对目录回执…' : '核对当时列出的目录'}
+      </Button>
+      <p className="pw-muted">只查询原电脑保留的回执，不重新列目录、不读取文件。</p>
+      {error && <p role="status">{error}</p>}
+    </>}
+  </section>;
 }
 
 function OriginalWindowsFileChoices({ files, documentEpoch, sourceRevision, checkOverview }: {

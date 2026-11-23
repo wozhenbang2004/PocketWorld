@@ -5,6 +5,7 @@ import dev.pocketengine.features.devices.transport.DeviceArtifactTransfer;
 import dev.pocketengine.store.TaskStore;
 import dev.pocketengine.store.TaskStoreDeviceTasks;
 import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Explicit local owner history UI, never a model tool or an execution-scope fallback. */
@@ -38,11 +39,22 @@ public final class NativeDeviceTaskHistoryHost {
         return value;
     }
 
-    private static JSONObject windowsTextSnapshot(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original, DeviceCapabilityPort.Reply reply,
-                                                  String knownJob)throws Exception {
+    /** A dropped first result may be looked up; this never makes the closed picker live again. */
+    static JSONObject readOriginalWindowsDirectory(TaskStore tasks,DeviceIdentity.LocalIdentity local,String task,String run,int epoch,String operation,
+                                                  DeviceArtifactTransfer.Current current,WindowsTextRead reader)throws Exception {
+        current.require();
+        var original=tasks.deviceTasks().ownerWindowsLostDirectoryEvidence(task,run,epoch,operation,local.deviceId());
+        var reply=reader.read(original,current);
+        current.require();
+        JSONObject value=windowsDirectorySnapshot(original,reply,original.requireCurrentJob());
+        current.require();
+        return value;
+    }
+
+    private static JSONObject checkedWindowsReceipt(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original,DeviceCapabilityPort.Reply reply,
+                                                    String knownJob,String unavailable)throws Exception {
         var wire=original.wire(); var target=original.target();
         JSONObject response=DeviceProtocol.validateMessage(reply.response());
-        String unavailable="原电脑没有提供可核对的原短文本，不能据此判断文件没有内容。";
         if(!target.deviceId().equals(reply.peer().deviceId())||!target.certificateFingerprint().equals(reply.peer().certificateFingerprint())
                 ||!"DeviceResponse".equals(response.opt("messageType"))||!"operation.get".equals(response.opt("method"))
                 ||!target.deviceId().equals(response.opt("executorDeviceId"))||!target.instanceId().equals(response.opt("instanceId")))
@@ -58,7 +70,15 @@ public final class NativeDeviceTaskHistoryHost {
             if(!DeviceProtocol.canonical(frozen.opt(field)).equals(DeviceProtocol.canonical(audience.opt(field))))throw new SecurityException(unavailable);
         if(!wire.runId().equals(audience.opt("requestRunId"))||wire.executorEpoch()!=audience.optLong("requestExecutorEpoch")
                 ||!DeviceProtocol.resourceEquals(wire.resourceBinding(),audience.getJSONObject("resourceBinding")))throw new SecurityException(unavailable);
+        return receipt;
+    }
 
+    private static JSONObject windowsTextSnapshot(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original, DeviceCapabilityPort.Reply reply,
+                                                  String knownJob)throws Exception {
+        var wire=original.wire(); var target=original.target();
+        String unavailable="原电脑没有提供可核对的原短文本，不能据此判断文件没有内容。";
+        JSONObject receipt=checkedWindowsReceipt(original,reply,knownJob,unavailable);
+        String job=receipt.getString("jobId");
         JSONObject payload=receipt.getJSONObject("payload"), snapshot=payload.optJSONObject("windowsReadReceipt"), data=payload.optJSONObject("nativeToolResult");
         String path=wire.toolInvocation().arguments().getString("path");
         if(snapshot==null||data==null||!"completed".equals(payload.opt("status"))||!"device_tool".equals(payload.opt("worker"))
@@ -88,12 +108,54 @@ public final class NativeDeviceTaskHistoryHost {
                 .put("recordedAt",at).put("text",text);
     }
 
-    private static String displayText(String original) {
-        // Same plain-text representation as the Windows retained snapshot, not a new file read.
+    private static JSONObject windowsDirectorySnapshot(TaskStoreDeviceTasks.OwnerWindowsTextEvidence original,DeviceCapabilityPort.Reply reply,
+                                                       String knownJob)throws Exception {
+        var wire=original.wire(); var target=original.target();
+        String unavailable="仍未核对到原电脑保存的目录回执，不能判断目录是否为空。";
+        JSONObject receipt=checkedWindowsReceipt(original,reply,knownJob,unavailable);
+        JSONObject audience=receipt.getJSONObject("audience"), payload=receipt.getJSONObject("payload");
+        JSONObject snapshot=payload.optJSONObject("windowsReadReceipt"), data=payload.optJSONObject("nativeToolResult");
+        String job=receipt.getString("jobId"), folder=wire.toolInvocation().arguments().getString("path");
+        if(!"operation".equals(audience.opt("kind"))||!wire.operationId().equals(audience.opt("objectId"))||audience.has("sourceShareId")||
+                snapshot==null||data==null||!"completed".equals(payload.opt("status"))||!"device_tool".equals(payload.opt("worker"))||
+                !Boolean.TRUE.equals(payload.opt("historicalReadOnly"))||!Boolean.FALSE.equals(payload.opt("taskControl"))||
+                !wire.originDeviceId().equals(payload.opt("originalOriginDeviceId"))||wire.authorizationEpoch()!=payload.optLong("acceptedAuthorizationEpoch")||
+                !"windows-workspace-read-receipt-v1".equals(snapshot.opt("profile"))||!OwnerWindowsWorkspaceRead.LIST.equals(snapshot.opt("tool"))||
+                !"directory_snapshot".equals(snapshot.opt("phase"))||!Boolean.FALSE.equals(snapshot.opt("readAgain"))||
+                !job.equals(snapshot.opt("jobId"))||!job.equals(payload.opt("id"))||
+                !wire.operationId().equals(snapshot.opt("operationId"))||!wire.operationId().equals(payload.opt("operationId"))||
+                !wire.argumentsDigest().equals(snapshot.opt("argumentsDigest"))||
+                !wire.resourceBinding().getString("environmentId").equals(snapshot.opt("environmentId"))||
+                !DeviceProtocol.sha256(folder.getBytes(StandardCharsets.UTF_8)).equals(snapshot.opt("pathDigest"))||
+                !plainWindowsName(folder).equals(snapshot.opt("path"))||
+                OwnerWindowsWorkspaceRead.directoryBody(data,folder).state()!=OwnerWindowsWorkspaceRead.Body.COMPLETE)
+            throw new SecurityException(unavailable);
+        long at=DeviceProtocol.integer(snapshot.opt("updatedAt"),"原目录记录时间",receipt.getLong("acceptedAt"),8_640_000_000_000_000L);
+        DeviceProtocol.integer(snapshot.opt("revision"),"原目录记录版本",1,DeviceProtocol.MAX_SAFE_INTEGER);
+        JSONArray files=data.getJSONArray("files"), entries=snapshot.optJSONArray("entries"), safe=new JSONArray();
+        long returned=DeviceProtocol.integer(snapshot.opt("returned"),"原目录返回数量",0,200);
+        if(entries==null||returned!=files.length()||entries.length()!=Math.min(8,files.length())||
+                !data.get("truncated").equals(snapshot.opt("sourceTruncated")))throw new SecurityException(unavailable);
+        for(int i=0;i<entries.length();i++){
+            JSONObject held=files.getJSONObject(i),out=entries.getJSONObject(i);
+            String name=plainWindowsName(held.getString("name")),kind=held.getString("kind");
+            if(!name.equals(out.opt("name"))||!kind.equals(out.opt("kind")))throw new SecurityException(unavailable);
+            safe.put(new JSONObject().put("name",name).put("kind",kind));
+        }
+        return new JSONObject().put("format","pocketworld.original-windows-directory.v1").put("readOnly",true)
+                .put("taskId",wire.parentTaskId()).put("runId",wire.runId()).put("epoch",wire.executorEpoch()).put("operationId",wire.operationId())
+                .put("deviceId",target.deviceId()).put("instanceId",target.instanceId()).put("recordedAt",at)
+                .put("returned",returned).put("truncated",data.getBoolean("truncated")).put("entries",safe);
+    }
+
+    private static String plainWindowsName(String value){return displayWindows(value,false);}
+    private static String displayText(String original){return displayWindows(original.replace("\r\n","\n").replace('\r','\n'),true);}
+    private static String displayWindows(String original,boolean lines) {
+        // Same plain representation as the Windows retained snapshot, not a new file or directory read.
         StringBuilder out=new StringBuilder();
-        original.replace("\r\n","\n").replace('\r','\n').codePoints().forEach(cp->{
+        original.codePoints().forEach(cp->{
             int type=Character.getType(cp);
-            if(cp!='\n'&&cp!='\t'&&(type==Character.CONTROL||type==Character.FORMAT||type==Character.SURROGATE
+            if((!lines||cp!='\n'&&cp!='\t')&&(type==Character.CONTROL||type==Character.FORMAT||type==Character.SURROGATE
                     ||type==Character.PRIVATE_USE||type==Character.UNASSIGNED))out.append('\uFFFD');
             else out.appendCodePoint(cp);
         });

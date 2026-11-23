@@ -245,6 +245,9 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         default JSONObject readOriginalWindowsText(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current current)throws Exception {
             throw new SecurityException("此宿主未开放原电脑文本读取。");
         }
+        default JSONObject readOriginalWindowsDirectory(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current current)throws Exception {
+            throw new SecurityException("此宿主未开放原电脑目录回执读取。");
+        }
         default JSONObject readOriginalSentPhoneResult(String task,String run,int epoch,String operation,String child,String childRun,
                                                       long childEpoch,DeviceArtifactTransfer.Current current)throws Exception {
             throw new SecurityException("此宿主未开放原手机文字成果读取。");
@@ -657,6 +660,11 @@ public final class NativeDeviceWorkspaceHost implements AutoCloseable {
         public JSONObject readOriginalWindowsText(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current ownerCurrent)throws Exception {
             DeviceArtifactTransfer.Current bound=()->{current();ownerCurrent.require();};
             bound.require(); JSONObject value=control.readOriginalWindowsText(task,run,epoch,operation,bound);
+            bound.require(); return copy(value);
+        }
+        public JSONObject readOriginalWindowsDirectory(String task,String run,int epoch,String operation,DeviceArtifactTransfer.Current ownerCurrent)throws Exception {
+            DeviceArtifactTransfer.Current bound=()->{current();ownerCurrent.require();};
+            bound.require(); JSONObject value=control.readOriginalWindowsDirectory(task,run,epoch,operation,bound);
             bound.require(); return copy(value);
         }
         public JSONObject readOriginalSentPhoneResult(String task,String run,int epoch,String operation,String child,String childRun,

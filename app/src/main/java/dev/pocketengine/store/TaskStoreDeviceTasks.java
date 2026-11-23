@@ -550,15 +550,17 @@ public final class TaskStoreDeviceTasks {
         private final String id, run, operation, here;
         private final int epoch;
         private final String directory;
+        private final boolean lostDirectory;
         private final WindowsTextClaim selected;
-        private OwnerWindowsTextEvidence(String id,String run,int epoch,String operation,String here,WindowsTextClaim selected,String directory) {
-            this.id=id; this.run=run; this.epoch=epoch; this.operation=operation; this.here=here; this.selected=selected;this.directory=directory;
+        private OwnerWindowsTextEvidence(String id,String run,int epoch,String operation,String here,WindowsTextClaim selected,String directory,boolean lostDirectory) {
+            this.id=id; this.run=run; this.epoch=epoch; this.operation=operation; this.here=here;
+            this.selected=selected;this.directory=directory;this.lostDirectory=lostDirectory;
         }
         public DirectedWorkspaceTarget target(){return selected.target();}
         public DeviceTaskEnvelope wire(){return selected.wire();}
         /** If the genuine callback settled meanwhile, its original per-operation job must match too. */
         public String requireCurrentJob() throws Exception {
-            WindowsTextClaim live=windowsTextClaim(id,run,epoch,operation,here,directory);
+            WindowsTextClaim live=windowsTextClaim(id,run,epoch,operation,here,directory,lostDirectory);
             if(!selected.target().equals(live.target())||!selected.wireHash().equals(live.wireHash())
                     ||!selected.preparation().equals(live.preparation())
                     ||!selected.knownJob().isEmpty()&&!selected.knownJob().equals(live.knownJob()))
@@ -568,17 +570,22 @@ public final class TaskStoreDeviceTasks {
     }
     public OwnerWindowsTextEvidence ownerWindowsTextEvidence(String id,String run,int epoch,String operation,String here)throws Exception {
         DeviceProtocol.identifier(id,"taskId"); DeviceProtocol.identifier(run,"runId"); DeviceProtocol.identifier(operation,"operationId");
-        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,null),null);
+        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,null,false),null,false);
     }
     OwnerWindowsTextEvidence ownerWindowsDirectoryEvidence(String id,String run,int epoch,String operation,String here,String reviewedDirectory)throws Exception {
         DeviceProtocol.identifier(id,"taskId"); DeviceProtocol.identifier(run,"runId"); DeviceProtocol.identifier(operation,"operationId");
         String directory=OwnerWindowsWorkspaceRead.directoryPath(reviewedDirectory);
-        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,directory),directory);
+        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,directory,false),directory,false);
     }
-    private WindowsTextClaim windowsTextClaim(String id,String run,int epoch,String operation,String here,String directory)throws Exception {
+    /** Observe a single closed picker whose original directory write was claimed but acceptance never reached this ledger. */
+    public OwnerWindowsTextEvidence ownerWindowsLostDirectoryEvidence(String id,String run,int epoch,String operation,String here)throws Exception {
+        DeviceProtocol.identifier(id,"taskId"); DeviceProtocol.identifier(run,"runId"); DeviceProtocol.identifier(operation,"operationId");
+        return new OwnerWindowsTextEvidence(id,run,epoch,operation,here,windowsTextClaim(id,run,epoch,operation,here,null,true),null,true);
+    }
+    private WindowsTextClaim windowsTextClaim(String id,String run,int epoch,String operation,String here,String directory,boolean lostDirectory)throws Exception {
         synchronized(owner){
-            // Null exclusively means a file-read proof; the empty string is a real directory choice.
-            boolean list=directory!=null;
+            // Empty is a real directory choice. A lost directory takes its literal from the original sealed wire.
+            boolean list=directory!=null||lostDirectory;
             JSONObject parent=task(id), marker=parent.optJSONObject("ownerDeviceWork");
             if(!id.equals(parent.opt("id"))||!"owner".equals(parent.opt("actorId"))||!"private".equals(parent.opt("spaceId"))
                     ||parent.has("origin")||!"assistant".equals(parent.opt("kind"))||!"capabilities".equals(parent.opt("executionMode"))
@@ -591,9 +598,21 @@ public final class TaskStoreDeviceTasks {
                 throw new SecurityException("请回到原私人电脑工作的同一次执行，未联系设备。");
             DirectedWorkspaceTarget target=DirectedWorkspaceTarget.fromTask(parent);
             if(target==null)throw new SecurityException("原工作没有固定电脑，未联系设备。");
+            String lostUnavailable="未在本机核对到这次未确认的原目录派发，未联系电脑。";
+            if(lostDirectory){
+                JSONObject picker=parent.getJSONObject(OwnerWindowsWorkspaceRead.PICKER);
+                if(epoch!=1||!"reconciling".equals(parent.opt("status"))||!"ended".equals(picker.opt("phase"))||
+                        picker.has("directoryOperationId")||parent.has("parentTaskId")||parent.has("developmentContext"))
+                    throw new SecurityException(lostUnavailable);
+                // The visible operation ID only checks the native selection, not an arbitrary history row or path.
+                try(Cursor only=db.rawQuery("SELECT operation_id FROM operations WHERE task_id=? AND run_id=? LIMIT 2",new String[]{id,run})){
+                    if(!only.moveToFirst()||!operation.equals(only.getString(0))||only.moveToNext())
+                        throw new SecurityException(lostUnavailable);
+                }
+            }
             // Per operation, not the allocation's first child: one session can list and read multiple files.
             String query="SELECT o.state,r.epoch,b.target_device_id,l.allocation_id,l.intent_digest,l.wire_digest,l.wire_json,"+
-                    "CASE WHEN length(CAST(o.receipt AS BLOB))<=131072 THEN o.receipt END"+
+                    "CASE WHEN length(CAST(o.receipt AS BLOB))<=131072 THEN o.receipt END,r.status"+
                     " FROM operations o JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id"+
                     " JOIN device_child_links l ON l.parent_task_id=o.task_id AND l.parent_operation_id=o.operation_id"+
                     " JOIN device_child_budget b ON b.parent_task_id=l.parent_task_id AND b.allocation_id=l.allocation_id"+
@@ -605,6 +624,11 @@ public final class TaskStoreDeviceTasks {
                 byte[] raw=row.getString(6).getBytes(StandardCharsets.UTF_8);
                 DeviceTaskEnvelope wire=DeviceProtocol.parseRequest(raw);
                 JSONObject frozen=wire.json(), journal=new JSONObject(row.getString(7)), send=journal.optJSONObject("nativeDeviceSend");
+                if(lostDirectory&&(!"unknown".equals(row.getString(0))||!"reconciling".equals(row.getString(8))||
+                        !"owner_windows_list_unknown".equals(journal.opt("code"))||journal.opt("accepted")!=JSONObject.NULL||
+                        !Boolean.FALSE.equals(journal.opt("ok"))||!Boolean.TRUE.equals(journal.opt("requiresReconciliation"))||
+                        !Boolean.FALSE.equals(journal.opt("retrySubmitted"))||journal.has("nativeDeviceAcceptedBinding")))
+                    throw new SecurityException(lostUnavailable);
                 String hash=DeviceProtocol.sha256(raw), allocation=row.getString(3), digest=wire.argumentsDigest();
                 if(send==null||!"pocketworld.native-device-send.v1".equals(send.opt("format"))||!"write_claimed".equals(send.opt("state"))
                         ||send.optLong("claimedAt")<=0||!hash.equals(send.opt("wireSha256"))||!allocation.equals(send.opt("allocationId"))
@@ -619,9 +643,10 @@ public final class TaskStoreDeviceTasks {
                 var tool=wire.toolInvocation(); Object path=tool.arguments().opt("path");
                 if(!allocation.equals(DeviceProtocol.allocationId(id,target.deviceId(),resource,"tool_session",null))
                         ||!(list?OwnerWindowsWorkspaceRead.LIST:OwnerWindowsWorkspaceRead.READ).equals(tool.toolName())||!"read".equals(tool.effect())
-                        ||!(path instanceof String relative)||relative.length()>2048||(list?!directory.equals(relative):relative.isEmpty())||
+                        ||!(path instanceof String relative)||relative.length()>2048||(list?!lostDirectory&&!directory.equals(relative):relative.isEmpty())||
                         tool.arguments().length()!=1)
                     throw new SecurityException(unavailable);
+                if(lostDirectory)OwnerWindowsWorkspaceRead.directoryPath(relative);
                 String job="";
                 if(journal.has("nativeDeviceAcceptedBinding")){
                     JSONObject actual=journal.getJSONObject("nativeDeviceAcceptedBinding"); job=actual.optString("jobId");

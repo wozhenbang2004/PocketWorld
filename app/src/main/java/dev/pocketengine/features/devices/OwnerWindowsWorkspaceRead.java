@@ -107,10 +107,14 @@ public final class OwnerWindowsWorkspaceRead {
             String reviewedDirectory)throws Exception {
         if(!matchesReceipt(saved,target,route,task,run,operation))return noDirectory(Body.UNVERIFIED);
         if(Set.of("failed","rejected","cancelled").contains(saved.optString("status")))return noDirectory(Body.REJECTED);
-        String folder=directoryPath(reviewedDirectory),prefix=folder.isEmpty()?"":folder+"/";
-        JSONObject data=saved.optJSONObject("payload");
-        if(!"succeeded".equals(saved.opt("status"))||!"reported".equals(saved.opt("effectState"))||data==null||
-                !DeviceProtocol.objectKeys(data).equals(Set.of("path","directoryIdentity","truncated","files"))||
+        String folder=directoryPath(reviewedDirectory);
+        if(!"succeeded".equals(saved.opt("status"))||!"reported".equals(saved.opt("effectState")))return noDirectory(Body.UNVERIFIED);
+        return directoryBody(saved.optJSONObject("payload"),folder);
+    }
+    /** Validate the exact retained list result using its already-checked original literal. */
+    static Directory directoryBody(JSONObject data,String folder)throws Exception {
+        String prefix=folder.isEmpty()?"":folder+"/";
+        if(data==null||!DeviceProtocol.objectKeys(data).equals(Set.of("path","directoryIdentity","truncated","files"))||
                 !folder.equals(data.opt("path"))||!(data.opt("truncated") instanceof Boolean)||
                 DeviceProtocol.canonicalBytes(data).length>24576)return noDirectory(Body.UNVERIFIED);
         JSONArray identity=data.optJSONArray("directoryIdentity"),files=data.optJSONArray("files");

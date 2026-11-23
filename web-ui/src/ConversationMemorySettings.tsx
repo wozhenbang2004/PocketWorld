@@ -26,9 +26,9 @@ function memoryScope(controls:ConversationMemoryControls) {
 }
 
 /** Independent, owner-reviewed choices on the same original header. This sheet owns no saved mode. */
-export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,registerBack,showReferenceShelf=true,defaults}:{
+export function ConversationMemorySettings({conversationId,controls,composer,isOpen,onClose,onChanged,onManage,onRemember,registerBack,showReferenceShelf=true,defaults}:{
   conversationId:string;controls:ConversationMemoryControls|null;composer?:Record<string,any>;isOpen:boolean;
-  onClose:()=>void;onChanged:(value:ConversationMemoryControls|null)=>void;onManage:()=>void;
+  onClose:()=>void;onChanged:(value:ConversationMemoryControls|null)=>void;onManage:()=>void;onRemember?:()=>Promise<void>;
   registerBack:(handler:(()=>boolean)|null)=>void;showReferenceShelf?:boolean;
   defaults?:{holder:ChatDefaultHolder;capture?:()=>ChatDefaultOrigin|null};
 }) {
@@ -117,6 +117,10 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
       {single.confirmed===false&&!single.saving&&!single.pending&&<Button variant="secondary" disabled={pending} onClick={()=>void setSingle(single.excluded===true)}>重新保存本条选择</Button>}</>}
     {showReferenceShelf&&canShelf&&<Button variant="secondary" disabled={pending||single.pending} onClick={()=>setShelf(shelfVisit)}>本对话备忘</Button>}
     {notice&&<p role="status">{notice}</p>}
+    {onRemember&&<Button variant="secondary" disabled={pending} onClick={()=>{
+      setError('');
+      void onRemember().catch(failure=>{if(alive.current)setError(failure instanceof Error?failure.message:'原记忆表单未打开。');});
+    }}>记住一件事</Button>}
     <div className="pw-action-row"><Button variant="ghost" disabled={pending} onClick={()=>{void load();}}>读取当前设置</Button><Button variant="ghost" disabled={pending} onClick={()=>{close();onManage();}}>管理我的记忆</Button></div>
   </SettingsDialog>;
 }

@@ -342,6 +342,13 @@ internal class PocketWebBridge(
     @Volatile private var pauseReadSerial = 0L
     private var taskReturnSection: String? = null
     private var workspaceResumeRevision = 0L
+    // UI exit ownership only. Carry neither memory data nor a private read/write window through Tasks.
+    private data class ManualMemoryProfileExit(val visit: String, val document: String, val suspendedTask: String? = null)
+    private var manualMemoryProfileExit: ManualMemoryProfileExit? = null
+    private fun activeManualMemoryProfileExit() = manualMemoryProfileExit?.takeIf {
+        it.document == documentId && it.suspendedTask == null && section == "profile" && taskViewId == null &&
+            taskReturnSection == null && controller.webPrivateOwnerVisible()
+    }
     private var taskReviewGeneration = 0L
     @Volatile private var teamReportReviewGeneration = 0L
     @Volatile private var teamReportSelectionGeneration = 0L
@@ -675,7 +682,7 @@ internal class PocketWebBridge(
         section?.takeIf { it == "archives" || it == "storage" }?.let(dataPages::close)
         section?.let { if (it == "memory") controller.leaveOwnerDomain("memoryReview") else if (it in ownerDomains) controller.leaveOwnerDomain(it) }
         deviceWindow?.close(); deviceWindow = null
-        section = null; taskReturnSection = null; taskViewId = null
+        section = null; taskReturnSection = null; taskViewId = null; manualMemoryProfileExit = null
         taskPage?.let(controller::leaveGroupTask); taskPage = null
         controller.closeNativeInferenceHistory()
         removedProjectFiles.clear()
@@ -957,7 +964,7 @@ internal class PocketWebBridge(
             // A replacement document did not choose this project namespace. Normal backgrounding is not an exit.
             if (section == "memory" || section == "memoryReview") { controller.leaveOwnerDomain("memoryReview"); section = null }
             if (documentId != null) controller.clearReminderNotice()
-            documentId = null; taskReturnSection = null
+            documentId = null; taskReturnSection = null; manualMemoryProfileExit = null
         }
     }
 
@@ -1160,6 +1167,7 @@ internal class PocketWebBridge(
             .put("view", JSONObject().put("section", section ?: JSONObject.NULL).put("resumeRevision", workspaceResumeRevision).put("taskId", taskViewId ?: JSONObject.NULL).also { view ->
                 if (section == null) taskViewId?.let { task -> controller.heldPrivatePhoneImage(task)?.let { view.put("heldPrivatePhoneImage", it.descriptor()) } }
                 publishedMainPausePageReturn?.let { view.put("mainPausePageReturn", it.view()) }
+                activeManualMemoryProfileExit()?.let { view.put("manualMemoryVisit", it.visit) }
             })
             .put("phoneDraft", phoneComposer.snapshot())
         val bounds = phoneObservationExpiry.take(snapshot)
@@ -2661,8 +2669,8 @@ internal class PocketWebBridge(
                 }
                 return
             }
-            if (action == "devices.queryHistory" && args.has("originalWindowsText")) {
-                readOriginalWindowsText(id, args)
+            if (action == "devices.queryHistory" && (args.has("originalWindowsText") || args.has("originalWindowsDirectory"))) {
+                readOriginalWindowsReceipt(id, args, args.has("originalWindowsDirectory"))
                 return
             }
             if (action in PocketWebReceivedTextResult.COMMANDS) {
@@ -3426,6 +3434,12 @@ internal class PocketWebBridge(
                 publishState()
                 return
             }
+            if ((action == "connections.enter" || action == "connections.leave") && args.has("manualMemoryVisit")) {
+                val result = manualMemoryProfileTransition(action, args)
+                complete(id, result, null, retainValue = false, replayHint = "请核对当前记忆页面，没有重放打开或关闭。")
+                publishState()
+                return
+            }
             val result = dispatch(action, args)
             val firstRegistration = result?.has("firstChatRegistration") == true
             complete(id, result ?: accepted(), null, retainValue = !firstRegistration,
@@ -3448,37 +3462,51 @@ internal class PocketWebBridge(
     }
 
     /** The Work variant of the existing receipt read accepts no generic history or stop handle. */
-    private fun readOriginalWindowsText(id: String, args: JSONObject) {
-        checkedPayload(args, setOf("originalWindowsText", "taskId", "runId", "epoch", "operationId"))
-        require(requiredBoolean(args, "originalWindowsText"))
+    private fun readOriginalWindowsReceipt(id: String, args: JSONObject, directory: Boolean) {
+        val flag = if (directory) "originalWindowsDirectory" else "originalWindowsText"
+        checkedPayload(args, setOf(flag, "taskId", "runId", "epoch", "operationId"))
+        require(requiredBoolean(args, flag))
         val task = requiredString(args, "taskId"); val run = requiredString(args, "runId")
         val epoch = requiredInt(args, "epoch"); val operation = requiredString(args, "operationId")
         val original = requireTask(task).raw
         val target = requireNotNull(DirectedWorkspaceTarget.fromTask(original)) { "原工作未固定电脑。" }
         val window = captureWindow(); val document = requireNotNull(documentId)
-        val closedMessage = "原工作窗口或执行已变化，未显示原文本。"
+        val closedMessage = if (directory) "原工作窗口或执行已变化，未显示原目录。" else "原工作窗口或执行已变化，未显示原文本。"
         fun current(): Boolean {
             if (closed || documentId != document || section != null || taskViewId != task || !acceptsWindow(window) || !controller.webPrivateOwnerVisible()) return false
             val raw = controller.state.tasks.firstOrNull { it.id == task }?.raw ?: return false
+            if (directory) {
+                val picker = raw.optJSONObject("ownerWindowsWorkspacePicker") ?: return false
+                if (epoch != 1 || raw.opt("status") != "reconciling" || raw.opt("taskProjection") != "detail_window" ||
+                    raw.opt("auditBodyIncluded") != true || raw.opt("taskCoreReadLimited") != false || raw.opt("ownerWindowsWorkspaceRead") != true ||
+                    picker.opt("format") != "pocketworld.owner-windows-workspace-picker.v1" || picker.opt("phase") != "ended" ||
+                    picker.has("directoryOperationId")) return false
+            }
             return raw.opt("id") == task && raw.opt("runId") == run && epoch > 0 && raw.optInt("coordinatorEpoch") == epoch &&
                 raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" && !raw.has("origin") && raw.opt("contextAvailable") != false &&
                 !raw.optBoolean("contextWithdrawn") && !raw.optBoolean("sourceCurrentReadRequired") && raw.opt("taskProjection") != "source_unavailable" &&
                 runCatching { DirectedWorkspaceTarget.fromTask(raw) == target }.getOrDefault(false)
         }
         require(current()) { closedMessage }
-        check(readingOriginalWindowsText.compareAndSet(false, true)) { "正在核对另一份原文本，请等这次回执。" }
+        check(readingOriginalWindowsText.compareAndSet(false, true)) {
+            if (directory) "正在核对另一份原电脑回执，请稍候。" else "正在核对另一份原文本，请等这次回执。"
+        }
         try {
             controller.runDeviceWorkspaceWork(Runnable {
                 val result = runCatching {
                     check(current()) { closedMessage }
                     val host = controller.nativeDeviceWorkspace() ?: error("本机设备回执暂不可用。")
-                    host.openOwnerWindow().use { it.readOriginalWindowsText(task, run, epoch, operation) { check(current()) { closedMessage } } }
+                    host.openOwnerWindow().use {
+                        val ownerCurrent = dev.pocketengine.features.devices.transport.DeviceArtifactTransfer.Current { check(current()) { closedMessage } }
+                        if (directory) it.readOriginalWindowsDirectory(task, run, epoch, operation, ownerCurrent)
+                        else it.readOriginalWindowsText(task, run, epoch, operation, ownerCurrent)
+                    }
                 }
                 main.post {
                     readingOriginalWindowsText.set(false)
                     if (!current()) complete(id, null, closedMessage, retainValue = false)
                     else result.fold({ complete(id, it, null, retainValue = false) },
-                        { complete(id, null, it.message ?: "没有取得可核对的原文本。", retainValue = false) })
+                        { complete(id, null, it.message ?: if (directory) "没有取得可核对的原目录回执。" else "没有取得可核对的原文本。", retainValue = false) })
                 }
             })
         } catch (failure: Exception) {
@@ -3752,6 +3780,7 @@ internal class PocketWebBridge(
                     controller.projectPackages.retireDirectViteExport()
                     controller.projectFileImports.retireSuppliedLock()
                     controller.closeOriginalReminderHistory()
+                    manualMemoryProfileExit = null
                     documentId = nextDocument; background.clear(); remoteInbox.clear(); phoneViewer.clear(); phoneComposer.documentChanged(); taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
                     controller.voiceInputTypeChanged(phoneComposer.intent)
                     if (reminderNotificationWindow()) readReminderNotifications(afterSettings = false)
@@ -4220,6 +4249,7 @@ internal class PocketWebBridge(
             "connections.leave" -> {
                 checkedPayload(args, setOf("section"))
                 val previous = requiredString(args, "section")
+                if (previous == "profile" && manualMemoryProfileExit != null) return accepted()
                 if (taskReturnSection == previous) taskReturnSection = null
                 if (section == previous) { leaveConnection(); reviews.clear() }
             }
@@ -4771,9 +4801,15 @@ internal class PocketWebBridge(
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
         fun enterWindow() {
+            val manualParent = manualMemoryProfileExit?.takeIf {
+                returnSection == "profile" && it.document == documentId &&
+                    (if (it.suspendedTask == null) section == "profile" && taskViewId == null
+                    else section == null && taskViewId == it.suspendedTask && taskReturnSection == "profile")
+            }
             leaveTask(); leaveConnection(); reviews.clear()
             taskReturnSection = returnSection
             taskViewId = taskId
+            manualMemoryProfileExit = manualParent?.copy(suspendedTask = taskId)
             entered = true
         }
         // A recorded input ACK does not prove its task is still on the same run.
@@ -4902,12 +4938,47 @@ internal class PocketWebBridge(
     }
 
     private fun restoreTaskWorkspace() {
-        val original = taskReturnSection; taskReturnSection = null
+        val original = taskReturnSection
+        val manualParent = manualMemoryProfileExit?.takeIf {
+            original == "profile" && it.document == documentId && it.suspendedTask != null && it.suspendedTask == taskViewId
+        }
+        if (manualMemoryProfileExit?.suspendedTask != null) manualMemoryProfileExit = null
+        taskReturnSection = null
         leaveTask(); reviews.clear()
         if (original != null) {
             workspaceResumeRevision++
             enterConnection(original)
+            manualMemoryProfileExit = manualParent?.copy(suspendedTask = null)
         }
+    }
+    private fun manualMemoryProfileTransition(action: String, args: JSONObject): JSONObject {
+        val visit = requiredString(args, "manualMemoryVisit")
+        val document = requireNotNull(documentId)
+        require(requiredString(args, "section") == "profile" && visit.length == 36 &&
+            runCatching { UUID.fromString(visit).toString() == visit }.getOrDefault(false))
+        val receipt = accepted().put("manualMemoryVisit", visit)
+        if (action == "connections.leave") {
+            checkedPayload(args, setOf("section", "manualMemoryVisit"))
+            if (activeManualMemoryProfileExit()?.visit != visit) return receipt.put("closed", false)
+            leaveConnection(); reviews.clear()
+            return receipt.put("closed", true)
+        }
+        checkedPayload(args, setOf("section", "manualMemoryVisit", "conversationId", "draftEpoch", "draftRevision", "resumeRevision"))
+        val conversation = requiredString(args, "conversationId")
+        val epoch = requiredInt(args, "draftEpoch"); val revision = requiredLong(args, "draftRevision")
+        val state = controller.state
+        check(section == null && taskViewId == null && taskReturnSection == null && manualMemoryProfileExit == null &&
+            workspaceResumeRevision == requiredLong(args, "resumeRevision") && controller.webPrivateOwnerVisible() &&
+            !phoneComposer.intent && !controller.hasChannelPhoneOrigin && controller.conversationReader == null && controller.queuedInputsPage == null &&
+            state.filePath == null && !state.chatAttachmentPickerOpen && !state.attachmentImporting &&
+            !state.chatSubmitting && !state.phoneSubmitting && !controller.attachmentOutcomes.state.open &&
+            state.conversationId == conversation && epoch >= 0 && revision > 0 && controller.composerViewEpoch == epoch &&
+            controller.composerDraft?.let { it.key == "conversation:$conversation" && it.conversationId == conversation && it.revision == revision } == true) {
+            "请回到原私人对话再打开记忆表单"
+        }
+        enterConnection("profile")
+        manualMemoryProfileExit = ManualMemoryProfileExit(visit, document)
+        return receipt.put("opened", true)
     }
     private fun enterConnection(next: String) {
         leaveTask(); leaveConnection(); reviews.clear(); section = next
@@ -5753,6 +5824,7 @@ internal class PocketWebBridge(
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { retireKeptStaticPages(); controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
+        manualMemoryProfileExit = null
         retireActiveSpanSend()
         retireSavedModelTestWait()
         clearReminderNotificationWindow()

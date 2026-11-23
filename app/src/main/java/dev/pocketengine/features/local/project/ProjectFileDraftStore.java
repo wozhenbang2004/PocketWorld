@@ -33,12 +33,26 @@ public final class ProjectFileDraftStore {
 
     /** Call from the existing UI IO context. A damaged record is never replaced with an empty draft. */
     public synchronized ProjectFileDraft open(String project, String checkout, String path, boolean fresh) throws IOException {
+        return open(project, checkout, path, fresh, false);
+    }
+
+    /** Reopen only this existing dirty recovery entry. Never create a substitute empty editor. */
+    public synchronized ProjectFileDraft openRetainedDirty(String project, String checkout, String path) throws IOException {
+        return open(project, checkout, path, false, true);
+    }
+
+    private ProjectFileDraft open(String project, String checkout, String path, boolean fresh, boolean dirtyOnly) throws IOException {
         String key = key(project, checkout, path);
-        ProjectFileDraft cached = retained.get(key); if (cached != null) return cached;
+        ProjectFileDraft cached = retained.get(key); if (cached != null) return (!dirtyOnly || cached.dirty()) ? cached : null;
         File file = file(key);
         ProjectFileDraft draft;
-        try { draft = Files.exists(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) ? ProjectFileDraft.restore(read(file), project, checkout, path) : ProjectFileDraft.empty(project, checkout, path, fresh); }
+        try {
+            if (Files.exists(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) draft = ProjectFileDraft.restore(read(file), project, checkout, path);
+            else if (dirtyOnly) return null;
+            else draft = ProjectFileDraft.empty(project, checkout, path, fresh);
+        }
         catch (Exception damaged) { throw new IOException("原文件草稿读取失败，已保留缓存；未用空白或当前文件替代：" + damaged.getMessage(), damaged); }
+        if (dirtyOnly && !draft.dirty()) return null;
         retained.put(key, draft); persisted.put(key, draft.revision); return draft;
     }
     /** Exact foreground editor observation without restoring a draft or reading its body from disk. */

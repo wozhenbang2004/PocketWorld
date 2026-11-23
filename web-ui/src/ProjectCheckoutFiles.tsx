@@ -38,7 +38,7 @@ export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:
 type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
 type PythonPackagePicker = {source:string;directoryHandle?:string;hits:number[]};
 type PythonToolsCloseGap = {position:CheckoutSavedPosition;savedHere:boolean;generation:number;projectRevision:number};
-type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
+type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; draftOnlyListId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
 type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   reopenedProjectDirectory?: boolean;
@@ -164,6 +164,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     typeof savedLocation.readId==='string'&&/^[a-f0-9-]{36}$/.test(savedLocation.readId)?
     {projectId,checkoutId,path:savedLocation.path,savedHash:savedLocation.sha256,readId:savedLocation.readId}:null;
   const priorSaveRow=priorSave?rows(listing?.files).find(row=>row.path===priorSave.path&&row.sha256===priorSave.savedHash):null;
+  const draftOnlyList=!sourceMember&&!hostFile&&!resume&&!entry&&!buildResume&&!pythonResume&&!pythonSetupResume&&
+    !originalDirectoryOpening&&!checkpointArrival&&!file&&!listingStale&&!finding&&(finder==='directory'||finder==='path')&&
+    listing?.readOnly===true&&listing.filesHandle===handle.current&&listing.projectId===projectId&&listing.checkoutId===checkoutId&&
+    bridge.getState().capabilities.commands.includes(command+'read')?listing.draftOnlyList:undefined;
+  const draftOnlyPaths:string[]=typeof draftOnlyList?.id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(draftOnlyList.id)&&
+    Array.isArray(draftOnlyList.paths)&&draftOnlyList.paths.length<=64&&
+    draftOnlyList.paths.every((path:unknown)=>checkoutFileParent(path)!==undefined)&&
+    new Set(draftOnlyList.paths).size===draftOnlyList.paths.length?draftOnlyList.paths:[];
   const showingSavedFile = !!recentSave && !!file && !file.dirty && !file.conflict && !file.saveUnknown &&
     orphan===null && !blockedEdit.current && file.path===recentSave.path && file.latest?.expectedHash===recentSave.savedHash && text===recentSave.after;
   const canCreateEmpty = !sourceMember && !hostFile && !!file && file.filesHandle===handle.current &&
@@ -335,14 +343,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   };
   const readDirectoryPage = (value: Data, path: string) => value.readOnly===true&&value.directoryPage?
     checkoutDirectoryPage(value.directoryPage,projectId,checkoutId,value.filesHandle,path,0,value.sourceDigest):null;
-  const retireListedSave = () => setListing(previous=>previous?.priorSavedFile?{...previous,priorSavedFile:undefined}:previous);
+  const retireListChoices = () => setListing(previous=>previous?.priorSavedFile||previous?.draftOnlyList?
+    {...previous,priorSavedFile:undefined,draftOnlyList:undefined}:previous);
   const invalidateFileInventory = () => {
     setListingStale(true);setFinding(false);setSearchVersion(epoch=>epoch+1);
     setDirectory(previous=>previous?{path:previous.path,page:null}:null);
   };
   const readList = (more = false) => {
     const folder=more?undefined:directory?.path;
-    if (!entered.current && !edits.current && live(generation.current)) retireListedSave();
+    if (!entered.current && !edits.current && live(generation.current)) retireListChoices();
     return invoke('list', { afterPath: more ? listing?.nextPath || '' : '', sourceDigest: more ? listing?.sourceDigest || '' : '',
       ...(folder!==undefined?{refreshDirectory:folder}:{}) }, value => {
       if (value.projectId !== projectId || value.checkoutId !== checkoutId || value.filesHandle !== handle.current) throw new Error('文件列表不属于原副本。');
@@ -378,13 +387,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     const opened=await openMatchedFile(page.directoryHandle,hit);
     if(!opened&&live(sequence))setDirectory(previous=>previous?.page===page?{path:previous.path,page:null}:previous);
   };
-  const readFile = (path: string, { gitStatusOperation, saved, position, pythonTaskId, expectedPythonSha256, priorSavedFileId, currentOnly, entry:sourceEntry, adoptedSourceCurrent }: FileRead = {}) => {
+  const readFile = (path: string, { gitStatusOperation, saved, position, pythonTaskId, expectedPythonSha256, priorSavedFileId, draftOnlyListId, currentOnly, entry:sourceEntry, adoptedSourceCurrent }: FileRead = {}) => {
     if (sourceMember || hostFile) {
       if (path !== (sourceMember || hostFile)!.path || entered.current || edits.current) return;
       setReviewed(false); currentFile.current = null; setFile(null);
     }
     return invoke('read', { path, ...(gitStatusOperation?{gitStatusOperation}:{}), ...(saved?{savedEditId:saved.id}:{}),
-      ...(priorSavedFileId?{priorSavedFileId}:{}), ...(pythonTaskId?{pythonTaskId}:{}),
+      ...(priorSavedFileId?{priorSavedFileId}:{}), ...(draftOnlyListId?{draftOnlyListId}:{}), ...(pythonTaskId?{pythonTaskId}:{}),
       ...(expectedPythonSha256?{expectedPythonSha256}:{}) }, value => {
       if ((sourceMember || hostFile || gitStatusOperation || saved || position || currentOnly || sourceEntry) && (value.path !== path || value.latest?.deleted !== false ||
           !fileHash(value.latest?.expectedHash) || typeof value.latest.content !== 'string'))
@@ -395,6 +404,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
         throw new Error('读取内容不属于这份副本的这个路径。');
       if (priorSavedFileId && (value.priorSavedFileId !== priorSavedFileId || !position))
         throw new Error('未核对到先前确认保存的版本，没有打开其他版本。');
+      if (draftOnlyListId && (value.draftOnlyListId!==draftOnlyListId||value.path!==path||value.dirty!==true||
+          typeof value.text!=='string'||value.latest?.path!==path||value.latest.projectId!==projectId||
+          value.latest.checkoutId!==checkoutId||typeof value.latest.deleted!=='boolean'))
+        throw Error('没有核对到这份未保存草稿，未打开替代文件。');
       if (pythonTaskId && value.pythonTaskId!==pythonTaskId)
         throw Error('未核对到本次运行保存的原脚本，没有打开其他文件。');
       if (expectedPythonSha256 && (value.matchedPythonSetupSha256!==expectedPythonSha256 ||
@@ -1221,6 +1234,16 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
         {folderEditor?.resumable ? <Button variant="ghost" disabled={locked} onClick={resumeFolderEditor}>继续编辑 <bdi>{file?.path.split('/').at(-1)}</bdi></Button> :
           <p role="status">未核对刚才打开的文件。请从同一副本重新选择。</p>}
       </div>}
+      {draftOnlyPaths.length>0&&<section className="pw-form-flow" aria-label="继续未保存草稿">
+        <h3>继续未保存草稿</h3>
+        <p className="pw-field-hint">这些草稿还未写入副本，不在已保存的目录中。</p>
+        <div className="pw-checkout-file-list">{draftOnlyPaths.map(path=><Button key={path} variant="secondary" disabled={locked}
+          onClick={()=>{
+            if(!bridge.getState().state.filePath&&!currentFile.current&&!entered.current&&!edits.current&&
+                live(generation.current)&&handle.current===listing.filesHandle)
+              void readFile(path,{draftOnlyListId:draftOnlyList.id});
+          }}><bdi>{path}</bdi></Button>)}</div>
+      </section>}
       {sourceMember || hostFile ? !file && <div><p dir="auto">{(sourceMember || hostFile)!.path}</p><Button variant="secondary" disabled={locked} onClick={() => void readFile((sourceMember || hostFile)!.path)}>{busy ? '正在读取同一文件…' : '重读原副本中的这个文件'}</Button></div> : <Accordion expandedKeys={new Set(treeOpen ? ['checkout-tree'] : [])} onExpandedChange={keys => setTreeOpen(Array.from(keys).includes('checkout-tree'))}><AccordionItem id="checkout-tree" title={file ? '切换文件或新建' : '选择要编辑的文件'} description={listingStale?'完整清单待重新核对':`${listing.fileCount} 个实际源码文件；另列保留草稿`}>
         {recentSave && (!browsingFolder||recentSave.path!==file?.path) && <div className="pw-checkout-file-list" aria-label="最近一次已核对的保存">
           <Button variant="secondary" disabled={locked} onClick={()=>void readFile(recentSave.path,{saved:recentSave})}>
@@ -1261,7 +1284,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
           filesHandle={handle.current} busy={locked} visible={setFinding} invoke={invoke} open={(searchHandle,hit)=>void openMatchedFile(searchHandle,hit)}/>}
         {finder!=='git'&&finder!=='directory'&&!finding&&<>        <div className="pw-form-actions"><Button variant="ghost" disabled={locked} onClick={() => void readList()}>重新读取文件列表</Button></div>
         {listingStale ? <p className="pw-field-hint" role="status">旧列表不再显示，可重读完整清单。{recentSave && ' 也可直接核对上方已保存的文件。'}</p> : <>
-        <div className="pw-checkout-file-list">{rows(listing.files).filter(row=>row!==priorSaveRow).map(row => <Button key={row.path} aria-current={activeFilePath === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
+        <div className="pw-checkout-file-list">{rows(listing.files).filter(row=>row!==priorSaveRow&&
+          !(row.change==='draft_only'&&draftOnlyPaths.includes(row.path))).map(row => <Button key={row.path} aria-current={activeFilePath === row.path ? 'true' : undefined} variant="ghost" disabled={locked || row.binary === true} onClick={() => void readFile(row.path)}><span>{row.path}</span><small>{row.binary ? '二进制' : row.hasDraft ? '有保留草稿' : row.change === 'deleted' ? '副本已删除' : row.change === 'added' ? '副本新增' : row.change === 'modified' ? '副本已修改' : '与原基线一致'}</small></Button>)}</div>
         {!rows(listing.files).length && <p>副本中还没有文件。可以在下方填写相对路径创建，或返回目标让 AI 开始。</p>}
         {listing.nextPath && <Button variant="secondary" disabled={locked} onClick={() => void readList(true)}>读取下一页文件</Button>}</>}</>}
         {finder!=='git'&&<><TextField label="相对文件路径" value={newPath} onChange={setNewPath} isDisabled={locked} hint="例如 index.html 或 src/main.ts；不操作运行缓存和 Git 内部目录。" />

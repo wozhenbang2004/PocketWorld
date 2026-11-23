@@ -52,7 +52,7 @@ import type {OriginalChatReminderRuleVisit,ReminderNoticeVisit} from './Reminder
 import {OriginalChatReminderReview} from './OriginalChatReminderReview';
 import type {SettingsDirectoryOrigin} from './SettingsDirectory';
 import type {PlanSettingsAnchor,PlanSettingsReturn,RegisterPlanSettingsAnchor} from './PlansWorkspace';
-import ProfileWorkspace,{type AnswerMemoryForgetReceipt,type OriginalMemoryConversation,type PersonalTarget} from './ProfileWorkspace';
+import ProfileWorkspace,{type AnswerMemoryForgetReceipt,type ConfirmedManualSave,type OriginalMemoryConversation,type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings,type ConversationMemoryControls} from './ConversationMemorySettings';
 import {chatDefaultPresetsCommand,retireChatDefaultPresets,type ChatDefaultHolder,type ChatDefaultOrigin} from './ChatDefaultPresets';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
@@ -1018,6 +1018,7 @@ export default function App(){
  const [originalMemoryDraft,setOriginalMemoryDraft]=useState<OriginalMemoryDraftVisit|null>(null);
  const [personalTarget,setPersonalTarget]=useState<PersonalTarget>({view:'home'}),[personalTargetKey,setPersonalTargetKey]=useState(0);
  const [conversationMemoryOpen,setConversationMemoryOpen]=useState(false),[conversationMemoryControls,setConversationMemoryControls]=useState<ConversationMemoryControls|null>(null);
+ const [manualMemoryReturn,setManualMemoryReturn]=useState<{record:ConfirmedManualSave;conversation:string;document:number;navigation:number;resume:number}|null>(null);
  const conversationMemoryBack=useRef<(()=>boolean)|null>(null);
  const chatDefaultPresets=useRef<ChatDefaultHolder['current']>(null);
  const [chatReferenceVisit,setChatReferenceVisit]=useState<ChatReferenceVisit|null>(null);
@@ -2199,9 +2200,9 @@ export default function App(){
   return commit();
  },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation,retireConfirmedHistoryWord]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
- const captureChatDefaultPresets=():ChatDefaultOrigin|null=>{
+ const captureChatDefaultPresets=(requireDefaults=true):ChatDefaultOrigin|null=>{
   if(!isChatSurface||intent!=='chat'||!conversationMemoryOpen||taskOpen||taskOpening||workOpen||commandOpen||
-     !can(chatDefaultPresetsCommand)||document.hidden)return null;
+     (requireDefaults&&!can(chatDefaultPresetsCommand))||document.hidden)return null;
   const live=bridge.getState(),draft=live.composer,conversationId=live.state.conversationId;
   if(typeof conversationId!=='string'||!conversationId||draft?.ready!==true||
      !Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||draft.revision<1)return null;
@@ -2222,6 +2223,86 @@ export default function App(){
     editor.key===`conversation:${conversationId}`&&editor.epoch===draftEpoch&&editor.revision===draftRevision;
   };
   return current()?{conversationId,draftEpoch,draftRevision,documentEpoch,current}:null;
+ };
+ const canRememberFromChat=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&!draftSwitching&&
+  ['connections.enter','connections.leave','profile.memory.createReview','profile.memory.confirm','profile.memory.close','profile.memory.query'].every(can);
+ const openChatManualMemory=async()=>{
+  if(!canRememberFromChat||draftSwitchPending()||navigationRevision!==navigationWindow.current)throw new Error('请回到原私人对话后再打开记忆表单。');
+  const origin=captureChatDefaultPresets(false),live=bridge.getState(),resume=obj(live.view).resumeRevision;
+  if(!origin||origin.conversationId!==state.conversationId||composer.revision!==origin.draftRevision||
+     composer.epoch!==origin.draftEpoch||!Number.isSafeInteger(resume)||resume<0)
+   throw new Error('请回到原私人对话后再打开记忆表单。');
+  const {conversationId:conversation,documentEpoch:doc,draftEpoch:epoch,draftRevision:revision}=origin;
+  const nav=navigationWindow.current,visit=crypto.randomUUID();
+  const address={section:'profile',manualMemoryVisit:visit};
+  let entering=false,openedReceipt=false,returning=false;
+  const closeUnconfirmed='个人记忆窗口尚未确认关闭，请重试返回。';
+  const leafCurrent=()=>!document.hidden&&navigationWindow.current===nav+1&&bridge.getState().host?.ready===true;
+  const ownProfile=()=>{
+   const view=obj(bridge.getState().view);
+   return leafCurrent()&&view.section==='profile'&&view.taskId===null&&view.manualMemoryVisit===visit;
+  };
+  const neutral=()=>{
+   const live=bridge.getState(),view=obj(live.view),owner=live.state;
+   return leafCurrent()&&view.section===null&&view.taskId===null&&!owner.conversationReader&&!owner.queuedInputsPage&&
+    !owner.filePath&&!owner.chatAttachmentPickerOpen&&!owner.attachmentWorkspace?.open;
+  };
+  const same=(step:number,section:'profile'|null)=>{
+   const live=bridge.getState(),owner=live.state,view=obj(live.view),draft=live.composer,phone=obj(live.phoneDraft);
+   return !document.hidden&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===nav+step&&
+    live.host?.ready===true&&view.section===section&&view.taskId===null&&view.resumeRevision===resume&&
+    (section!==null?view.manualMemoryVisit===visit:view.manualMemoryVisit===undefined)&&
+    owner.conversationId===conversation&&!owner.conversationReader&&!owner.queuedInputsPage&&!owner.filePath&&
+    !owner.chatAttachmentPickerOpen&&!owner.attachmentImporting&&!owner.attachmentWorkspace?.open&&
+    !owner.chatSubmitting&&!owner.phoneSubmitting&&phone.phone===false&&phone.channelOrigin===false&&
+    draft?.ready===true&&draft.conversationId===conversation&&draft.key===`conversation:${conversation}`&&draft.epoch===epoch&&draft.revision===revision;
+  };
+  const ready=()=>openedReceipt&&!returning&&same(1,'profile');
+  const enter=async()=>{
+   if(entering||!same(1,null))throw new Error('原私人对话已变化，未打开记忆表单。');
+   entering=true;
+   const result=await bridge.command('connections.enter',{...address,conversationId:conversation,draftEpoch:epoch,draftRevision:revision,resumeRevision:resume});
+   if(result?.accepted!==true||result.manualMemoryVisit!==visit||result.opened!==true||
+      !await awaitPickerProjection(()=>same(1,null)||same(1,'profile'),()=>same(1,'profile')?true:undefined))
+    throw new Error('原记忆表单尚未确认打开，可以返回管家。');
+   openedReceipt=true;
+  };
+  // UI cleanup may arrive after another navigation. This token can close only its own native shell.
+  const dispose=()=>{
+   if(entering&&!document.hidden)void bridge.command('connections.leave',address).catch(()=>{});
+  };
+  const back=(record?:ConfirmedManualSave)=>{
+   if(returning||!leafCurrent())return;
+   const original=ready(),hasShell=ownProfile(),exitEpoch=bridge.getDocumentEpoch();
+   if(!hasShell&&!neutral()){setLocalError(closeUnconfirmed);return;}
+   returning=true;
+   void (async()=>{
+    const atExit=()=>leafCurrent()&&bridge.getDocumentEpoch()===exitEpoch;
+    try{
+     if(hasShell){
+      const closed=await bridge.command('connections.leave',address);
+      if(closed?.accepted!==true||closed.manualMemoryVisit!==visit||closed.closed!==true||
+         !await awaitPickerProjection(()=>atExit()&&(ownProfile()||neutral()),()=>neutral()?true:undefined))throw new Error();
+     }
+     if(!atExit()||!neutral())throw new Error();
+     // A restored Profile shell may be safely closed, but never revives the original Chat or receipt.
+     const returnOriginal=original&&same(1,null);
+     const returned=await navigate(returnOriginal?'chat':'butler',()=>{
+      setPersonalTarget({view:'home'});
+      setLocalError(previous=>previous===closeUnconfirmed?'':previous);
+      setManualMemoryReturn(returnOriginal&&record?{record,conversation,document:doc,navigation:nav+2,resume}:null);
+      if(!returnOriginal)setLocalStatus('已关闭原记忆表单，没有打开其他对话。');
+     },{stillCurrent:()=>atExit()&&neutral()&&(!returnOriginal||same(1,null))});
+     if(!returned&&atExit())throw new Error();
+    }catch{if(atExit())setLocalError(closeUnconfirmed);}
+    finally{returning=false;}
+   })();
+  };
+  const opened=await navigate('profile',()=>{
+   setPersonalTarget({view:'memory-new',fromChat:{enter,dispose,current:ready,back}});
+   setPersonalTargetKey(key=>key+1);
+  },{stillCurrent:()=>origin.current()&&same(0,null)});
+  if(!opened&&origin.current())throw new Error('原记忆表单未打开，请重试。');
  };
  const providedForgetProfileCurrent=(visit:OriginalMemoryProfileVisit)=>{
   const live=bridge.getState();
@@ -11224,7 +11305,12 @@ export default function App(){
    const next={...previous};delete next[chatCancelKey(currentCancelFeedback.original)];return next;
   })}/>
  </div>:null;
- const workspaceNotices=<>{route!=='chat'&&replyActivity}{stopFeedback}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{savedLocalVisible&&<Button variant="ghost" size="small" aria-busy={savedLocalOpening||undefined} disabled={savedLocalOpening} onClick={()=>void viewSavedLocal()}>查看刚才保存的原话</Button>}{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{if(savedLocalVisible)setSavedLocalReturn(null);setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
+ const manualSavedHere=manualMemoryReturn&&route==='chat'&&intent==='chat'&&!taskOpen&&
+  manualMemoryReturn.navigation===navigationRevision&&manualMemoryReturn.document===bridge.getDocumentEpoch()&&
+  manualMemoryReturn.conversation===state.conversationId&&obj(snapshot?.view).section===null&&obj(snapshot?.view).taskId===null&&
+  manualMemoryReturn.resume===obj(snapshot?.view).resumeRevision?manualMemoryReturn:null;
+ const workspaceNotices=<>{route!=='chat'&&replyActivity}{stopFeedback}
+  {manualSavedHere&&<MotionFeedback identity="manual-memory-saved" className="pw-banner" role="status"><p>已保存到个人记忆。可在「我与管家 → 个人记忆」查找和管理。</p><IconButton icon={IconClose} aria-label="关闭记忆保存提示" onClick={()=>setManualMemoryReturn(null)}/></MotionFeedback>}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{savedLocalVisible&&<Button variant="ghost" size="small" aria-busy={savedLocalOpening||undefined} disabled={savedLocalOpening} onClick={()=>void viewSavedLocal()}>查看刚才保存的原话</Button>}{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{if(savedLocalVisible)setSavedLocalReturn(null);setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
   {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={returnToWorkSearch}>返回搜索结果</Button>
    {searchHitLanding?.current()&&canLocateSearchOriginal(searchHitLanding.locator)&&<Button variant="ghost" size="small"
     onClick={()=>{
@@ -11584,7 +11670,7 @@ export default function App(){
   onOpenSaved={skillDraftTarget.chatWork&&can('connections.enter')&&can('skills.get')?openReviewedSkill:undefined}/>}
  {!preparationInline&&preparationDetail}
  {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
- {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} showReferenceShelf={!referenceInput} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}
+ {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} showReferenceShelf={!referenceInput} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} onRemember={canRememberFromChat?openChatManualMemory:undefined} registerBack={registerConversationMemoryBack}
   defaults={{holder:chatDefaultPresets,capture:(route==='chat'||ordinaryButlerContinuation)&&intent==='chat'&&can(chatDefaultPresetsCommand)?captureChatDefaultPresets:undefined}}/>}
  {shownChatReference&&<ConversationReferenceShelf key={shownChatReference.input.key+':'+shownChatReference.input.epoch}
    conversationId={shownChatReference.input.conversation} draftKey={shownChatReference.input.key} epoch={shownChatReference.input.epoch}
