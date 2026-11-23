@@ -8,7 +8,7 @@ import { IconChat, IconFile, IconFolder, IconLayers } from './icons';
 import './work-search.css';
 
 export type WorkSearchKind = 'all' | 'conversation' | 'work' | 'artifact' | 'project';
-export type WorkSearchItem = { kind: Exclude<WorkSearchKind, 'all'>; id: string; title: string; excerpt?: string; updatedAt?: number; status?: string; conversationId?: string; projectId?: string; taskId?: string; artifactId?: string; sha256?: string; recordId?: string; ownerLocator?: Record<string, unknown>; readRange?: { offset?: number; chars?: number } };
+export type WorkSearchItem = { kind: Exclude<WorkSearchKind, 'all'>; id: string; title: string; excerpt?: string; updatedAt?: number; status?: string; conversationId?: string; projectId?: string; taskId?: string; artifactId?: string; sha256?: string; recordId?: string; ownerLocator?: Record<string, unknown>; readRange?: { offset?: number; chars?: number }; completedRun?: unknown };
 export type WorkSearchConversation = { conversationId: string; composerEpoch: number };
 type SearchReturnAnchor = { scope: string; item: string; version: string; inset: number };
 export type WorkSearchMemory = { query?: string; kind?: WorkSearchKind; selectedId?: string; scrollTop?: number; pages?: number;
@@ -40,6 +40,18 @@ const listMoved = (list: HTMLElement, previous: ListPosition | null) =>
   previous?.list === list && Math.abs(list.scrollTop - Math.min(previous.top, Math.max(0, list.scrollHeight - list.clientHeight))) > 1;
 const scopeLabel = (kind: WorkSearchKind) => kind === 'all' ? '工作、对话、成果与项目' : kinds[kind];
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+const searchIdentity = (value: unknown, maximum: number): value is string =>
+  typeof value === 'string' && !!value && value.length <= maximum && value === value.trim() && !value.includes('\0');
+export function completedWorkSearchMatch(item: WorkSearchItem) {
+  const { runId, epoch, report } = record(item.completedRun);
+  if (item.kind !== 'work' || item.status !== 'completed' || item.taskId !== item.id ||
+    !searchIdentity(runId, 80) || typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 1 || epoch > 0x7fffffff) return;
+  const { reportMessageId, deliveryId } = record(report);
+  const reportTarget = searchIdentity(item.id, 80) && searchIdentity(item.conversationId, 512) &&
+    searchIdentity(reportMessageId, 512) && searchIdentity(deliveryId, 512)
+    ? { taskId: item.id, runId, epoch, reportMessageId, conversationId: item.conversationId, deliveryId } : undefined;
+  return { runId, epoch, report: reportTarget };
+}
 // Keep the matching passage visible even when a small screen clips the native excerpt.
 function passagePreview(excerpt: string, query: string) {
   const body = excerpt.replace(/\s+/gu, ' ').trim();

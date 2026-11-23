@@ -346,7 +346,8 @@ internal class PocketWebWorkSearch(
                 items.put(JSONObject().put("kind", "work").put("id", task.getString("id")).put("taskId", task.getString("id"))
                     .put("title", clip(task.optString("goal").ifBlank { "已保存的工作" }, 160))
                     .put("excerpt", clip(task.optString("summary"), 300)).put("status", task.optString("status"))
-                    .put("updatedAt", task.optLong("updatedAt")).put("conversationId", task.optString("conversationId")))
+                    .put("updatedAt", task.optLong("updatedAt")).put("conversationId", task.optString("conversationId"))
+                    .putOpt("completedRun", completedSearchRun(task)))
             }
             next("tasks", page.optString("nextCursor"))
         }
@@ -397,6 +398,54 @@ internal class PocketWebWorkSearch(
             .put("kind", kind).put("query", query)
             .put("taskPage", taskPage).put("executionAuthorized", false).put("modelCalled", false)
             .put("coverage", "private_conversation_originals_task_summaries_file_metadata_and_project_names")
+    }
+
+    /** Optional original identities from this already-read header, never a report body or an execution grant. */
+    private fun completedSearchRun(task: JSONObject): JSONObject? {
+        if (task.opt("status") != "completed" || task.opt("contextAvailable") == false ||
+            task.opt("contextWithdrawn") == true || task.opt("sourceCurrentReadRequired") == true ||
+            task.opt("taskProjection") == "source_unavailable") return null
+        fun id(value: Any?, maximum: Int): String? = (value as? String)?.takeIf {
+            it.isNotBlank() && it.length <= maximum && it == it.trim() && '\u0000' !in it
+        }
+        val run = id(task.opt("runId"), 80) ?: return null
+        val epochField = task.opt("coordinatorEpoch")
+        if (epochField !is Int && epochField !is Long) return null
+        val epoch = (epochField as Number).toLong()
+        if (epoch !in 1L..Int.MAX_VALUE.toLong()) return null
+        val result = JSONObject().put("runId", run).put("epoch", epoch.toInt())
+        val taskId = id(task.opt("id"), 80)
+        val conversation = id(task.opt("conversationId"), 512)
+        val work = task.optJSONObject("ownerWork")
+        val handling = work?.optJSONObject("handling")
+        val message = id(handling?.opt("reportMessageId"), 512)
+        val delivery = id(handling?.opt("deliveryId"), 512)
+        if (taskId != null && conversation != null && message != null && delivery != null &&
+            task.opt("workCollectionGroup") == "ended" && task.opt("contextAvailable") == true &&
+            task.opt("actorId") == "owner" && task.opt("spaceId") == "private" && task.opt("kind") == "assistant" &&
+            task.opt("executionMode") == "capabilities" && task.opt("executionRole") == "owner_work" &&
+            task.opt("cancelRequested") == false && task.isNull("origin") && task.isNull("parentTaskId") &&
+            task.isNull("developmentContext") && task.isNull("ownerPhoneControl") && task.isNull("ownerDeviceWork") &&
+            task.isNull("teamRunId") && task.isNull("teamAssignment") && task.isNull("memberId") &&
+            task.opt("metadataLimited") != true && task.opt("taskCoreReadLimited") != true &&
+            work != null && work.opt("format") == "pocketworld.owner-work.v1" && work.opt("workTaskId") == taskId &&
+            work.opt("conversationId") == conversation && work.opt("phase") == "ended" && handling?.opt("state") == "reported")
+            result.put("report", JSONObject().put("reportMessageId", message).put("deliveryId", delivery))
+        return result
+    }
+
+    /** Recheck this exact hit on the body that is about to merge, not only the preflight header. */
+    internal fun verifyCompletedSearchOpen(task: JSONObject, taskId: String, run: String, epoch: Int, query: String) {
+        val actual = completedSearchRun(task)
+        require(task.opt("id") == taskId && task.opt("actorId") == "owner" && task.opt("spaceId") == "private" &&
+            task.opt("kind") != "inference" && task.optJSONObject("origin")?.opt("kind") != "group" &&
+            actual?.opt("runId") == run && actual?.opt("epoch") == epoch) {
+            "搜索命中的原完成回合已变化，请返回搜索；未打开其他记录"
+        }
+        val normalized = normalize(query)
+        require(normalized.isEmpty() || normalize(task.optString("goal") + "\n" + task.optString("summary")).contains(normalized)) {
+            "原工作已不匹配刚才的搜索，请重新查找"
+        }
     }
 
     private fun originalSearchItem(row: JSONObject): JSONObject {

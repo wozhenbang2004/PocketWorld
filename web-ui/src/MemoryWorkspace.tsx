@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { bridge } from './bridge';
 import { IconChevronLeft, IconChevronRight, IconMemory, IconRefresh, IconSearch } from './icons';
 import './knowledge-depth.css';
 import './memory-reading.css';
@@ -15,6 +16,7 @@ import { MemoryHistoryWorkspace } from './MemoryHistoryWorkspace';
 import { WorkingStatus } from './library/journey-motion';
 import { FormDraftNotice, useFormDrafts, type RegisterBeforeLeave } from './form-drafts';
 import type { LearningCandidateTarget } from './LearningWorkspace';
+import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 
 type Data = Record<string, any>;
 type Run = (action: string, args?: Data) => Promise<any>;
@@ -23,6 +25,84 @@ const layers: Record<string, string> = { fact: '事实', preference: '偏好', e
 const layer = (name: string) => layers[name] || name || '其他内容';
 const recordStatus = (value: string) => ({ pending: '待审阅', accepted: '已采用', rejected: '已拒绝', invalidated: '已失效', archived: '正文已清理' } as Record<string, string>)[value] || value;
 const eligible = (row: Data) => row.active === true && row.consolidationBlocked === false && row.ownerId === 'owner' && row.spaceId === 'private';
+const privateRow = (row?: Data | null) => row?.ownerId === 'owner' && row.spaceId === 'private';
+const positive = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+const recordId = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+type SavedCandidatePin = { id: string; revision: number; candidateId: string; window: string };
+type SavedCandidateRead = { status: 'loading' | 'unavailable' | 'inactive' | 'changed' } |
+  { status: 'current'; text: string; evidence: string; expires: number };
+const privateMemoryWindow = () => {
+  const view = bridge.getState(), native = view.view as Record<string, unknown> | undefined, doc = bridge.getDocumentEpoch();
+  return !document.hidden && doc > 0 && view.host?.ready === true && (native?.section === 'memory' || native?.section === 'memoryReview') &&
+    native.taskId === null && Number.isSafeInteger(native.resumeRevision) ? JSON.stringify([doc, native.section, native.resumeRevision]) : null;
+};
+const savedEvidence = () => {
+  const state = bridge.getState().state;
+  return JSON.stringify([state.memoryRefreshRevision, state.traceSourceRevision]);
+};
+function checkedPrivateAcceptance(value: Data, before: Data, window: string): SavedCandidatePin {
+  const candidate = value?.candidate, record = value?.record;
+  if (!privateRow(candidate) || !privateRow(record) || candidate.id !== before.id || candidate.status !== 'accepted' ||
+      !positive(candidate.revision) || candidate.revision !== before.revision + 1 || candidate.acceptedFromRevision !== before.revision ||
+      !recordId(record.id) || record.id === before.id || record.id !== candidate.acceptedRecordId ||
+      record.learningCandidateId !== before.id || record.revision !== 1 || record.text !== before.text || record.layer !== before.layer)
+    throw new Error('未核对到这条建议的正式保存回执。请重新读取原状态，不要重复提交。');
+  return { id: record.id, revision: record.revision, candidateId: before.id, window };
+}
+
+/** A confirmed acceptance can show only the exact saved private version, not a second record list. */
+function AcceptedCandidateRead({ pin, run, back }: { pin: SavedCandidatePin; run: Run; back: () => void }) {
+  const [read, setRead] = useState<SavedCandidateRead>({ status: 'loading' }), [attempt, setAttempt] = useState(0);
+  const runner = useRef(run), panel = useRef<HTMLElement>(null);
+  runner.current = run;
+  useLayoutEffect(() => { panel.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => {
+    let live = true, handle = '', timer: number | undefined;
+    const evidence = savedEvidence();
+    const current = () => live && privateMemoryWindow() === pin.window && savedEvidence() === evidence;
+    const release = (key: string) => { if (key) void runner.current('knowledge.close', { handle: key }).catch(() => {}); };
+    const retire = () => {
+      if (!live) return;
+      live = false; clearTimeout(timer); release(handle); handle = '';
+      setRead({ status: 'unavailable' });
+    };
+    const observe = () => { if (live && !current()) retire(); };
+    const off = bridge.subscribe(observe);
+    const offDocument = bridge.subscribeDocumentEpoch(observe);
+    document.addEventListener('visibilitychange', observe); window.addEventListener('pagehide', retire);
+    if (current()) {
+      setRead({ status: 'loading' });
+      void runner.current('knowledge.get', { id: pin.id, candidate: false }).then(value => {
+        const key = typeof value?.readHandle === 'string' ? value.readHandle : '';
+        if (!current()) { release(key); return; }
+        handle = key;
+        const record = value?.record, deadline = value?.readExpiresAt;
+        if (!key || value?.candidateSelected !== false || !privateRow(record) || record.id !== pin.id ||
+            record.learningCandidateId !== pin.candidateId || !positive(record.revision) || !positive(deadline) || deadline <= Date.now())
+          throw new Error('原保存版本未核对');
+        const end = typeof record.expiresAt === 'number' ? Math.min(deadline, record.expiresAt) : deadline;
+        if (record.revision !== pin.revision) setRead({ status: 'changed' });
+        else if (record.active !== true || end <= Date.now()) setRead({ status: 'inactive' });
+        else if (typeof record.text === 'string' && record.text.trim() && record.text.length <= 4000) {
+          setRead({ status: 'current', text: record.text, evidence, expires: end });
+          timer = window.setTimeout(retire, Math.max(0, end - Date.now()));
+        } else throw new Error('原保存版本未核对');
+      }).catch(() => { if (current()) retire(); });
+    } else retire();
+    return () => { live = false; clearTimeout(timer); release(handle); off(); offDocument(); document.removeEventListener('visibilitychange', observe); window.removeEventListener('pagehide', retire); };
+  }, [pin, attempt]);
+  const shown = read.status === 'current' && privateMemoryWindow() === pin.window && read.evidence === savedEvidence() && Date.now() < read.expires ? read : null;
+  return <section ref={panel} tabIndex={-1} className="pw-source-record pw-memory-reading" aria-label="这次保存的个人记忆">
+    <header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} onClick={back}>返回原列表</Button>
+      <div className="pw-memory-detail-copy"><p className="pw-detail-location">主人全局 · 私人</p><h2>这次保存的记忆</h2></div></header>
+    <p className="pw-muted" role="status">{shown ? `已核对当前保存的第 ${pin.revision} 版` :
+      read.status === 'loading' ? '已确认保存，正在核对当前版本…' : read.status === 'changed' ? '这条建议曾保存，原版本已变化；未显示其他版本的内容。' :
+      read.status === 'inactive' ? '这条建议曾保存，原版本已不在当前可用范围；未显示正文。' :
+      '这条建议曾保存，现在未能核对原版本；未显示正文。'}</p>
+    {shown && <div className="pw-memory-document"><p className="pw-reading-copy">{shown.text}</p></div>}
+    {!shown && read.status !== 'loading' && <Button variant="ghost" leadingIcon={IconRefresh} onClick={() => setAttempt(value => value + 1)}>重新核对这条记忆</Button>}
+  </section>;
+}
 
 /** Existing BoardUI reading rows, native namespace selection, and exact record review. */
 export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTransientBack, registerBeforeLeave, initialCandidate = null, alreadyShownError = '' }: { onOpenProjectDraft?:OpenProjectDraft; domain: string; run: Run; registerTransientBack: (handler: (() => boolean) | null) => void; registerBeforeLeave?: RegisterBeforeLeave; initialCandidate?: LearningCandidateTarget | null; alreadyShownError?: string }) {
@@ -35,13 +115,18 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   const [draftMeta, setDraftMeta] = useState<Data>({ layer: 'fact', reason: '', applicability: '', confidence: '0.5' });
   const [namespaces, setNamespaces] = useState<Data[]>([]), [namespace, setNamespace] = useState('private'), [history, setHistory] = useState<Data | null>(null), [capacity, setCapacity] = useState<Data | null>(null);
   const [scopeName, setScopeName] = useState(''), [projectEntry, setProjectEntry] = useState<'' | 'quote' | 'note'>('');
+  const [savedCandidate, setSavedCandidate] = useState<SavedCandidatePin | null>(null);
+  const privateList = namespace === 'private' && snapshot?.namespaceStatus === 'private' && privateRow(snapshot.scope);
+  const pendingPrivate = privateList && selection?.candidateSelected === true && selection.candidate?.status === 'pending' ? selection.candidate : null;
+  const candidateTerm = positive(pendingPrivate?.expiresAt) ? pendingPrivate.expiresAt : 0;
+  const candidateExpired = usePendingCandidateDeadline(candidateTerm);
   const projectScope: string = snapshot?.namespaceStatus === 'project' && namespace && namespace !== 'private' && typeof snapshot.scope?.spaceId === 'string' && snapshot.scope.spaceId.startsWith('project:') ? snapshot.scope.spaceId : '';
   const projectLabel = projectScope ? (scopeName || '项目') + ' · ' + projectScope.slice(8, 16) : '';
   const quoteBack = useRef<(() => void) | null>(null);
   const [consolidation, setConsolidation] = useState<Data[]>([]), [operation, setOperation] = useState<Data | null>(null), [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState<string | { unchangedCorrection: string }>(''), [acknowledged, setAcknowledged] = useState(false), [attempted, setAttempted] = useState(false);
   const workspaceRoot = useRef<HTMLDivElement | null>(null);
-  useSurfaceEnter(workspaceRoot, selection ? `memory:${(selection.candidate || selection.record)?.id || selection.readHandle}` : `collection:${tab}`, { selector: selection ? ":scope > .pw-memory-reading" : ":scope > .pw-memory-collection", depth: selection ? 1 : 0 });
+  useSurfaceEnter(workspaceRoot, savedCandidate ? `saved:${savedCandidate.id}` : selection ? `memory:${(selection.candidate || selection.record)?.id || selection.readHandle}` : `collection:${tab}`, { selector: selection || savedCandidate ? ":scope > .pw-memory-reading" : ":scope > .pw-memory-collection", depth: selection || savedCandidate ? 1 : 0 });
   const selectionPanel = useRef<HTMLElement | null>(null), collectionPanel = useRef<HTMLElement | null>(null);
   const listScrollPosition = useRef(0), openedRecord = useRef('');
   const alive = useRef(true), entered = useRef(false), readHandle = useRef(''), reviewHandle = useRef(''), selectedHandles = useRef<string[]>([]);
@@ -83,7 +168,7 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
     else setNotice('范围切换未完成，请重新选择范围。');
   };
   useEffect(() => { alive.current = true; load(initialCandidate); return () => { alive.current = false; closeHandle(readHandle.current); closeHandle(reviewHandle.current); selectedHandles.current.forEach(closeHandle); }; }, []);
-  useEffect(() => { registerTransientBack(projectEntry || review || selection || tab === 'history' ? () => { if (projectEntry) { quoteBack.current?.(); return true; } if (conventionDraftBack.current?.() || historyBack.current?.()) return true; if (!review && !selection) return false; if (!busy) { if (review) closeReview(); else formDraft.guard(closeRecord); } return true; } : null); return () => registerTransientBack(null); }, [projectEntry, review, selection, busy, tab, registerTransientBack]);
+  useEffect(() => { registerTransientBack(savedCandidate || projectEntry || review || selection || tab === 'history' ? () => { if (savedCandidate) { setSavedCandidate(null); return true; } if (projectEntry) { quoteBack.current?.(); return true; } if (conventionDraftBack.current?.() || historyBack.current?.()) return true; if (!review && !selection) return false; if (!busy) { if (review) closeReview(); else formDraft.guard(closeRecord); } return true; } : null); return () => registerTransientBack(null); }, [savedCandidate, projectEntry, review, selection, busy, tab, registerTransientBack]);
   useEffect(() => {
     if (!operation?.operationHandle || operation.settled) return;
     const handle = operation.operationHandle; let active = true, reading = false;
@@ -116,6 +201,7 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   };
   const prepare = (operation: string, extra: Data = {}) => {
     if ((formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck) && ['edit', 'correct', 'accept'].includes(operation)) return;
+    if (operation === 'accept' && candidateTerm > 0 && candidateTerm <= Date.now()) return;
     const handle = readHandle.current;
     void invoke('knowledge.review', { readHandle: handle, operation, ...extra }, value => {
       if (operation === 'correct' && value?.operation === 'correct' && value.projectConventionCorrection === 'unchanged' && value.executionAuthorized === false && !value.reviewHandle) {
@@ -134,12 +220,23 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   const identityDecision = reviewedCandidateIdentity(review);
   const invalidIdentity = review?.operation === 'assertion' && !identityDecision;
   const confirm = async () => {
-    const frozen = review; if (!frozen || (frozen.operation === 'assertion' && (!identityDecision || !acknowledged || busy || reviewHandle.current !== frozen.reviewHandle))) return; const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAcknowledged(false);
+    const frozen = review, handle = reviewHandle.current;
+    if (!frozen || (frozen.operation === 'assertion' && (!identityDecision || !acknowledged || busy || handle !== frozen.reviewHandle))) return;
+    const privateAccept = frozen.operation === 'accept' && privateList;
+    const originalWindow = privateAccept ? privateMemoryWindow() : null, originalRead = readHandle.current, before = frozen.before;
+    if (privateAccept && (!acknowledged || busy || entered.current || !handle || handle !== frozen.reviewHandle || !originalRead || !originalWindow ||
+        !pendingPrivate || !privateRow(before) || !recordId(before.id) || !positive(before.revision) || before.status !== 'pending' ||
+        before.id !== pendingPrivate.id || before.revision !== pendingPrivate.revision || before.text !== pendingPrivate.text ||
+        (candidateTerm > 0 && candidateTerm <= Date.now()))) return;
+    const stillInReviewWindow = () => !!originalWindow && alive.current && privateMemoryWindow() === originalWindow && readHandle.current === originalRead;
+    reviewHandle.current = ''; setReview(null); setAcknowledged(false);
     if (frozen.operation === 'consolidation') { void invoke('knowledge.consolidation.start', { reviewHandle: handle }, setOperation); return; }
     const id = frozen.before?.id, isCandidate = selection?.candidateSelected === true;
     setAttempted(true); if (['edit', 'correct', 'accept'].includes(frozen.operation)) { try { await formDraft.markSubmitted(); } catch (failure) { setError((failure as Error).message); return; } }
+    if (privateAccept && !stillInReviewWindow()) { closeHandle(handle); return; }
     let receipt = '';
     void invoke('knowledge.confirm', { reviewHandle: handle }, value => {
+      if (privateAccept) return;
       if (frozen.operation === 'correct' && frozen.projectConventionCorrection === 'reviewed') {
         if (value?.projectConventionCorrection !== 'saved' || value.executionAuthorized !== false || value.spaceId !== frozen.before.spaceId ||
           value.recordId !== id || !Number.isSafeInteger(value.revision) || value.revision !== frozen.before.revision + 1) {
@@ -149,6 +246,18 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
       }
       setNotice(receipt || '操作已完成，正在读取当前状态。');
     }).then(value => {
+      if (privateAccept) {
+        if (!value || !originalWindow || !stillInReviewWindow()) return;
+        let pin: SavedCandidatePin;
+        try { pin = checkedPrivateAcceptance(value, before, originalWindow); }
+        catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); return; }
+        // The old directory is not a new snapshot. Withhold its actions and remove the settled suggestion.
+        currentList.current = false; setSnapshotCurrent(false);
+        setSnapshot(old => old ? { ...old, candidates: rows(old.candidates).filter(row => row.id !== pin.candidateId) } : old);
+        setNotice(''); clearConsolidation(); closeRecord(); setSavedCandidate(pin);
+        formDraft.discard();
+        return;
+      }
       if (value && alive.current && id) { if (['edit', 'correct', 'accept', 'forget', 'archive'].includes(frozen.operation)) formDraft.discard(() => refreshSelection(id, isCandidate, receipt)); else refreshSelection(id, isCandidate); }
     });
   };
@@ -156,10 +265,10 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   const record = selection?.candidate || selection?.record, candidate = selection?.candidateSelected === true;
   useLayoutEffect(() => {
     const scroller = collectionPanel.current?.closest('.pw-secondary-scroll');
-    if (scroller) scroller.scrollTop = selection ? 0 : listScrollPosition.current;
+    if (scroller) scroller.scrollTop = selection || savedCandidate ? 0 : listScrollPosition.current;
     if (selection) selectionPanel.current?.focus({ preventScroll: true });
-    else if (openedRecord.current) Array.from(collectionPanel.current?.querySelectorAll<HTMLButtonElement>('[data-memory-id]') || []).find(row => row.dataset.memoryId === openedRecord.current)?.focus({ preventScroll: true });
-  }, [selection]);
+    else if (!savedCandidate && openedRecord.current) Array.from(collectionPanel.current?.querySelectorAll<HTMLButtonElement>('[data-memory-id]') || []).find(row => row.dataset.memoryId === openedRecord.current)?.focus({ preventScroll: true });
+  }, [selection, savedCandidate]);
   useEffect(() => {
     if (initialCandidate && selection?.candidate?.id === initialCandidate.id) {
       selectionPanel.current?.scrollIntoView({ block: 'start' });
@@ -181,10 +290,10 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
   const running = !!operation && !operation.settled;
   const candidateHasEdits = candidate && record && (draft !== record.text || draftMeta.layer !== (record.layer || 'fact') || draftMeta.reason !== (record.reason || '') || draftMeta.applicability !== (record.applicability || '') || draftMeta.confidence !== String(record.confidence ?? 0.5));
   return <div ref={workspaceRoot} className="pw-memory-workspace pw-knowledge-workspace">
-    <FormDraftNotice draft={formDraft} />
+    {!savedCandidate && <FormDraftNotice draft={formDraft} />}
     {error && error !== alreadyShownError && <p className="pw-secondary-error" role="alert">{error}</p>}{typeof notice === 'string' && notice && <p className="pw-field-hint" role="status">{notice}</p>}
-    {snapshot && !snapshotCurrent && !busy && <p className="pw-field-hint" role="status">当前保留上次读取的内容，尚未核对最新状态。请重新读取后再操作。</p>}
-    <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection}>
+    {!savedCandidate && snapshot && !snapshotCurrent && !busy && <p className="pw-field-hint" role="status">当前保留上次读取的内容，尚未核对最新状态。请重新读取后再操作。</p>}
+    <section ref={collectionPanel} className="pw-memory-collection" aria-label="记忆管理" hidden={!!selection || !!savedCandidate}>
       <Tabs selectedKey={tab} onSelectionChange={value => { setTab(String(value)); setFilter('all'); closeRecord(); }} className="pw-team-tabs pw-memory-tabs">
         <TabList className="pw-material-navigation pw-collection-navigation" aria-label="记忆视图"><Tab id="records" isDisabled={busy || !snapshotCurrent}>已保存</Tab><Tab id="candidates" isDisabled={busy || !snapshotCurrent}>待审阅</Tab><Tab id="history" isDisabled={busy || !snapshotCurrent}>旧事与来源</Tab></TabList>
         <TabPanel id={tab}>
@@ -224,13 +333,14 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
         </TabPanel>
       </Tabs>
     </section>
+    {savedCandidate && <AcceptedCandidateRead pin={savedCandidate} run={run} back={() => setSavedCandidate(null)} />}
     {selection && <section ref={selectionPanel} tabIndex={-1} className="pw-source-record pw-memory-reading"><header className="pw-memory-detail-header"><Button variant="ghost" leadingIcon={IconChevronLeft} disabled={busy} onClick={() => formDraft.guard(closeRecord)}>返回列表</Button><div className="pw-memory-detail-copy">{snapshot?.namespaceStatus === 'project' && <p className="pw-detail-location">仅此项目 · {projectLabel}</p>}<h2>{candidate ? '候选审阅' : '这条记忆'}</h2><WorkingStatus active={busy}>正在核对原回执…</WorkingStatus></div></header>
       <div className="pw-memory-document"><p className="pw-reading-copy">{record?.text}</p>{record?.applicability && <p className="pw-memory-context">适用条件：{record.applicability}</p>}{record?.reason && <p className="pw-memory-context">依据：{record.reason}</p>}</div><p className="pw-muted pw-knowledge-status">{layer(record?.layer)}{record?.core ? ' · 核心记忆' : ''} · 原修订 {record?.revision} · {recordStatus(record?.status) || (record?.active ? '当前可用' : '已停用')}</p>
       {!candidate && !attempted && snapshotCurrent && projectScope && manualConvention(record,projectScope) &&
         <ProjectConventionDraftAction onOpenProjectDraft={onOpenProjectDraft} key={selection.readHandle} row={record} readHandle={selection.readHandle} expires={selection.readExpiresAt} project={projectScope.slice(8)}
           disabled={busy || !!review || draft!==record.text || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} run={run} back={conventionDraftBack}/>}
       {record?.assertion && <p>主体：{record.assertion.subjectLabel || '未知'} · 陈述类型：{record.assertion.kind} · 关系：{record.assertion.predicate} · {record.assertion.object}。保存不证明陈述为真。</p>}
-      {!attempted && candidate && record?.status === 'pending' && <>{candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">先保存刚才的修改，再采用更新后的候选。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} onClick={() => candidateHasEdits ? prepare('edit', { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } }) : prepare('accept')}>{candidateHasEdits ? '先保存修改' : '核对并采用候选'}</Button></div></>}
+      {!attempted && candidate && record?.status === 'pending' && <>{candidateExpired ? <p className="pw-memory-context pw-knowledge-notice" role="status">这条建议已到期，不能再采用。</p> : candidateHasEdits && <p className="pw-memory-context pw-knowledge-notice" role="status">先保存刚才的修改，再采用更新后的候选。</p>}<div className="pw-form-actions pw-memory-decisions"><Button disabled={busy || candidateExpired && !candidateHasEdits || formDraft.stale || !!formDraft.conflict || formDraft.requiresRecheck} onClick={() => candidateHasEdits ? prepare('edit', { draft: { text: draft, ...draftMeta, confidence: Number(draftMeta.confidence) } }) : prepare('accept')}>{candidateHasEdits ? '先保存修改' : '核对并采用候选'}</Button></div></>}
 <section className="pw-knowledge-evidence"><h3>来源与关联</h3>
       {!candidate && projectScope && record?.spaceId === projectScope && record?.formation === 'explicit_save' && record?.layer === 'procedural' && !record?.learningCandidateId && Array.isArray(record?.sourceRefs) && !record.sourceRefs.length && Array.isArray(record?.sourceIds) && !record.sourceIds.length && <p className="pw-muted">{record.source || '未登记来源'} · 没有关联文件原文</p>}
       {!attempted && record && <ScopedMemoryEvidence key={selection.readHandle} record={record} candidate={candidate} project={snapshot?.namespaceStatus === 'project'} handle={selection.readHandle} expires={selection.readExpiresAt} busy={busy} invoke={invoke} back={() => formDraft.guard(closeRecord)} />}
@@ -259,7 +369,8 @@ export function MemoryWorkspace({ onOpenProjectDraft, domain, run, registerTrans
     <SettingsDialog className="pw-memory-modal" isOpen={!!review} onClose={() => { if (!busy) closeReview(); }} title={operationLabel[review?.operation] || '核对记忆修改'}><div className="pw-knowledge-review">
       {review?.operation === 'consolidation' ? <><p>向开始时的当前模型发送以下原记忆，归纳为待审候选。原记忆保留；不会自动采用新候选。</p>{rows(review.records).map(row => <p key={row.id} className="pw-reading-copy">{row.text}</p>)}</> : <><p className="pw-muted">{review?.projectConventionCorrection === 'reviewed' ? '将保存这条项目约定的新版本。已放入项目草稿的文字不会自动替换。' : '确认只应用到刚才读取的原版本。'}</p><section className="pw-memory-review-version"><h3>当前内容</h3><p className="pw-reading-copy">{review?.before?.text}</p></section>{review?.afterText && <section className="pw-memory-review-version"><h3>修改后</h3><p className="pw-reading-copy">{review.afterText}</p></section>}{review?.reason && <p>理由：{review.reason}</p>}{review?.operation === 'assertion' && <CandidateIdentityDecision decision={identityDecision} />}</>}
       {review?.operation === 'forget' && <p>将遗忘原记忆，退休相关派生上下文，并阻止相同旧来源自动重新导入；原消息保留。</p>}{review?.operation === 'accept' && <p>采用候选不会证明内容已独立核实，也不会自动启用技能或取得执行权限。</p>}{review?.operation === 'archive' && <p>将移除这条终态候选的正文与拒绝理由；已接受的正式记忆和必要去重标记保留。这项清理不能恢复正文。</p>}{review?.operation === 'reconsider' && <p>只将这一条完整拒绝项重新放回待审；不会自动采用，也不会解除其他拒绝项或来源遗忘屏障。</p>}
-      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={invalidIdentity}>我已阅读内容和影响，确认这一次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged || invalidIdentity} onClick={confirm}>{review?.operation === 'consolidation' ? '开始这次归纳' : '确认这次修改'}</Button></div>
+      {review?.operation === 'accept' && candidateExpired && <p className="pw-muted" role="status">原建议已到期，没有提交这次采用。</p>}
+      <CheckboxField isSelected={acknowledged} onChange={setAcknowledged} isDisabled={invalidIdentity}>我已阅读内容和影响，确认这一次操作</CheckboxField><div className="pw-form-actions"><Button variant="secondary" disabled={busy} onClick={closeReview}>返回</Button><Button disabled={busy || !acknowledged || invalidIdentity || review?.operation === 'accept' && candidateExpired} onClick={confirm}>{review?.operation === 'consolidation' ? '开始这次归纳' : '确认这次修改'}</Button></div>
     </div></SettingsDialog>
   </div>;
 }

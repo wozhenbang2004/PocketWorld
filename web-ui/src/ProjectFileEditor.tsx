@@ -45,6 +45,15 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   const history = Array.isArray(state.fileHistory) ? state.fileHistory : [];
   const selectedReady = selected !== null && state.revisionNumber === selected && typeof state.revisionContent === 'string' && state.revisionObservation?.representation === 'text' && state.revisionObservation?.version === selected && !state.revisionLoading;
   const locked = !!state.fileSaving || adoption.pending;
+  const owner = state.filePath === path && typeof state.projectId === 'string' && state.projectId && Array.isArray(state.projects)
+    ? state.projects.find((row: Data) => row?.id === state.projectId) : undefined;
+  const projectLabel = typeof owner?.name === 'string' && owner.name.trim() ? owner.name : '';
+  const directory = path.includes('/') ? path.slice(0,path.lastIndexOf('/')) : '项目根目录';
+  // Version zero with no host observation is an editable draft, not a saved file.
+  const unsavedNewFile = state.fileReady === true && state.fileLoading === false &&
+    typeof state.projectId === 'string' && !!state.projectId && state.filePath === path &&
+    version === 0 && state.fileVersion === 0 && state.fileObservation == null &&
+    !conflict && (!draft || draft.version === 0);
   const sourceReturn=returnToAdoptedSource&&mode==='edit'&&!reviewing&&!locked&&!conflict&&!adoption.unknown&&draft&&!draft.dirty?{
     ...returnToAdoptedSource,
     start:async (receipt:Parameters<ReturnToAdoptedSource['start']>[0])=>{
@@ -92,7 +101,12 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
   useCollectionMotion(root, surfaceIdentity, JSON.stringify(history.map((item: Data) => [item.version, item.at])), { active: !!state.fileReady && !state.fileLoading && Array.isArray(state.fileHistory) && mode === 'history' && selected === null, enter: false });
   const switchMode = (value: FileLayer) => { if (locked) return; setReviewing(false); setMode(value); if (value === 'history') readHistory(); };
   return <section ref={root} className="pw-file-editor pw-file-workspace pw-project-file-editor" aria-label="文件工作区" aria-busy={!!state.fileLoading || locked}>
-    <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2><p className="pw-file-path">{path.includes('/')?path.slice(0,path.lastIndexOf('/')):'项目根目录'}</p><p>{adoptedText !== undefined ? '正式版本 '+version : state.fileReady || version>0 ? '版本 '+(state.fileReady ? draft?.version ?? version : version) : '版本尚未核对'}<span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 有保留的修改' : state.fileReady ? ' · 当前文件' : ' · 只读'}</span></p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
+    <header className="pw-file-heading"><div><h2 className="pw-file-name">{path.split('/').at(-1)}</h2>
+      <p className="pw-file-path" style={{overflowWrap:'anywhere'}}>{projectLabel && <><bdi>{projectLabel}</bdi><span aria-hidden="true"> · </span></>}<bdi>{directory}</bdi></p>
+      <p>{unsavedNewFile ? '新文件草稿' : <>
+        {adoptedText !== undefined ? '正式版本 '+version : state.fileReady || version>0 ? '版本 '+(state.fileReady ? draft?.version ?? version : version) : '版本尚未核对'}
+        <span className={draft?.dirty ? 'pw-file-dirty' : ''}>{draft?.dirty ? ' · 有保留的修改' : state.fileReady ? ' · 当前文件' : ' · 只读'}</span>
+      </>}</p></div>{draft?.dirty && <span className="pw-file-state-dot" aria-hidden="true"/>}</header>
     {!state.fileLoading && can('projects.keptDrafts.forFile') && <ProjectKeptFileDrafts state={state} draft={draft} edit={edit}
       disabled={!!state.fileSaving || adoption.pending} continueAdopted={continueWithDisplayedDraft}/>}
     {state.fileLoading ? <div className="pw-loading-file" aria-busy="true"><ShimmerText>正在读取文件</ShimmerText><Skeleton width="85%" height={13}/><Skeleton width="65%" height={13}/><Skeleton width="94%" height={13}/></div> : state.fileReady && draft ? <>
@@ -122,7 +136,14 @@ export function ProjectFileEditor({ path, version, draft, state, conflict, mode,
           </section>}
         </TabPanel>
       </Tabs>
-      <footer className="pw-file-save-bar"><MotionFeedback initial={false} identity={`${adoption.pending}:${!!state.fileSaving}:${draft.dirty}`} className="pw-file-save-state">{adoption.pending ? '正在核对原版本' : state.fileSaving ? '正在保存当前文件' : draft.dirty ? '草稿未保存到文件' : '没有未保存的修改'}</MotionFeedback>{can('projects.save') && <Button variant="primary" disabled={!draft.dirty || conflict || locked} onClick={save}>{state.fileSaving ? '正在保存…' : '保存修改'}</Button>}</footer>
+      <footer className="pw-file-save-bar">
+        <MotionFeedback initial={false} identity={`${adoption.pending}:${!!state.fileSaving}:${draft.dirty}:${unsavedNewFile}`} className="pw-file-save-state" role={unsavedNewFile ? 'status' : undefined}>
+          {adoption.pending ? '正在核对原版本' : state.fileSaving ? '正在保存当前文件' : unsavedNewFile
+            ? draft.dirty || !can('projects.save') ? '草稿尚未保存到项目' : '尚未保存。输入内容后再保存到项目。'
+            : draft.dirty ? '草稿未保存到文件' : '没有未保存的修改'}
+        </MotionFeedback>
+        {can('projects.save') && <Button variant="primary" disabled={!draft.dirty || conflict || locked} onClick={save}>{state.fileSaving ? '正在保存…' : unsavedNewFile ? '保存文件' : '保存修改'}</Button>}
+      </footer>
     </> : <ProjectFormalReadOnly state={state} draft={draft} can={can} retry={retry} history={readHistory} revision={readRevision}/>}
   </section>;
 }

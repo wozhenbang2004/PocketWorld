@@ -154,14 +154,15 @@ function ScopedRemoteDraftEditor({snapshot,busy,active=true,run,follow,cacheKey}
   </section>;
 }
 
-export function RemoteProgress({ snapshot }: { snapshot: Data }) {
+export function RemoteProgress({ snapshot, retained = false }: { snapshot: Data; retained?: boolean }) {
   const [filter, setFilter] = useState('*'), [expanded, setExpanded] = useState(false);
   const { progress, children, visible } = remoteProgress(snapshot, filter);
   useEffect(() => { setFilter('*'); setExpanded(false); }, [snapshot.taskId, snapshot.source?.jobOperationId, progress.generation]);
   if (!snapshot.progress) return null;
-  return <section className="pw-remote-progress" aria-label="原电脑执行进度"><h3>{progress.readStatus === 'confirmed' ? '本次核对的执行进度' : '已保存的执行进度'}</h3>
+  return <section className="pw-remote-progress" aria-label="原电脑执行进度"><h3>{retained ? '先前保留的执行进度' : progress.readStatus === 'confirmed' ? '本次核对的执行进度' : '已保存的执行进度'}</h3>
     <p className="pw-muted">有界读取的原任务公开观察。关闭页面只停止观察，不会停止电脑任务；这不是完整 CLI 历史或子会话控制。</p>
-    {progress.readStatus !== 'confirmed' && <p className="pw-field-hint">本次补流尚未确认，原记录和游标保留；没有重发任务、批准或答案。</p>}
+    {retained ? <p className="pw-field-hint">以下是同一任务先前保留的记录，不代表主机当前的进度。</p>
+      : progress.readStatus !== 'confirmed' && <p className="pw-field-hint">本次补流尚未确认，原记录和游标保留；没有重发任务、批准或答案。</p>}
     {progress.hasMore && <p className="pw-field-hint">还有保留记录可读取，请继续查询原任务。</p>}
     {Number(progress.unconfirmedSources) > 0 && <p className="pw-field-error">{progress.unconfirmedSources} 条观察的原生来源无法核对，未混入主来源或其他子来源。</p>}
     {rows(progress.gaps).map((gap, index) => <p key={index} className="pw-field-hint">{gap.reason === 'retention_gap' ? `事件 ${gap.fromSequence}–${gap.throughSequence} 已超出电脑保留窗口。` : '来源代次已变化，旧代遗漏范围无法确认。'}没有补造遗漏内容。</p>)}
@@ -176,7 +177,7 @@ export function RemoteProgress({ snapshot }: { snapshot: Data }) {
   </section>;
 }
 
-function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snapshot: Data; busy: boolean; run: Run }) {
+function RemoteQuestion({ request, snapshot, busy, retained, run }: { request: Data; snapshot: Data; busy: boolean; retained: boolean; run: Run }) {
   const [answers, setAnswers] = useState<Record<string, string[]>>({}), [custom, setCustom] = useState<Record<string, string>>({});
   const latest = useRef({ request, snapshot, answers, custom }); latest.current = { request, snapshot, answers, custom };
   const update = (nextAnswers: Record<string, string[]>, nextCustom: Record<string, string>) => { latest.current.answers = nextAnswers; latest.current.custom = nextCustom; setAnswers(nextAnswers); setCustom(nextCustom); };
@@ -184,7 +185,8 @@ function RemoteQuestion({ request, snapshot, busy, run }: { request: Data; snaps
   const writable = !busy && snapshot.fresh && snapshot.canAnswerQuestions && request.canAnswer && !previous;
   const actual = Object.fromEntries(questions.map(q => [q.id, custom[q.id]?.trim() ? [custom[q.id]] : answers[q.id] || []]));
   const complete = questions.length > 0 && questions.every(q => !q.requiresPrivateInput && actual[q.id].length > 0 && (q.multiSelect || actual[q.id].length === 1));
-  return <section className="pw-remote-question"><h3>Agent 需要你回答</h3><p className="pw-muted">只回答当前原问题，不批准命令或文件修改。</p>
+  return <section className="pw-remote-question"><h3>{retained ? '先前读取的问题' : 'Agent 需要你回答'}</h3><p className="pw-muted">{retained
+    ? '查询原任务后，才能核对这个问题是否仍待回答。' : '只回答当前原问题，不批准命令或文件修改。'}</p>
     {questions.map(q => <div key={q.id}><h4>{q.header}</h4><p>{q.text}</p>{q.requiresPrivateInput ? <p className="pw-field-error">秘密输入不在此收集，请在可信电脑处理。</p> : <>
       {rows(q.options).map(option => <CheckboxField key={option.label} isSelected={(answers[q.id] || []).includes(option.label) && !custom[q.id]?.trim()} isDisabled={!writable} onChange={checked => { const old = latest.current.answers[q.id] || []; update({ ...latest.current.answers, [q.id]: q.multiSelect ? checked ? [...old, option.label] : old.filter(value => value !== option.label) : checked ? [option.label] : [] }, { ...latest.current.custom, [q.id]: '' }); }}>{option.label}{option.description ? ` — ${option.description}` : ''}</CheckboxField>)}
       {q.allowOther && <TextAreaField label="其他回答（不填写密码、验证码）" value={custom[q.id] || ''} maxLength={2000} isDisabled={!writable} onChange={text => { update(text.trim() ? { ...latest.current.answers, [q.id]: [] } : latest.current.answers, { ...latest.current.custom, [q.id]: text }); }} />}</>}</div>)}
@@ -279,22 +281,29 @@ export function RemoteTaskWorkspace({ taskId, raw, receipt, savedFiles, openProj
 function LiveRemoteTask({taskId,runId,coordinatorEpoch,follow}:{taskId:string;runId:string;coordinatorEpoch:number;follow:PhoneDraftPin|null}) {
   const { snapshot, pending, error, stale, act, current } = useRemoteTask(taskId,runId,coordinatorEpoch);
   const enabled = !!snapshot && !stale && taskVisible(taskId), source = object(snapshot?.source);
+  // All three observations retire native freshness before a new reply arrives.
+  const reading = pending === 'remoteTask.open' || pending === 'remoteTask.refresh' || pending === 'remoteTask.inspectRecovery';
+  const retained = !!snapshot && (reading || !enabled || snapshot.fresh !== true);
+  const taskStatus = typeof source.executorStatus === 'string' && source.executorStatus !== 'unknown' ? executionLabel(source.executorStatus) : '';
+  const pendingApprovals = rows(source.pendingApprovals), pendingQuestions = rows(source.pendingQuestions);
   if (!supported('remoteTask.open')) return null;
   return <section className="pw-remote-workspace pw-depth-collaboration" aria-label="原电脑任务"><div className="pw-section-heading"><h3>电脑会话</h3><Button variant="secondary" disabled={!!pending || !taskVisible(taskId)} onClick={() => void act(!snapshot || stale ? 'remoteTask.open' : 'remoteTask.refresh')}>{pending ? '正在核对…' : !snapshot || stale ? '重新打开原任务' : '查询原任务'}</Button></div>
     {follow&&!snapshot&&<p className="pw-field-hint" role="status">仅核对原主机与手机所选 v{follow.revision}，不发送草稿。</p>}
-    {error && <p className="pw-field-error" role="alert">{error}</p>}{stale && <p className="pw-field-hint">原页面已变化，请重新核对；没有自动发送旧输入。</p>}
-    {snapshot && <>{follow&&<RemoteDraftEditor key={taskId+':selected'} snapshot={snapshot} busy={!!pending} active={enabled} run={act} follow={follow}/>}<div className="pw-remote-session-identity"><p className="pw-muted">{workerLabel(source.worker || '原执行器')} · {executionLabel(source.executorStatus || '状态待核对')}</p>
-      {source.threadId && <Accordion className="pw-remote-identity"><AccordionItem title="原会话身份"><p className="pw-source-copy">{source.threadId}</p><p className="pw-field-hint">{source.worker} · {source.executorStatus}</p></AccordionItem></Accordion>}</div>
+    {error && <p className="pw-field-error" role="alert">{error}</p>}{stale && <p className="pw-field-hint" role="status">未核对到当前状态。重新打开只查询同一任务，不会重新启动或重发旧输入。</p>}
+    {snapshot && <>{follow&&<RemoteDraftEditor key={taskId+':selected'} snapshot={snapshot} busy={!!pending} active={enabled} run={act} follow={follow}/>}<div className="pw-remote-session-identity"><p className="pw-muted">{workerLabel(source.worker || '原执行器')} · {retained ? '当前状态待核对' : taskStatus || '状态待核对'}</p>
+      {retained && taskStatus && <p className="pw-field-hint">上次留存状态：{taskStatus}</p>}
+      {source.threadId && <Accordion className="pw-remote-identity"><AccordionItem title="原会话身份"><p className="pw-source-copy">{source.threadId}</p></AccordionItem></Accordion>}</div>
       {source.cloudJobDetailRetired === true && <p role="status">主机保留了这项原作业的接单编号，详细运行记录已清理。不能据此继续进程或恢复旧审批；已经存到手机的成果仍可在下方打开。</p>}
       {!snapshot.fresh && !stale && !source.cloudJobDetailRetired && <p className="pw-field-hint">{snapshot.reason || '请查询原任务后再作出新的决定。'}</p>}
-      <div className="pw-remote-work-layout"><div className="pw-remote-primary" aria-label="待处理与输入">
-      {rows(source.pendingApprovals).map(approval => <section className="pw-remote-question" key={`${snapshot.reviewId}:${approval.requestId}`}><h4>{approval.tool || approval.method || '原执行请求'}</h4><p>{approval.summary || approval.command || approval.reason || '请核对原请求的完整范围。'}</p><Accordion className="pw-remote-request-details"><AccordionItem title="准确请求参数" description="原请求身份与完整参数"><pre>{JSON.stringify(approval, null, 2)}</pre></AccordionItem></Accordion>{remoteApprovalClaim(snapshot, approval.requestId) ? <p className="pw-field-hint">决定已登记，只查询原回执，不会再次发送。</p> : <div className="pw-form-actions">
+      <div className="pw-remote-work-layout"><div className="pw-remote-primary" aria-label={retained ? '先前的待处理记录与输入' : '待处理与输入'}>
+      {retained && (pendingApprovals.length > 0 || pendingQuestions.length > 0) && <p className="pw-field-hint">以下是上次留存的申请和问题，不代表主机当前仍在等待。</p>}
+      {pendingApprovals.map(approval => <section className="pw-remote-question" key={`${snapshot.reviewId}:${approval.requestId}`}><h4>{approval.tool || approval.method || '原执行请求'}</h4><p>{approval.summary || approval.command || approval.reason || '请核对原请求的完整范围。'}</p><Accordion className="pw-remote-request-details"><AccordionItem title="准确请求参数" description="原请求身份与完整参数"><pre>{JSON.stringify(approval, null, 2)}</pre></AccordionItem></Accordion>{remoteApprovalClaim(snapshot, approval.requestId) ? <p className="pw-field-hint">决定已登记，只查询原回执，不会再次发送。</p> : <div className="pw-form-actions">
         {['decline', 'accept', ...(!snapshot.teamRemoteWriter ? ['cancel'] : [])].map(decision => <Button key={decision} variant={decision === 'accept' ? 'primary' : decision === 'cancel' ? 'ghost' : 'secondary'} disabled={!enabled || !!pending || !snapshot.fresh || !approval.requestId || decision === 'accept' && (approval.canAccept !== true || Array.isArray(snapshot.teamMemberApprovalAcceptIds) && !snapshot.teamMemberApprovalAcceptIds.includes(approval.requestId))} onClick={() => { const now = current(); if (!now || now.reviewId !== snapshot.reviewId || remoteApprovalClaim(now, approval.requestId)) return; void act('remoteTask.approve', { requestId: approval.requestId, decision }); }}>{decision === 'accept' ? '只允许这一次' : decision === 'cancel' ? '取消这一次' : '拒绝这一次'}</Button>)}</div>}</section>)}
       {rows(snapshot.task?.operations).filter(operation => operation.tool === 'remote_approval').slice(-8).map(operation => <p className="pw-field-hint" key={operation.operationId}>本机单次决定：{operation.arguments?.requestId} · {operation.arguments?.decision} · {operation.state === 'remote_approval_receipt' ? '已收到协议回执，非工具成功' : '决定已登记，仅查询原回执'}</p>)}
-      {rows(source.pendingQuestions).map(request => <RemoteQuestion key={`${taskId}:${source.jobOperationId}:${request.requestId}:${request.requestHash}`} request={request} snapshot={snapshot} busy={!enabled || !!pending} run={act} />)}
+      {pendingQuestions.map(request => <RemoteQuestion key={`${taskId}:${source.jobOperationId}:${request.requestId}:${request.requestHash}`} request={request} snapshot={snapshot} busy={!enabled || !!pending} retained={retained} run={act} />)}
       {!follow&&<RemoteDraftEditor key={taskId} snapshot={snapshot} busy={!!pending} active={enabled} run={act} />}
       </div><aside className="pw-remote-context" aria-label="执行观察与来源">
-      <RemoteProgress snapshot={snapshot} />
+      <RemoteProgress snapshot={snapshot} retained={retained} />
       <RemoteTaskHarness snapshot={snapshot} busy={!!pending} active={enabled} run={act} returnToTask={() => void act('remoteTask.open')} />
       <RemoteTaskArtifacts snapshot={snapshot} busy={!!pending} active={enabled} run={act} />
       <RemoteTaskInputActions snapshot={snapshot} enabled={enabled && !pending} onReturn={() => void act('remoteTask.open')} />

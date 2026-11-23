@@ -1570,9 +1570,14 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind", "teamPlanView"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind", "teamPlanView", "completedSearchResult"))
                 val taskId = requiredString(args, "id")
                 val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
+                val completedSearch = args.has("completedSearchResult")
+                if (completedSearch) require(args.opt("completedSearchResult") == true && args.opt("requestNavigation") == false &&
+                    args.keys().asSequence().toSet() == setOf("id", "requestNavigation", "searchQuery", "expectedRunId", "expectedEpoch", "completedSearchResult")) {
+                    "请返回同一份已完成工作的私人搜索结果"
+                }
                 require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
                 val expectedRunId = if (args.has("expectedRunId")) requiredString(args, "expectedRunId") else null
                 if (args.has("expectedExternalKind")) {
@@ -1615,14 +1620,23 @@ internal class PocketWebBridge(
                     if (projectScope != null) require(projectReadCurrent(projectScope)) { "请返回原项目工作页后再打开" }
                     require(!fromReader && controller.webPrivateOwnerVisible()) { "请回到私人工作区打开原工作" }
                     val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true
-                    val lookup = JSONObject().put("taskId", taskId).put("query", if (args.has("searchQuery")) requiredString(args, "searchQuery", true) else "")
+                    val query = if (args.has("searchQuery")) requiredString(args, "searchQuery", true) else ""
+                    val lookup = JSONObject().put("taskId", taskId).put("query", query)
+                    val originalSearchWindow = if (completedSearch) captureWindow() else null
                     projectScope?.addTo(lookup)
                     if (expectedRunId != null) lookup.put("expectedRunId", expectedRunId).put("expectedEpoch", expectedEpoch)
                     workSearch.dispatch("work.search.task", lookup) { result, error ->
                         if (error != null || result == null) complete(id, null, error ?: "原工作暂不可核对")
                         else try {
                             require(taskHistory.contains(taskId) && result.optString("taskId") == taskId) { "原工作读取身份已变化" }
-                            openOriginalTask(id, taskId, requestNavigation, keepConversationReader = expectedRunId != null && !requestNavigation, expectedRunId = expectedRunId, expectedEpoch = expectedEpoch, projectScope = projectScope)
+                            if (originalSearchWindow != null) {
+                                val run = checkNotNull(expectedRunId); val epoch = checkNotNull(expectedEpoch)
+                                fun currentSearch() = !closed && acceptsWindow(originalSearchWindow) && controller.webPrivateOwnerVisible()
+                                check(currentSearch()) { "原搜索窗口已关闭，未打开其他记录" }
+                                val verify: (JSONObject) -> Unit = { raw -> workSearch.verifyCompletedSearchOpen(raw, taskId, run, epoch, query) }
+                                openOriginalTask(id, taskId, requestNavigation, expectedRunId = run, expectedEpoch = epoch,
+                                    sourceWindowCurrent = ::currentSearch, verifySourceBeforeMerge = verify, checkReaderInput = { verify(it.raw) })
+                            } else openOriginalTask(id, taskId, requestNavigation, keepConversationReader = expectedRunId != null && !requestNavigation, expectedRunId = expectedRunId, expectedEpoch = expectedEpoch, projectScope = projectScope)
                         } catch (failure: Exception) { complete(id, null, failure.message ?: "原工作暂不可打开") }
                     }
                     return

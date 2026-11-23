@@ -9,7 +9,7 @@ import { IconArrowLeft, IconArrowRight, IconChevronRight, IconRefresh } from './
 import { processCheckpoint, type ProcessRecord } from './task-process-checkpoint';
 import { phoneStopReceipt } from './phone-stop-receipt';
 import { phoneResourceHistory } from './phone-resource-history';
-import { getTaskEventHistory, getTaskOperations } from './task-presentation';
+import { forTaskOperationHistory, getTaskEventHistory, getTaskOperations, type TaskOperation } from './task-presentation';
 import { taskAuditPage, taskHistoryIdentity, type AuditPage, type AuditSection, type TaskHeader } from './task-history';
 import { containsMainPhoneRead, type MainPhoneReadVisit } from './original-main-phone-observation';
 import { OriginalWindowsTextRead, ReceivedOriginalWindowsText, originalWindowsTextAt, receivedOriginalWindowsTextAt } from './OriginalWindowsTextRead';
@@ -28,6 +28,36 @@ const originalId = (value: unknown): value is string => typeof value === 'string
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const deviceId = (value: unknown): value is string => typeof value === 'string' && /^pw1_[a-f0-9]{64}$/.test(value);
 const positiveNumber = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+
+/** Read the owner decision separately from the immutable request that could not run. */
+function originalToolApprovalDecision(task: TaskHeader, operation: TaskOperation, page?: AuditPage): 'approved' | 'denied' | undefined {
+  const raw = task.raw;
+  if (!raw || raw.id !== task.id || raw.status !== task.status || raw.actorId !== 'owner' || raw.spaceId !== 'private' ||
+      raw.origin != null || raw.contextAvailable === false || raw.contextWithdrawn === true || raw.sourceCurrentReadRequired === true ||
+      raw.taskProjection !== 'detail_window' || raw.auditBodyIncluded !== true || raw.taskCoreReadLimited !== false ||
+      !originalId(raw.runId) || !positiveNumber(raw.coordinatorEpoch) || operation.runId !== raw.runId ||
+      !operation.bodyAvailable || operation.readLimited || operation.requiresReconciliation ||
+      !page || page.taskId !== task.id || page.section !== 'operations' ||
+      !Array.isArray(raw.approvals) || raw.approvals.length > 100) return;
+  const records = page.entries.filter(entry => entry.operationId === operation.operationId);
+  const entry = records[0], receipt = entry?.receipt, requested = receipt?.approvalId;
+  if (records.length !== 1 || entry.runId !== raw.runId || entry.tool !== operation.tool ||
+      (entry.coordinatorEpoch != null && entry.coordinatorEpoch !== raw.coordinatorEpoch) ||
+      (entry.epoch != null && entry.epoch !== raw.coordinatorEpoch) ||
+      entry.state !== 'receipt' || entry.status !== 'available' || entry.bodyAvailable === false || entry.readLimited === true ||
+      receipt?.code !== 'approval_required' || receipt.ok !== false || receipt.accepted !== false ||
+      (receipt.approvalState !== 'pending' && receipt.approvalState !== 'denied') ||
+      receipt.requiresReconciliation === true || receipt.reconciliationRequired === true ||
+      (receipt.status != null && receipt.status !== 'not_dispatched') ||
+      receipt.dispatched === true || receipt.nativeDispatched === true || receipt.hostTaskId != null || receipt.teamRunId != null ||
+      typeof requested !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(requested)) return;
+  const decisions = raw.approvals.filter((decision: Record<string, unknown> | null) => decision?.id === requested);
+  const decision = decisions[0];
+  if (decisions.length !== 1 || decision.runId !== raw.runId || decision.tool !== entry.tool ||
+      decision.policyDecision != null || entry.arguments == null || !dequal(entry.arguments, decision.arguments)) return;
+  if (decision.state === 'denied') return 'denied';
+  if (receipt.approvalState === 'pending' && (decision.state === 'approved' || decision.state === 'consumed')) return 'approved';
+}
 
 /** A stored native invocation on the exact original phone, not an inference from the currently selected scope. */
 export function originalPhoneToolRecord(task: TaskHeader, operationId?: string): OriginalPhoneToolRecord | undefined {
@@ -303,13 +333,16 @@ export function TaskHistory({ task, canRead, canReadTrace = false, active = true
     </section></TabPanel>
       <TabPanel id="operations" shouldForceMount><section className="pw-task-operations" aria-label="工具记录">
       {tools.length ? <div className="pw-task-tools">{tools.map((operation, index) => {
+        const decision = originalRead && selectedTab === 'operations' ? originalToolApprovalDecision(task, operation, operations.page) : undefined;
         const original = originalRead && selectedTab === 'operations' ? originalWindowsTextAt(task, operation) : undefined;
         const received = original && receivedOriginalWindowsTextAt(task, operation, original, operations.page);
         const originalKey = original && JSON.stringify([identity, original]);
         const peerRead = original && bridge.getState().capabilities.commands.includes('devices.queryHistory') &&
           <OriginalWindowsTextRead key={originalKey} original={original} documentEpoch={documentEpoch} sourceRevision={revision}/>;
         return <div key={recordKey(operation.runId, operation.operationId)} data-audit-section="operations" data-audit-key={recordKey(operation.runId, operation.operationId)} tabIndex={-1}>
-          {operation.runId && task.raw?.runId && operation.runId !== task.raw.runId && <small className="pw-muted">早先执行记录</small>}{renderOperation(operation, index, task.id)}
+          {operation.runId && task.raw?.runId && operation.runId !== task.raw.runId && <small className="pw-muted">早先执行记录</small>}{renderOperation(forTaskOperationHistory(operation), index, task.id)}
+          {decision && <p className="pw-muted" role="status">{decision === 'approved'
+            ? '这次批准已保存。该回执不证明操作已执行。' : '这次拒绝已保存。原调用没有因此获准。'}</p>}
           {original && received ? <ReceivedOriginalWindowsText key={originalKey} original={original} received={received}
             documentEpoch={documentEpoch} sourceRevision={revision} fallback={peerRead}/> : peerRead}
         </div>;

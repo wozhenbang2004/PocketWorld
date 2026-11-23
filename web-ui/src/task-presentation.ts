@@ -249,6 +249,12 @@ export function getTaskEventHistory(task: unknown, originalOwnerWindow = false):
     partial: !completeHistory, ...(source === 'none' ? {unavailableReason: 'not_loaded' as const} : {})};
 }
 
+// Only this in-memory presentation can mark a card as history; native/remote JSON cannot.
+const operationHistory = Symbol('operationHistory');
+export function forTaskOperationHistory(operation: TaskOperation): TaskOperation {
+  return Object.assign({}, operation, { [operationHistory]: true });
+}
+
 /** Same conservative precedence as the host's TaskExecutionPresentation.operation. */
 export function presentOperation(input: unknown): OperationPresentation {
   const op = operation(input);
@@ -266,7 +272,11 @@ export function presentOperation(input: unknown): OperationPresentation {
   if (uncertain || outcome === 'effect_unknown' || outcome === 'invalid') { status = 'unknown'; stateLabel = '结果待核对'; }
   else if (state === 'project_running') { status = 'running'; stateLabel = '服务已有启动回执，尚无终态'; }
   else if (state === 'project_stopping') { status = 'waiting'; stateLabel = '服务正在收尾，尚未确认释放'; }
-  else if (code === 'approval_required') { status = 'needs_approval'; stateLabel = '等待本次操作授权'; }
+  else if (code === 'approval_required') {
+    const historical = (input as { [operationHistory]?: boolean })[operationHistory] === true;
+    status = historical ? 'returned' : 'needs_approval';
+    stateLabel = historical ? '原调用当时未获授权' : '等待本次操作授权';
+  }
   else if (state === 'resolved' && receipt?.source === 'owner_reconciliation') {
     status = 'returned';
     stateLabel = receipt.outcome === 'occurred' ? '主人已核对发生，非自动验证' : receipt.outcome === 'not_occurred' ? '主人已核对未发生，不会自动重试' : '主人已记录核对结论';
