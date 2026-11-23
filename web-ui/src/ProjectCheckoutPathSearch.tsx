@@ -2,18 +2,25 @@ import {useEffect,useRef,useState} from 'react';
 import {Button,TextField} from './forms-library';
 
 type Data=Record<string,any>;
-export type CheckoutPathHit={hit:number;path:string;sha256:string;bytes:number;binary:boolean;change:string};
-export type CheckoutPathPage={searchHandle:string;sourceDigest:string;query:string;filter:string;fileCount:number;total:number;start:number;next:number;files:CheckoutPathHit[]};
+export type CheckoutPathHit={hit:number;path:string;sha256:string;bytes:number;binary:boolean;change:string;beforeHash?:string};
+export type CheckoutPathPage={searchHandle:string;sourceDigest:string;query:string;filter:string;fileCount:number;total:number;start:number;next:number;files:CheckoutPathHit[];
+  baselineIdentity?:string;removedCount?:number};
 type Props={project:string;checkout:string;filesHandle:string;busy:boolean;visible:(value:boolean)=>void;
   invoke:(action:string,args:Data,accept:(v:Data)=>void)=>Promise<void>;open:(handle:string,hit:CheckoutPathHit)=>void};
 const sha=(v:unknown)=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
-export function checkoutPathPage(r:Data,project:string,checkout:string,filesHandle:string,q:string,mode:'all'|'changed',start=0,last?:CheckoutPathPage|null):CheckoutPathPage{
+export function checkoutPathPage(r:Data,project:string,checkout:string,filesHandle:string,q:string,mode:'all'|'changed'|'review_changes',start=0,last?:CheckoutPathPage|null):CheckoutPathPage{
+  const review=mode==='review_changes',removed=review?r.removedCount:0;
   if(r.projectId!==project||r.checkoutId!==checkout||r.filesHandle!==filesHandle||typeof r.searchHandle!=='string'||!r.searchHandle||
-    !sha(r.sourceDigest)||r.query!==q||r.filter!==mode||!Number.isInteger(r.total)||r.total<0||!Number.isInteger(r.fileCount)||r.fileCount<r.total||r.fileCount>2000||
-    r.start!==start||last&&(r.searchHandle!==last.searchHandle||r.sourceDigest!==last.sourceDigest||r.total!==last.total)||
+    !sha(r.sourceDigest)||r.query!==q||r.filter!==mode||!Number.isInteger(r.total)||r.total<0||r.total>(review?4000:2000)||
+    !Number.isInteger(r.fileCount)||r.fileCount<0||r.fileCount>2000||!Number.isInteger(removed)||removed<0||removed>r.total||r.total-removed>r.fileCount||
+    review&&(q!==''||!sha(r.baselineIdentity)||r.readOnly!==true)||
+    r.start!==start||last&&(r.searchHandle!==last.searchHandle||r.sourceDigest!==last.sourceDigest||r.total!==last.total||
+      review&&(r.baselineIdentity!==last.baselineIdentity||removed!==last.removedCount||r.fileCount!==last.fileCount))||
     !Array.isArray(r.files)||r.files.length!==Math.min(40,r.total-r.start)||r.next!==(r.start+r.files.length<r.total?r.start+r.files.length:-1)||
-    !r.files.every((v:Data,i:number)=>v.hit===r.start+i&&typeof v.path==='string'&&v.path.length>0&&v.path.length<=240&&sha(v.sha256)&&
-      Number.isSafeInteger(v.bytes)&&v.bytes>=0&&typeof v.binary==='boolean'&&['added','modified','unchanged'].includes(v.change)))
+    !r.files.every((v:Data,i:number)=>v.hit===r.start+i&&typeof v.path==='string'&&v.path.length>0&&v.path.length<=240&&
+      Number.isSafeInteger(v.bytes)&&v.bytes>=0&&typeof v.binary==='boolean'&&(v.change==='deleted'?
+        review&&v.sha256==='absent'&&sha(v.beforeHash)&&v.bytes===0:
+        sha(v.sha256)&&['added','modified','unchanged'].includes(v.change))))
     throw Error('这页命中不属于原副本的同一次查询，请重新查找。');
   return r as CheckoutPathPage;
 }

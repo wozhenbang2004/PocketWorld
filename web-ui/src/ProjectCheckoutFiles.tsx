@@ -620,8 +620,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   const readChangedPage = (start=0,previous?:CheckoutPathPage) => {
     if (!hasChangeReview||entered.current||edits.current||!live(generation.current)) return;
     if (!previous) setChanges(null);
-    void invoke(previous?'findNext':'find',previous?{searchHandle:previous.searchHandle,start}:{query:'',filter:'changed'},value=>{
-      const page=checkoutPathPage(value,projectId,checkoutId,handle.current,'','changed',start,previous);
+    void invoke(previous?'findNext':'find',previous?{searchHandle:previous.searchHandle,start}:{query:'',filter:'review_changes'},value=>{
+      const page=checkoutPathPage(value,projectId,checkoutId,handle.current,'','review_changes',start,previous);
       if(page.files.some(hit=>hit.change==='unchanged'))throw Error('没有取得该副本的原改动列表。');
       setChanges(page);
     });
@@ -654,7 +654,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   });
   const openChangedFile = async (hit:CheckoutPathHit) => {
     const page=changes,sequence=generation.current,filesHandle=handle.current;
-    if(finder!=='changes'||!page?.files.includes(hit)||hit.binary||hit.bytes>262144||
+    if(finder!=='changes'||!page?.files.includes(hit)||hit.change==='deleted'||hit.binary||hit.bytes>262144||
         currentFile.current||entered.current||edits.current||!live(sequence))return;
     // Native can open the hit even if the reply is lost. Its earlier cold
     // save locator is usable only with no file opened in this same window.
@@ -1181,14 +1181,18 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     {finder==='changes' ? <>
       {!file ? <section className="pw-form-flow" aria-busy={busy} aria-label="已保存的副本改动">
         <h3 ref={changesHeading} tabIndex={-1}>已保存的改动</h3>
-        <p className="pw-field-hint">相对这个副本的基线，只列新增和修改。不含删除或未保存的草稿。点一个文件，再与正式项目比较。</p>
+        <p className="pw-field-hint">本次读取对照这份副本的源码基线，不含未保存草稿。点新增或修改的文件可与正式项目比较；缺失项只列出，不会在这里删除正式文件。</p>
         {!changes&&(busy?<p role="status">正在读取这份副本的改动…</p>:
           !error&&<p className="pw-field-hint">改动列表需要重新读取。</p>)}
-        {changes&&<><p role="status">{changes.total?`${changes.total} 个改动 · 第 ${changes.start+1} 至 ${changes.start+changes.files.length} 项`:'这份副本没有已保存的新增或修改。'}</p>
-          <div className="pw-checkout-file-list">{changes.files.map(hit=><Button key={hit.path} variant="ghost"
-              disabled={locked||hit.binary||hit.bytes>262144} onClick={()=>void openChangedFile(hit)}>
-            <span dir="auto">{hit.path}</span><small>{hit.change==='added'?'新增':'修改'}{hit.binary?' · 二进制，只列信息':hit.bytes>262144?' · 超过编辑上限，只列信息':''}</small>
-          </Button>)}</div>
+        {changes&&<><p role="status">{changes.total?<>{changes.total} 个改动
+          {changes.removedCount?<>（副本中缺失 {changes.removedCount} 个）</>:null}
+          {' · 第 '}{changes.start+1} 至 {changes.start+changes.files.length} 项
+        </>:'这份副本没有相对基线的已保存改动。'}</p>
+          <div className="pw-checkout-file-list">{changes.files.map(hit=>hit.change==='deleted'?
+            <p key={hit.path} className="pw-reading-note"><bdi>{hit.path}</bdi><br/><small>副本中缺失 · 仅供核对</small></p>:
+            <Button key={hit.path} variant="ghost" disabled={locked||hit.binary||hit.bytes>262144} onClick={()=>void openChangedFile(hit)}>
+              <span dir="auto">{hit.path}</span><small>{hit.change==='added'?'新增':'修改'}{hit.binary?' · 二进制，只列信息':hit.bytes>262144?' · 超过编辑上限，只列信息':''}</small>
+            </Button>)}</div>
           <div className="pw-form-actions">
             {changes.start>0&&<Button size="small" variant="ghost" disabled={locked} onClick={()=>readChangedPage(changes.start-40,changes)}>上一页</Button>}
             {changes.next!==-1&&<Button size="small" variant="ghost" disabled={locked} onClick={()=>readChangedPage(changes.next,changes)}>下一页</Button>}

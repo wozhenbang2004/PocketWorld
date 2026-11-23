@@ -617,7 +617,8 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     }
                 }else{
                     fields(args,"viewHandle","filesHandle","searchHandle","start")
-                    val search=text(args,"searchHandle");val start=number(args,"start");require(start in 0L..2000L)
+                    val search=text(args,"searchHandle");val start=number(args,"start")
+                    require(start in 0L..CheckoutPathMatches.MAX_REVIEW_PATHS.toLong())
                     work(original,done){
                         controller.projectDevelopmentForWeb().requireOrdinaryFileOwner(original.project,original.checkout)
                         check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已结束，请重新查找"}
@@ -651,7 +652,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 var browsed: CheckoutPathMatches.DirectoryPage? = null
                 val hit=if(action.endsWith(".readFound")){
                     check(original.sourcePath==null){"原任务只读所选文件"};fields(args,"viewHandle","filesHandle","searchHandle","hit")
-                    val index=number(args,"hit");require(index in 0L..1999L);val id=text(args,"searchHandle")
+                    val index=number(args,"hit");require(index in 0L until CheckoutPathMatches.MAX_REVIEW_PATHS.toLong());val id=text(args,"searchHandle")
                     val folder=original.directory?.takeIf{it.handle==id};browsed=folder
                     if(folder!=null)folder.selected(index.toInt()) else{
                         check(SystemClock.elapsedRealtime()<original.matchesUntil){"原查询已过期，请重新查找"}

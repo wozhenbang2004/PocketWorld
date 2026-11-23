@@ -10702,11 +10702,18 @@ export default function App(){
    pairedDevicesProject:true,focus:trigger,focusKey:'project-paired-device'};
   void navigate('devices',()=>{relatedOrigin.current=origin},{keepOrigin:true,stillCurrent:current});
  };
+ const canReadKeptPages=supportsKeptStaticPages(can);
+ // One shelf is placed in the selected tab. Tab navigation first closes any live shelf through its existing visit.
+ const keptStaticEntry=currentProject&&canReadKeptPages&&(projectSection==='work'||projectSection==='preview')?
+  <ProjectKeptStaticPages key={currentProject.id} project={currentProject}
+    active={ready&&route==='projects'&&!projectPreview.expanded&&!previewBlocked&&!taskOpening&&
+      !packageOpening&&!choosingSavedStaticFile&&!projectStartDraft?.expanded}
+    registerNavigation={registerKeptStaticShelf}/>:null;
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} returnToAdoptedSource={returnToAdoptedSource} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
     <Tabs selectedKey={projectPreview.expanded?'preview':projectSection} onSelectionChange={key=>showProjectSection(key==='preview'?'preview':key==='files'?'files':'work')} className="pw-project-tabs">
-      <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!savedStaticFolder&&!canReadCurrentWeb&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
+      <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!savedStaticFolder&&!canReadCurrentWeb&&!canReadKeptPages&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
         onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
@@ -10714,10 +10721,7 @@ export default function App(){
          firstLocalFilesWorkProject?{onOpen:()=>openLocalProjectFiles('work'),label:'编辑本机文件'}:
          preparedLocalFilesWork?{onOpen:()=>openLocalProjectFiles('work',preparedLocalFilesWork),label:'打开本机源码'}:undefined}
         localCopyFirst={importedSourceFirst||retainedCopyFirst}
-        keptStaticContent={supportsKeptStaticPages(can)&&<ProjectKeptStaticPages key={currentProject.id} project={currentProject}
-          active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked&&!taskOpening&&
-            !packageOpening&&!choosingSavedStaticFile&&!projectStartDraft?.expanded}
-          registerNavigation={registerKeptStaticShelf}/>}
+        keptStaticContent={projectSection==='work'?keptStaticEntry:null}
         savedWebContent={!choosingSavedStaticFile&&can('projects.savedBuildWeb.read')&&<ProjectSavedBuildWeb key={currentProject.id} project={currentProject.id}
           active={ready&&route==='projects'&&projectSection==='work'&&!projectPreview.expanded&&!previewBlocked}
           canPreview={can('projects.package.preview.inspect')&&can('projects.package.preview.open')&&!packageOpening}
@@ -10784,6 +10788,7 @@ export default function App(){
       <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>
         {!projectPreview.expanded?<section className="pw-preview-entry" aria-label="选择项目预览来源">
           <h3>项目预览</h3>
+          {projectSection==='preview'&&keptStaticEntry}
           {canReadCurrentWeb&&<><p className="pw-reading-note">只核对当前私人副本已保存的源码与对应的本机网页成果。不会自动构建或保存。</p>
             <Button disabled={previewBlocked||taskOpening} onClick={openCurrentProjectWeb}>预览已构建网页</Button></>}
           {savedStaticFolder&&<div className="pw-form-actions">
