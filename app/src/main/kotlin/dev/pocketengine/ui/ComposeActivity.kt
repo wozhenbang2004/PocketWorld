@@ -280,7 +280,9 @@ class ComposeActivity : ComponentActivity() {
         engine.remoteOwnerWorkflows?.setForeground(this, true); engine.refreshRemoteAttention()
         controller.realtimeForeground(true); controller.refresh(); controller.backgroundSetupResumed()
         controller.attachmentOutcomes.exportRequestId?.let(::restoreOutcomeDocument); attachmentPicker.resume()
-        controller.attachmentOutcomes.foreground(true); controller.projectFileImports.foreground(true)
+        controller.attachmentOutcomes.foreground(true)
+        controller.resumeRegisteredChatFilePick()
+        controller.projectFileImports.foreground(true)
         controller.projectPackages.foreground(true); controller.ownerArchives.foreground(true)
         controller.projectStorage.foreground(true); controller.projectGitImports.foreground(true)
     }

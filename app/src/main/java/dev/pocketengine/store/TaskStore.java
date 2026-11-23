@@ -899,6 +899,105 @@ public final class TaskStore {
                 new SearchAnchorFileReceipt(null,file):null;
     }
 
+    /** Native ordinary History selection. The immutable publication is still needs_confirmation. */
+    public record ConfirmedHistoryWordSource(String conversation,String message,long revision,String fingerprint,long endedAt,
+                                             OwnerWorkDeliveryRef delivery) { }
+    public record ConfirmedHistoryWord(ConfirmedHistoryWordSource source,long resultRevision,String reviewDigest,
+                                       OriginalReplyDocument file) { }
+    /** Inspect this one committed producer, its exact native verdict and a bounded document receipt.
+     * The result is describe/select-only; it does not open a file or grant any model/tool action. */
+    public synchronized ConfirmedHistoryWord confirmedHistoryWord(ConfirmedHistoryWordSource source,
+            ConfirmedHistoryWord expected,RunControl read)throws Exception{
+        if(source==null||read==null||read.hasHostRun()||db.inTransaction()||conversationRepository==null||
+                !OriginalReplyDocument.uuid(source.conversation())||!OriginalReplyDocument.uuid(source.message())||
+                source.revision()<1||source.endedAt()<1||source.fingerprint()==null||
+                !source.fingerprint().matches("sha256:[a-f0-9]{64}")||source.delivery()==null||
+                expected!=null&&!source.equals(expected.source()))throw new SecurityException("未核对到原历史消息");
+        OwnerWorkDeliveryRef ref=source.delivery();String task=ref.taskId(),run=ref.runId(),conversation=source.conversation();
+        int epoch=ref.epoch();
+        if(!OriginalReplyDocument.uuid(task)||!OriginalReplyDocument.uuid(run)||!OriginalReplyDocument.uuid(ref.deliveryId())||epoch<1)
+            throw new SecurityException("原工作轮次不可核对");
+        read.checkpoint();db.beginTransactionNonExclusive();try{
+            JSONObject work=boundedHostWorkCore(task,false);
+            if(!OwnerWorkTask.isOwnerWork(work)||!task.equals(work.opt("id"))||
+                    !"assistant".equals(work.opt("kind"))||!"capabilities".equals(work.opt("executionMode"))||
+                    !"owner".equals(work.opt("actorId"))||!"private".equals(work.opt("spaceId"))||
+                    !conversation.equals(work.opt("conversationId"))||!run.equals(work.opt("runId"))||
+                    epoch!=OriginalReplyDocument.integer(work.opt("coordinatorEpoch"))||!"completed".equals(work.opt("status"))||
+                    work.optBoolean("cancelRequested")||Boolean.FALSE.equals(work.opt("contextAvailable"))||
+                    work.optBoolean("contextWithdrawn")||work.optBoolean("sourceCurrentReadRequired")||
+                    "source_unavailable".equals(work.opt("taskProjection"))||hasUnresolvedOperations(task,null))
+                throw new SecurityException("原工作未验收或已变化");
+            for(String key:List.of("origin","parentTaskId","teamRunId","teamAssignment","memberId","developmentContext",
+                    "ownerPhoneControl","ownerDeviceWork","workProfileRef","workProfileIntent","projectMemoryRead","teamWriteScope"))
+                if(!work.isNull(key))throw new SecurityException("只可选取普通私人工作的原 Word");
+            JSONArray children=work.optJSONArray("relatedTasks");
+            if(children!=null&&children.length()>0)throw new SecurityException("有关联工作的文件请回原工作核对");
+
+            JSONObject confirmation=work.optJSONObject("resultConfirmation");
+            long revision=OriginalReplyDocument.integer(work.opt("resultRevision"));
+            String review=confirmation==null?"":confirmation.optString("resultReviewDigest");
+            if(revision<1||confirmation==null||!Boolean.TRUE.equals(confirmation.opt("completed"))||
+                    !confirmation.isNull("teamReportEvidence")||!review.matches("[a-f0-9]{64}")||
+                    revision!=OriginalReplyDocument.integer(confirmation.opt("confirmedResultRevision"))||
+                    expected!=null&&(revision!=expected.resultRevision()||!review.equals(expected.reviewDigest())))
+                throw new SecurityException("原工作没有这版结果的肯定验收");
+            JSONObject saved=ownerWorkDeliveryById(work,ref.deliveryId());
+            if(!"needs_confirmation".equals(saved.opt("status"))||source.endedAt()!=OriginalReplyDocument.integer(saved.opt("endedAt"))||
+                    saved.has("noticeKind")||saved.has("resultKind")||saved.has("baseDeliveryId")||
+                    !"delivered".equals(saved.opt("deliveryState"))||!source.message().equals(saved.opt("messageId"))||
+                    !conversation.equals(saved.opt("conversationId"))||!task.equals(saved.opt("taskId"))||!run.equals(saved.opt("runId"))||
+                    epoch!=OriginalReplyDocument.integer(saved.opt("epoch")))
+                throw new SecurityException("不是这条消息的原工作交付");
+            try(Cursor original=db.rawQuery("SELECT 1 FROM runs r WHERE r.task_id=? AND r.run_id=? AND r.epoch=? "+
+                    "AND r.status='needs_confirmation' AND r.updated_at=? AND NOT EXISTS "+
+                    "(SELECT 1 FROM leases l WHERE l.run_id=r.run_id AND l.epoch=r.epoch) LIMIT 1",
+                    new String[]{task,run,Integer.toString(epoch),Long.toString(source.endedAt())})){
+                if(!original.moveToFirst())throw new SecurityException("原工作结束回执已变化");
+            }
+            try(Cursor event=db.rawQuery("SELECT event_order,native_seq,completed,CASE WHEN body_bytes BETWEEN 1 AND 32768 "+
+                    "AND body_bytes=length(CAST(event_json AS BLOB)) THEN event_json END FROM task_events INDEXED BY task_events_type "+
+                    "WHERE task_id=? AND event_type='user_verification' ORDER BY event_order DESC LIMIT 1",new String[]{task})){
+                if(!event.moveToFirst()||event.isNull(1)||event.getLong(1)!=event.getLong(0)||event.getInt(2)!=1||event.isNull(3)||
+                        !TaskAuditStore.matchesOwnerVerification(event.getString(3),task,run,epoch,event.getLong(0),review,revision))
+                    throw new SecurityException("没有这轮原工作已保存的肯定验收回执");
+            }
+            conversationRepository.requireOriginalOwnerWorkDelivery(conversation,source.message(),source.revision(),task,run,epoch,
+                    ref.deliveryId(),saved.getString("resultDigest"),saved.getString("generation"),source.fingerprint(),
+                    "needs_confirmation",source.endedAt());
+            read.checkpoint();
+            OriginalReplyDocument file;
+            if(expected==null)file=singleConfirmedHistoryWord(ref,read);
+            else{
+                OriginalReplyDocument held=expected.file();
+                file=held==null?null:originalReplyDocumentReceipt(task,run,held.operationId());
+                if(file==null||!file.equals(held))throw new SecurityException("原 Word 生成回执已变化");
+            }
+            if(file==null||!file.mimeType().equals("application/vnd.openxmlformats-officedocument.wordprocessingml.document")||
+                    !file.publication(task,run))throw new SecurityException("未核对到这轮唯一的原 Word");
+            read.checkpoint();db.setTransactionSuccessful();return new ConfirmedHistoryWord(source,revision,review,file);
+        }finally{db.endTransaction();}
+    }
+
+    private OriginalReplyDocument singleConfirmedHistoryWord(OwnerWorkDeliveryRef ref,RunControl read)throws Exception{
+        OriginalReplyDocument chosen=null;int inspected=0;
+        try(Cursor rows=db.rawQuery("SELECT operation_id,CASE WHEN length(CAST(receipt AS BLOB))<=32768 THEN receipt END FROM operations "+
+                "WHERE task_id=? AND run_id=? AND state='receipt' AND tool=? ORDER BY created_at DESC,operation_id DESC LIMIT 9",
+                new String[]{ref.taskId(),ref.runId(),OriginalReplyDocument.TOOL})){
+            while(rows.moveToNext()){
+                read.checkpoint();
+                if(inspected++>=8||rows.isNull(1))throw new SecurityException("原 Word 生成清单未完整核对");
+                OriginalReplyDocument candidate=OriginalReplyDocument.fromReceipt(new JSONObject(rows.getString(1)));
+                if(candidate==null||!rows.getString(0).equals(candidate.operationId())||
+                        !candidate.publication(ref.taskId(),ref.runId()))throw new SecurityException("原文档生成回执尚未核对");
+                if(!candidate.mimeType().equals("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))continue;
+                if(chosen!=null)throw new SecurityException("这轮有多份原 Word，请从原工作选择具体文件");
+                chosen=candidate;
+            }
+        }
+        return chosen;
+    }
+
     private static String originalReplyDocumentInput(JSONObject task,JSONObject input){
         if(input==null)return null;
         String id=task.optString("id"),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");

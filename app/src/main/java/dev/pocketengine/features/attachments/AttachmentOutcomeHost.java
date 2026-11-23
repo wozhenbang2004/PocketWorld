@@ -427,6 +427,15 @@ public final class AttachmentOutcomeHost {
         control.checkpoint();
         return pin.view();
     }
+    /** Metadata admission for one explicit confirmed History picker. Never call originalFile,
+     * generic privateMetadata, or the byte-verifying native publication recovery path. */
+    public TaskStore.ConfirmedHistoryWord confirmedHistoryWord(TaskStore.ConfirmedHistoryWordSource source,
+            TaskStore.ConfirmedHistoryWord expected,RunControl read)throws Exception{
+        TaskStore.ConfirmedHistoryWord held=tasks.confirmedHistoryWord(source,expected,read);
+        var producer=source.delivery();
+        repository.book.requireConfirmedHistoryWord(held.file(),producer.taskId(),producer.runId(),read);
+        read.checkpoint();return held;
+    }
     public record SearchAnchorFileList(java.util.List<TaskStore.SearchAnchorFileReceipt> files,boolean limited) { }
     /** Positive headers only. The exact Book get checks the selected metadata/stat, not the blob. */
     public SearchAnchorFileList searchAnchorFiles(TaskStore.SearchAnchorWorkResult original,RunControl read)throws Exception{

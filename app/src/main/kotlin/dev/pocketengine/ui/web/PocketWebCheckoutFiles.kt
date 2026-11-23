@@ -62,9 +62,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         fun matches(value: ProjectFileDraft) = revision == value.revision && path == value.path && sha == value.baseHash &&
             !value.creating && !value.dirty() && !value.conflict()
     }
+    private class SaveAttempt(val draft: ProjectFileDraft, val sequence: Long, val intent: ProjectFileDraft.SaveIntent)
     private class Opened(val handle: String, @Volatile var draft: ProjectFileDraft, val pythonRead: PythonSavedRead? = null) {
         @Volatile var sequence = 0L
         @Volatile var saveUnknown = false
+        @Volatile var unconfirmedSave: SaveAttempt? = null
         @Volatile var formal: ProjectAdoptedFormalFile? = null
     }
     private val main = Handler(Looper.getMainLooper())
@@ -691,6 +693,11 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                     }
                     text(args,"expectedPythonSha256").also { require(it.matches(Regex("[a-f0-9]{64}"))) }
                 }else null
+                // Only an explicit reread of the same still-open ordinary editor can settle this observation.
+                val uncertainEditor=if(action.endsWith(".read") && original.sourcePath==null && gitStatus==null &&
+                    saved==null && listed==null && pythonTask==null && setupSha==null)
+                    original.opened?.takeIf { it.saveUnknown && it.draft.path==path } else null
+                val uncertainSave=uncertainEditor?.unconfirmedSave
                 if (original.sourcePath != null) {
                     check(path == original.sourcePath && !busy) { "只能重新核对已选择的原文件" }
                     original.opened?.let { store.release(it.draft) }; original.opened = null
@@ -735,6 +742,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         }
                     }
                     val pythonReadCandidate = actual.remove(LocalModule.OWNER_PYTHON_SAVED_READ) == true
+                    var matchedUnconfirmedSave=false
                     val value = synchronized(store) {
                         if(browsed!=null)check(current(original)&&original.directory===browsed){"原目录页面已关闭，未打开其他文件"}
                         // Do not touch even the existing draft/cache for a deleted or replacement version.
@@ -758,7 +766,12 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         if(setupSha!=null)check(!prior.creating && !prior.dirty() && !prior.conflict()) {
                             "原脚本已有保留草稿。未打开或覆盖草稿，只显示同一副本的文件清单。"
                         }
-                        val observed = if (original.sourcePath == null && current(original))
+                        val recovered=if(uncertainEditor!=null && uncertainSave!=null && current(original) &&
+                            original.opened===uncertainEditor && uncertainEditor.saveUnknown && uncertainEditor.unconfirmedSave===uncertainSave &&
+                            uncertainEditor.sequence==uncertainSave.sequence && uncertainEditor.draft===uncertainSave.draft &&
+                            prior===uncertainSave.draft) prior.recoverMatchingOrdinarySave(uncertainSave.intent,actual) else null
+                        matchedUnconfirmedSave=recovered!=null
+                        val observed = recovered ?: if (original.sourcePath == null && current(original))
                             prior.observeRecoveredOrdinaryFile(actual) else prior.observe(actual)
                         if(listed!=null)check(current(original) && original.opened==null) { "原副本清单已关闭，未替换草稿。" }
                         observed.also { store.retain(it) }
@@ -773,6 +786,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                         !value.creating && !value.dirty() && !value.conflict()) PythonSavedRead(value.revision,value.path,value.baseHash) else null
                     val file = Opened(UUID.randomUUID().toString(), value, pythonRead); original.opened = file
                     val shown = info(original, file, true)
+                    if(matchedUnconfirmedSave)shown.put("message","刚读取的副本内容与那次提交一致。没有再次保存。")
                     if(anchor!=null)shown.put("sourceHit",anchor)
                     if(hit!=null)shown.put("matchedFileSha256",hit.sha())
                     if(saved!=null)shown.put("savedEditId",saved.id)
@@ -791,7 +805,10 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 val value = text(args, "text", 262144, true)
                 synchronized(store) {
                     requireDraft(file)
-                    if (sequence > file.sequence) { val next = file.draft.edit(value); store.retain(next); file.draft = next; file.sequence = sequence }
+                    if (sequence > file.sequence) {
+                        val next = file.draft.edit(value); store.retain(next); file.draft = next; file.sequence = sequence
+                        file.unconfirmedSave = null
+                    }
                 }
                 done(info(original, file, false), null)
             }
@@ -809,7 +826,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 synchronized(store) {
                     requireDraft(file); check(number(args, "revision") == file.draft.revision) { "草稿在比较后已变化，没有替换" }
                     val next = if (choice == "keep_mine") file.draft.keepMineAgainstLatest() else file.draft.useLatest()
-                    store.retain(next); file.draft = next; file.saveUnknown = false
+                    store.retain(next); file.draft = next; file.saveUnknown = false; file.unconfirmedSave = null
                 }
                 done(info(original, file, true), null)
             }
@@ -818,7 +835,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                 val createEmpty=args.has("createEmpty")
                 require(!createEmpty||args.opt("createEmpty")==true) { "需要明确选择创建空文件" }
                 val file = opened(original, args)
-                val submitted = synchronized(store) {
+                val attempt = synchronized(store) {
                     requireDraft(file); check(!file.saveUnknown && number(args, "revision") == file.draft.revision && number(args, "editSequence") == file.sequence) { "编辑或保存状态已变化，请读取原文件核对" }
                     if(createEmpty){
                         val draft=file.draft;val latest=draft.latestReview()
@@ -832,8 +849,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                             "这份副本没有核对到原路径确实不存在，未创建空文件。"
                         }
                     }else check(file.draft.dirty()) { "没有待保存的修改" }
-                    file.draft.saveIntent()
+                    SaveAttempt(file.draft,file.sequence,file.draft.saveIntent())
                 }
+                val submitted=attempt.intent
                 work(original, done) {
                     try {
                         val host = controller.projectDevelopmentForWeb()
@@ -856,6 +874,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
                                 }
                             }
                     } catch (failure: Exception) {
+                        file.unconfirmedSave = attempt.takeIf { original.sourcePath==null && !createEmpty }
                         file.saveUnknown = true
                         info(original, file, true).put("saveStatus", "unknown").put("message", "原保存未取得完整回执，草稿仍保留。请读取同一文件核对，不自动再次保存。").put("saveError", failure.message)
                     } finally {

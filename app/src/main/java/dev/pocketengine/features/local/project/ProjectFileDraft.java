@@ -44,6 +44,17 @@ public final class ProjectFileDraft {
     public ProjectFileDraft observeRecoveredOrdinaryFile(JSONObject review) throws org.json.JSONException {
         return observe(review, true);
     }
+    /** The already-open owner editor reread its unconfirmed submission. Proves only the current bytes. */
+    public ProjectFileDraft recoverMatchingOrdinarySave(SaveIntent submitted,JSONObject review) throws org.json.JSONException {
+        if(submitted==null||!dirty()||!hasBaseline()||submitted.revision!=revision||
+                !projectId.equals(submitted.projectId)||!checkoutId.equals(submitted.checkoutId)||!path.equals(submitted.path)||
+                !text.equals(submitted.text)||!baseHash.equals(submitted.expectedHash)||
+                !Boolean.FALSE.equals(review.opt("deleted"))||!(review.opt("expectedHash") instanceof String sha)||
+                !sha.equals(review.opt("sha256"))||!sha.matches("[a-f0-9]{64}")||sha.equals(baseHash)||!text.equals(review.opt("content")))
+            return null;
+        requireReview(review);
+        return next(text,text,sha,false,review);
+    }
     private ProjectFileDraft observe(JSONObject review, boolean recoverSameBytes) throws org.json.JSONException {
         requireReview(review);
         String current = review.getString("content"), sha = review.getString("expectedHash");

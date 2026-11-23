@@ -350,6 +350,19 @@ public final class AttachmentBook {
             return new JSONObject(StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString());
         }
     }
+    /** One proved Word publication's index and nofollow blob stat only. No byte read,
+     * use of generic Book authority, or publish/revoke side effect on a stale lookup. */
+    synchronized void requireConfirmedHistoryWord(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
+        read.checkpoint();String id=pin.id();checkId(id);
+        java.nio.file.Path record=new File(root,id+".json").toPath(),blob=new File(root,id+".blob").toPath();
+        if(Files.exists(new File(root,id+".part").toPath(),LinkOption.NOFOLLOW_LINKS)||
+                Files.exists(new File(root,id+".json.pending").toPath(),LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原 Word 尚未完整登记");
+        BasicFileAttributes actual=Files.readAttributes(blob,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!actual.isRegularFile()||actual.size()!=pin.size()||!pin.matchesBook(readIndex(record,new IndexReadBudget()),task,run))
+            throw new SecurityException("原 Word 已撤回或不是这份固定版本");
+        read.checkpoint();
+    }
     public synchronized JSONObject get(String id)throws Exception{return visible(internal(id));}
     synchronized JSONObject internal(String id)throws Exception{
         checkId(id);try{File record=new File(root,id+".json"),data=new File(root,id+".blob");if(!record.isFile()||!data.isFile())throw new IllegalArgumentException("附件不存在");JSONObject value=readIndex(record.toPath(),new IndexReadBudget());if(!id.equals(value.optString("id"))||data.length()!=value.getLong("size"))throw new IllegalStateException("附件记录与文件不一致");return value;}

@@ -1059,7 +1059,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var attachmentDraftModel: AttachmentDraftModel? = null
     // A restored OS picker may finish importing, but cannot adopt the next open draft.
     private data class ChatFilePick(val request: String, val picker: String, val current: () -> Boolean)
+    private data class RegisteredChatFilePick(
+        val pick: ChatFilePick, val target: OwnerAttachmentImport.Target,
+        val receipt: OwnerAttachmentImport.Receipt, val files: List<UiChatAttachment>
+    )
     private var chatFilePick: ChatFilePick? = null
+    // Same live Activity/controller only. Neither the system Intent nor its URI grant survives here.
+    private var registeredChatFilePick: RegisteredChatFilePick? = null
     internal var chatFilePickFeedback by mutableStateOf<Pair<String, String>?>(null)
         private set
     private var attachmentPagingDeniedAt: Long? = null
@@ -3625,7 +3631,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun pickFilesForChatDraft(picker: String, current: () -> Boolean) {
         check(current() && chatFilePickReady(picker)) { "原输入或模型已变化，请回输入框重新打开附件选择" }
         check(state.selectedChatAttachments.size < AttachmentRequestProjection.MAX_ATTACHMENTS) { "每条消息最多选择4个附件" }
-        check(chatFilePick == null && !state.attachmentImporting) { "请先完成上一次文件选择" }
+        check(chatFilePick == null && registeredChatFilePick == null && !state.attachmentImporting) { "请先完成上一次文件选择" }
         val target = OwnerAttachmentImport.Target.forChatDraft()
         val pick = ChatFilePick(target.requestId, picker, current)
         chatFilePickFeedback = null
@@ -3639,6 +3645,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private fun takeChatFilePick(original: OwnerAttachmentImport.Target?): ChatFilePick? =
         chatFilePick?.takeIf { it.request == original?.requestId }?.also { chatFilePick = null }
+
+    private fun finishChatFilePick(pick: ChatFilePick, target: OwnerAttachmentImport.Target?,
+        receipt: OwnerAttachmentImport.Receipt, files: List<UiChatAttachment>?) {
+        // A provider can finish this exact result while the Activity is still paused.
+        // Do not turn missing foreground into a permanent rejection of this live draft.
+        if (!voiceForeground && !activity.isFinishing && !activity.isDestroyed && registeredChatFilePick == null &&
+            target != null && target.requestId == pick.request && !target.restoredChatDraftSelection() &&
+            files != null && files.isNotEmpty() && files.size == receipt.imported &&
+            chatAttachmentPickerRequest() == pick.picker && attachmentComposerEpoch == chatViewEpoch &&
+            composerDraft?.key == attachmentComposerKey) {
+            registeredChatFilePick = RegisteredChatFilePick(pick, target, receipt, files)
+            return
+        }
+        recordOrdinaryListImports(pick.picker, target, receipt)
+        stagePickedChatFiles(pick, receipt, files)
+    }
+
+    /** Called after the original Activity genuinely resumes, never after a new import or from a saved grant. */
+    internal fun resumeRegisteredChatFilePick() {
+        if (!webUiCanInteract()) return
+        val registered = registeredChatFilePick ?: return
+        registeredChatFilePick = null
+        // The existing gates still require the exact document, picker, draft revision, and model.
+        finishChatFilePick(registered.pick, registered.target, registered.receipt, registered.files)
+    }
 
     private fun stagePickedChatFiles(pick: ChatFilePick, receipt: OwnerAttachmentImport.Receipt, files: List<UiChatAttachment>?) {
         if (receipt.imported == 0) {
@@ -3709,7 +3740,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val received = Intent(intent)
         val restoredDraftOrigin = original?.restoredChatDraftSelection() == true
         val draftPick = takeChatFilePick(original).takeUnless { restoredDraftOrigin }
-        val ordinaryPicker = if (restoredDraftOrigin) null else takeOrdinaryLibraryPick(original) ?: draftPick?.picker
+        val ordinaryPicker = if (restoredDraftOrigin) null else takeOrdinaryLibraryPick(original)
         attachmentOutcomes.libraryImportSelected(original)
         state = state.copy(attachmentImporting = true, notice = null, error = null)
         try { io.execute {
@@ -3732,13 +3763,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }.getOrNull() else null
                 main.post {
                     if (!closed) {
-                        recordOrdinaryListImports(ordinaryPicker,original,receipt)
+                        if (draftPick == null) recordOrdinaryListImports(ordinaryPicker,original,receipt)
                         val notice = if (restoredDraftOrigin && receipt.imported > 0)
                             "已保存 ${receipt.imported} 个附件到附件库。没有加入原草稿；回到原输入点「添加附件」可手动选择，不用重新导入。"
                         else receipt.notice
                         state = state.copy(attachmentImporting = false, notice = notice, error = receipt.error)
                         attachmentOutcomes.imported(original,receipt)
-                        if (draftPick != null) stagePickedChatFiles(draftPick, receipt, files)
+                        if (draftPick != null) finishChatFilePick(draftPick, original, receipt, files)
                     }
                 }
                 // A display-refresh failure cannot turn already saved bytes into an import failure.

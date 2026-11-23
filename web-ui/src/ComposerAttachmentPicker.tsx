@@ -150,8 +150,9 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
                 : reason ?? (overPhotoBytes ? '加上这张原图会超过本条容量，可换较小的图片。' : paged ? (pagingDenied
                   ? '只提供文件引用。当前规则禁止分段读取正文。'
                   : '只提供文件引用。能否分段读取，发送后由原任务核对。') : hint);
-              const disabled = !onToggle || !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections ||
+              const blocked = !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections ||
                 overPhotoBytes || newPhoto && photoSlotsFull));
+              const checkboxDisabled = blocked || !onToggle;
               const copy = <span className="pw-attachment-copy">
                 <b>{typeof file.name === 'string' && file.name ? file.name : '未命名附件'}</b>
                 {note ? <small>{note}</small> : typeof file.size === 'number' && <small>{fileBytes(file.size)}</small>}
@@ -160,10 +161,10 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
               return <div className="pw-attachment-object" key={target ? `${target.fileId}:${target.sha256}` : index}>
                 {resultAction ? <>{copy}{selectedHere&&<small className="pw-muted">已在原话题草稿</small>}
                   {rows.length===1&&target&&<PressButton label={selectedHere?'返回原话题草稿':'加入原话题草稿并返回'}
-                    disabled={!!resultAction.pending||!selectedHere&&disabled}
+                    disabled={!!resultAction.pending||!selectedHere&&blocked}
                     onClick={()=>resultAction.confirm(target.fileId,target.sha256,selectedHere)}/>}
-                </> : <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={selected => {
-                  if (!disabled && target) onToggle?.(target.fileId, target.sha256, selected);
+                </> : <CheckboxField isSelected={selectedHere} isDisabled={checkboxDisabled} onChange={selected => {
+                  if (!checkboxDisabled && target) onToggle?.(target.fileId, target.sha256, selected);
                 }}>{copy}</CheckboxField>}
               </div>;
             })}
