@@ -13,6 +13,8 @@ import { OriginalSavedMemory, originalMemoryWindow } from './OriginalSavedMemory
 import { usePendingCandidateDeadline } from './usePendingCandidateDeadline';
 
 type Data = Record<string, any>;
+type FocusedSavedMemory = { id: string; revision: number; duplicate: boolean; windowKey: string;
+  undo?: { operation: ConversationDraftTarget; candidateId: string } };
 type SavedElsewhere = { readExpiresAt: number } & (
   { status: 'same_version'; id: string; revision: 1; text: string } |
   { status: 'changed'; revision: number } | { status: 'past_only' });
@@ -55,7 +57,7 @@ export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, o
   const [adopted, setAdopted] = useState<{ row: SavedElsewhere; window: string } | null>(null);
   const [resolved, setResolved] = useState<ConversationDraftTarget | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [attempted, setAttempted] = useState(false), [undoUncertain, setUndoUncertain] = useState(false);
-  const [focused, setFocused] = useState<{ id: string; revision: number; duplicate: boolean; windowKey: string } | null>(null);
+  const [focused, setFocused] = useState<FocusedSavedMemory | null>(null), [undoFromRecord, setUndoFromRecord] = useState(false);
   const handle = useRef(''), alive = useRef(true), entered = useRef(false);
   const selected = target || resolved;
   const original = selected && { taskId: selected.taskId, runId: selected.runId, epoch: selected.epoch, operationId: selected.operationId, proposalDigest: selected.proposalDigest };
@@ -144,10 +146,23 @@ export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, o
   const saved = outcomeStatus === 'saved', reverted = outcomeStatus === 'reverted', duplicate = outcomeStatus === 'already_saved';
   const undoPending = undoUncertain || ['unknown', 'undoing_unknown'].includes(value?.undo?.status);
   const receiptRecord = duplicate ? (value?.receipt?.existingRecord || apply.existingRecord) : originalRecord;
-  const displayedRecord = receiptRecord || (duplicate ? candidate : null);
+  const displayedRecord = undoFromRecord ? null : receiptRecord || (duplicate ? candidate : null);
   const canReadSaved = (saved || duplicate) && action !== 'forget' && typeof receiptRecord?.id === 'string' &&
     Number.isSafeInteger(receiptRecord.revision) && receiptRecord.revision > 0;
   const savedReceipt = value?.receipt || apply.receipt || apply;
+  const savedCandidateId = proposal.candidate?.id;
+  // Carry only the original creation/operation locator into the exact read; not its old body.
+  const focusedUndo = originalReply && original && saved && !duplicate && action === 'create' && undoAvailable && !undoPending &&
+    value?.queryOriginalReceipt !== true && savedReceipt.queryOriginalReceipt !== true && savedReceipt.journalRecorded !== false &&
+    proposal.format === 'pocketworld.conversation-memory-draft.v1' && savedReceipt.action === 'create' && savedReceipt.status === 'saved' &&
+    savedReceipt.accepted === true && savedReceipt.mutationApplied === true && savedReceipt.formalMemorySaved === true &&
+    savedReceipt.executionAuthorized === false && receiptRecord?.ownerId === 'owner' && receiptRecord.spaceId === 'private' &&
+    receiptRecord.formation === 'reviewed_learning' && receiptRecord.revision === 1 && savedReceipt.record?.id === receiptRecord.id &&
+    typeof receiptRecord.id === 'string' && /^[a-f0-9-]{36}$/.test(receiptRecord.id) &&
+    typeof savedCandidateId === 'string' && /^[a-f0-9-]{36}$/.test(savedCandidateId) &&
+    savedReceipt.record.revision === 1 && savedReceipt.record.learningCandidateId === savedCandidateId &&
+    Object.entries(original).every(([key, field]) => proposal[key] === field && savedReceipt[key] === field)
+    ? { operation: original, candidateId: savedCandidateId } : undefined;
   // This immutable receipt can identify its original conversation, not the record's current state.
   const returnToSource = original && canReadSaved && saved && !undoPending && value?.queryOriginalReceipt !== true &&
     (action === 'create' || action === 'update') && proposal.format === 'pocketworld.conversation-memory-draft.v1' &&
@@ -169,7 +184,7 @@ export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, o
     Number.isSafeInteger(apply.expiresAt) && apply.expiresAt > 0 && Number.isSafeInteger(apply.checkedAt) && apply.expiresAt <= apply.checkedAt;
 
   const expiryLabel = typeof expiry === 'number' && Number.isSafeInteger(expiry) && expiry > 0 ? new Date(expiry).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-  const title = savedInProfile ? (savedInProfile.status === 'same_version' ? '已保存到个人记忆' : '这条建议曾保存') : originalReply && !value ? '核对记忆提案' : dismissOnly ? '这份旧提案不能采纳' : undoPending ? '撤销结果待核对' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
+  const title = savedInProfile ? (savedInProfile.status === 'same_version' ? '已保存到个人记忆' : '这条建议曾保存') : undoPending ? '撤销结果待核对' : originalReply && !value ? '核对记忆提案' : dismissOnly ? '这份旧提案不能采纳' : duplicate ? '已有相同内容' : reverted ? '已撤销这次保存' : saved ? action === 'forget' ? '已忘记这条记忆' : action === 'update' ? '已更新记忆' : '已记住'
     : action === 'forget' ? '忘记这条记忆' : action === 'update' ? '更新这条记忆' : '记住这件事';
   const status: Record<string, string> = { pending_owner: '待你确认', saved: action === 'forget' ? '这次遗忘已完成' : '这次记忆已保存', already_saved: '已有相同内容，本次没有重复保存', reverted: '这次保存已撤销', cancelled: '已放弃这个提案', rejected: '本次没有修改记忆', unknown: '修改结果待核对', applying_unknown: '修改结果待核对', conflict: '记忆已有后续变化，请查看最新内容' };
   const close = () => { if (!busy) onClose(); };
@@ -177,6 +192,28 @@ export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, o
     const prior = handle.current;
     if (prior) void bridge.command('memoryDraft.close', { handle: prior }).catch(() => {});
     handle.current = ''; setValue({ ...result, proposal: result.proposal || proposal }); setReviewClosed(false); setUndoUncertain(false);
+  };
+  const undoFocused = () => {
+    const visit = focused, pin = visit?.undo;
+    if (!visit || !pin || !originalReply || !sameReply() || entered.current || busy || document.hidden ||
+        originalMemoryWindow() !== visit.windowKey || visit.duplicate || visit.revision !== 1) return;
+    setUndoFromRecord(true); setUndoUncertain(true); setFocused(null);
+    void request('memoryDraft.undo', pin.operation, result => {
+      const matches = (row: Data | undefined) => Object.entries(pin.operation).every(([key, field]) => row?.[key] === field);
+      const receipt = result.receipt || result.apply?.receipt, undo = result.undo;
+      if (!matches(result.proposal) || !matches(receipt) || receipt?.record?.id !== visit.id ||
+          receipt.record.revision !== 1 || receipt.record.learningCandidateId !== pin.candidateId ||
+          receipt.record.ownerId !== 'owner' || receipt.record.spaceId !== 'private' || receipt.status !== 'saved' ||
+          !['saved', 'reverted', 'unknown'].includes(result.status) || result.status === 'reverted' &&
+          (result.queryOriginalReceipt === true || !matches(undo) || undo?.status !== 'reverted' || undo.undone !== true ||
+           undo.mutationApplied !== true || !Number.isSafeInteger(undo.deleted) || undo.deleted < 1 ||
+           undo.record?.id !== visit.id || undo.record.revision !== 1 ||
+           undo.record.learningCandidateId !== pin.candidateId || !Array.isArray(undo.removedRefs) ||
+           !undo.removedRefs.some((row: Data) => row.recordId === visit.id && row.revision === 1 && row.ownerId === 'owner' && row.spaceId === 'private'))) {
+        throw new Error('撤销结果尚未核对。请查询这次修改，不要重复撤销。');
+      }
+      acceptOutcome(result);
+    });
   };
   const queryOriginal = () => {
     if (!original || entered.current || busy) return;
@@ -190,7 +227,9 @@ export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, o
       <div className="pw-drawer-handle" />
       <header className="pw-drawer-header"><div><Drawer.Title>{focused ? '这条个人记忆' : title}</Drawer.Title><Drawer.Description id="memory-draft-description">{focused ? '只核对原回执指向的正式记录，不打开个人目录。' : savedInProfile ? '这就是原回答的那条建议，已另行确认保存，不需要再保存。' : dismissOnly ? '原来源不允许用于记忆整理。你仍可以忽略这份提案。' : undoPending ? '原保存已完成，请查询这次撤销的实际结果。' : saved || reverted || duplicate ? '查看这次修改的实际结果。' : '查看内容与来源，决定是否保存。'}</Drawer.Description></div><IconButton icon={IconClose} aria-label="返回原回答" disabled={busy} onClick={close} /></header>
       <div className="pw-drawer-body pw-memory-draft-review pw-knowledge-workspace">
-        {focused && original ? <OriginalSavedMemory {...focused} target={original} close={onClose} manage={onOpenMemory ? () => { onOpenMemory({ id: focused.id, candidate: false }); onClose(); } : undefined} /> : <>
+        {focused && original ? <OriginalSavedMemory id={focused.id} revision={focused.revision} duplicate={focused.duplicate} windowKey={focused.windowKey}
+          target={original} close={onClose} undoOriginal={focused.undo ? undoFocused : undefined}
+          manage={onOpenMemory ? verifiedRevision => { onOpenMemory({ id: focused.id, candidate: false, expectedRevision: verifiedRevision }); onClose(); } : undefined} /> : <>
         {busy && <ShimmerText>正在读取记忆…</ShimmerText>}
         {error && <p className="pw-memory-draft-error" role="alert">{error}</p>}
         {savedInProfile && <section className="pw-memory-draft-receipt" aria-label="个人记忆保存结果">
@@ -208,19 +247,19 @@ export function MemoryDraftReview({ target, originalReply, isCurrent, onClose, o
         {expiredReceipt && onOpenMemory && <Button variant="ghost" disabled={busy} onClick={() => { onOpenMemory({ id: apply.candidateId, candidate: true }); onClose(); }}>查看原建议</Button>}
         {expiredReceipt && value?.queryOriginalReceipt === true && <p className="pw-muted">本机确认这次没有新增记忆，原操作的回执留存尚待核对。</p>}
         {(saved || reverted || duplicate) && <section className="pw-memory-draft-receipt" aria-label="保存结果">
-          {typeof receiptRecord?.text === 'string' && <p className="pw-muted">{duplicate ? '当时匹配到的记忆内容' : '这次保存时的内容'}，不是当前版本的证明</p>}
+          {!undoFromRecord && typeof receiptRecord?.text === 'string' && <p className="pw-muted">{duplicate ? '当时匹配到的记忆内容' : '这次保存时的内容'}，不是当前版本的证明</p>}
           {typeof displayedRecord?.text === 'string' && <p className="pw-reading-copy">{displayedRecord.text}</p>}
           {typeof undoReason === 'string' && <p className="pw-muted">{undoReason}</p>}
           <div className="pw-action-row">
             {canReadSaved && (returnToSource
               ? returnToSource.open ? <Button variant="secondary" disabled={busy} onClick={returnToSource.open}>前往原对话核对</Button>
                 : <span className="pw-muted" role="status">请在原对话核对这条记忆。当前不能切换。</span>
-              : <Button variant="secondary" disabled={busy} onClick={() => { setFocused({ id: receiptRecord.id, revision: receiptRecord.revision, duplicate, windowKey: originalMemoryWindow() }); setValue(null); }}>只看这条记忆</Button>)}
+              : <Button variant="secondary" disabled={busy} onClick={() => { setFocused({ id: receiptRecord.id, revision: receiptRecord.revision, duplicate, windowKey: originalMemoryWindow(), undo: focusedUndo }); setValue(null); }}>只看这条记忆</Button>)}
             {duplicate && !receiptRecord && typeof candidate?.id === 'string' && onOpenMemory && <Button variant="secondary" disabled={busy} onClick={() => { onOpenMemory({ id: candidate.id, candidate: true }); onClose(); }}>查看待确认内容</Button>}
             {original && saved && action === 'create' && undoAvailable && !undoPending && <Button variant="ghost" leadingIcon={IconUndo} disabled={busy} onClick={() => { void request('memoryDraft.undo', original, acceptOutcome, () => setUndoUncertain(true)); }}>撤销这次保存</Button>}
           </div>
         </section>}
-        {proposal.reason && !saved && !reverted && !duplicate && <p>{proposal.reason}</p>}
+        {!undoFromRecord && proposal.reason && !saved && !reverted && !duplicate && <p>{proposal.reason}</p>}
         {review && !dismissOnly && !saved && !reverted && !duplicate && <>
           <div className="pw-memory-draft-comparison">
             {review.before && <section className="pw-source-record"><h3>原来记住的内容</h3><p className="pw-reading-copy">{review.before.text}</p></section>}

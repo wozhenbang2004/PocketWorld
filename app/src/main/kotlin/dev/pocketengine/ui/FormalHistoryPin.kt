@@ -63,29 +63,14 @@ internal data class FormalHistoryTextPair(
         matchesLatestHead(workspace.currentFileHeadForHost(head.project,head.path))
 
     fun read(workspace:WorkspaceModule):JSONObject {
-        fun exact(pin:FormalHistoryPin):JSONObject {
-            val raw=runCatching {
-                workspace.handle("read",JSONObject().put("projectId",pin.project).put("path",pin.path).put("version",pin.version))
-            }.getOrElse { error("未取得所选正式版本，未使用其他版本。") }
-            val (observation,text)=FormalFileObservation.read(raw,pin.project,pin.path,pin.version)
-                ?: error("未取得所选正式版本，未使用其他版本。")
-            check(raw.opt("ok")!=false && text!=null && '\u0000' !in text && observation.representation=="text" &&
-                observation.kind=="text" && observation.revision==pin.revision && observation.sha==pin.sha &&
-                observation.size==pin.size && observation.size in 0L..FORMAL_HISTORY_TEXT_LIMIT) {
-                "未取得所选两版的完整文字，未显示截断内容或其他版本。"
-            }
-            return pin.json().put("text",text)
-        }
-        val changed="正式文件的当前版本已变化或暂不能核对，请重新读取版本记录。"
-        // Ordinary files need not yet have a transient native head. Bootstrap only
-        // this already selected path on IO; its exact reads refresh that same entry.
-        val observed=runCatching { workspace.refreshFileHeadForHost(head.project,head.path) }.getOrElse { error(changed) }
-        check(matchesLatestHead(observed)) { changed }
-        val left=exact(before);val right=exact(after)
-        // Reject a new head even before its notice reaches the editor; it supplies no pair text.
+        fun FormalHistoryPin.selected() = VersionedWorkspace.SelectedTextRevision(version,revision,sha,size)
+        val changed="没有核对到原文件的当前版本与所选两版完整文字，未使用其他内容。"
+        val pair=runCatching { workspace.compareExistingFormalTextForHost(head.project,head.path,
+            head.selected(),before.selected(),after.selected()) }.getOrElse { error(changed) }
         check(latestHeadMatches(workspace)) { changed }
         return JSONObject().put("format","pocketworld.formal-file-text-pair.v1").put("head",head.json())
-            .put("before",left).put("after",right).put("completeText",true).put("readOnly",true)
+            .put("before",before.json().put("text",pair[0])).put("after",after.json().put("text",pair[1]))
+            .put("completeText",true).put("readOnly",true)
     }
 }
 

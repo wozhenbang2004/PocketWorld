@@ -175,6 +175,60 @@ public final class VersionedWorkspace {
         public final String code;
         private FileUnavailable(boolean deleted){super(deleted?"此版本已删除文件":"文件不存在");code=deleted?"workspace_file_deleted":"workspace_file_not_found";}
     }
+    /** Exact saved text identity; native presentation only, never a write or path grant. */
+    public record SelectedTextRevision(int version,String revisionId,String sha256,long sizeBytes) {
+        private boolean matches(FileSnapshot actual){
+            return !actual.tombstone&&"text".equals(actual.kind)&&version==actual.version&&
+                    actual.revisionId.equals(revisionId)&&actual.sha256.equals(sha256)&&sizeBytes==actual.sizeBytes;
+        }
+    }
+    /** Compare two whole retained texts from one existing record, under the same monitor as commits.
+     * Do not call project()/head()/snapshot(): those storage paths may create an empty project directory. */
+    public synchronized String[] compareExistingFormalText(String project,String relative,SelectedTextRevision head,
+            SelectedTextRevision before,SelectedTextRevision after)throws Exception {
+        relative=path(relative);
+        if(projectionClosed||before.version()<1||before.version()>=after.version()||after.version()>head.version())
+            throw new IllegalArgumentException("原文件当前版本或所选两版不可核对");
+        if(!nativeHeads.containsKey(nativeKey(project,relative))&&nativeHeads.size()>=8192)
+            throw new IllegalStateException("此正式文件的当前版本暂不能核对");
+        try {
+            requireArchiveRoot();
+            File folder=RemovedProjectFiles.folder(root,projects(),project);
+            if(!java.nio.file.Files.isDirectory(folder.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                throw new IllegalStateException("原项目目录不可读");
+            JSONObject record=RemovedProjectFiles.read(new File(folder,key(relative)+".json").toPath(),()->true);
+            JSONArray history=record.getJSONArray("history");
+            if(!relative.equals(record.opt("path"))||record.getInt("version")!=head.version()||
+                    !head.revisionId().equals(record.opt("revisionId"))||record.opt("deleted")!=Boolean.FALSE||
+                    history.length()<1||history.length()>8)
+                throw new IllegalStateException("原文件的当前版本已经变化");
+            FileSnapshot current=new FileSnapshot(this,project,relative,history.getJSONObject(history.length()-1));
+            if(!head.matches(current))throw new IllegalStateException("原文件的当前版本已经变化");
+            String left=selectedExistingText(project,relative,history,before),right=selectedExistingText(project,relative,history,after);
+            // The no-I/O main-thread check remains live, including later native save/delete invalidation.
+            updateNativeHead(project,relative,current,true);
+            return new String[]{left,right};
+        }catch(Exception unreadable){
+            updateNativeHead(project,relative,null,false);
+            throw unreadable;
+        }
+    }
+    private String selectedExistingText(String project,String path,JSONArray history,SelectedTextRevision selected)throws Exception{
+        JSONObject found=null;
+        for(int i=0;i<history.length();i++){
+            JSONObject row=history.getJSONObject(i);
+            if(row.getInt("version")!=selected.version())continue;
+            if(found!=null)throw new IllegalStateException("原文件的版本记录重复");
+            found=row;
+        }
+        if(found==null||selected.sizeBytes()<0||selected.sizeBytes()>64L*1024)
+            throw new IllegalStateException("所选版本没有可完整对照的文字");
+        FileSnapshot actual=new FileSnapshot(this,project,path,found);
+        if(!selected.matches(actual))throw new IllegalStateException("所选原版本不符，未改用最新版本");
+        String text=completeEditorText(actual);
+        if(text==null||text.indexOf(0)>=0)throw new IllegalStateException("所选版本没有可完整对照的文字");
+        return text;
+    }
     public synchronized JSONObject read(String projectId,String path,int revision)throws Exception {
         FileSnapshot actual=snapshot(projectId,path,revision);if(actual.tombstone)throw new FileUnavailable(actual.version!=0);
         JSONObject out=actual.json().put("deleted",false);

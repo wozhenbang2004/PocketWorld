@@ -358,8 +358,18 @@ type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?
 type ProjectVitePreviewOpen=({result:ProjectViteResultTarget}|{archive:ProjectViteSavedArchive})&{owner:()=>boolean};
 const asArray=<T,>(x:any):T[]=>Array.isArray(x)?x:[];
 const obj=(x:any):Json=>x&&typeof x==='object'&&!Array.isArray(x)?x:{};
-type ChatSearchContext={hit:WorkSearchItem;requestId:string;request:number;document:number;navigation:number;resume:number;
+type OriginalSearchMessage={kind:'owner_native_original';generation:string;conversationId:string;recordId:string;recordVersion:number;fingerprint:string};
+type SearchHitLanding={locator:OriginalSearchMessage;current:()=>boolean};
+type ChatSearchContext={hit:WorkSearchItem|null;landing?:SearchHitLanding;requestId:string;request:number;document:number;navigation:number;resume:number;
  conversation:string;key:string;epoch:number;message:string;revision:number;window:number};
+function originalSearchMessage(hit:WorkSearchItem):OriginalSearchMessage|undefined{
+ const {kind,generation,conversationId,recordId,recordVersion,fingerprint}=hit.ownerLocator??{};
+ if(hit.kind==='conversation'&&kind==='owner_native_original'&&typeof generation==='string'&&!!generation&&typeof conversationId==='string'&&
+    !!conversationId&&conversationId===hit.conversationId&&typeof recordId==='string'&&!!recordId&&recordId===hit.recordId&&
+    typeof recordVersion==='number'&&Number.isSafeInteger(recordVersion)&&recordVersion>0&&
+    typeof fingerprint==='string'&&/^sha256:[0-9a-f]{64}$/.test(fingerprint))
+  return {kind,generation,conversationId,recordId,recordVersion,fingerprint};
+}
 type ChatSearchVisit={scope:WorkSearchConversation;identity:string;memory:WorkSearchMemory};
 type ChatReferenceVisit={input:ModelSetupInput;resume:number;navigation:number;trigger:HTMLButtonElement};
 function originalChatReferenceInput(native:ReturnType<typeof bridge.getState>,documentEpoch:number){
@@ -1117,6 +1127,7 @@ export default function App(){
  const searchWorkPin=useRef<{taskId:string;runId:string;epoch:number;document:number;resume:number}|null>(null);
  const searchResultReturn=useRef<{arm:()=>void;current:()=>boolean;reader?:{target:WorkSearchItem;accepted:boolean}}|null>(null);
  const [searchReturn,setSearchReturn]=useState(false),[searchOriginal,setSearchOriginal]=useState<WorkSearchItem|null>(null);
+ const [searchHitLanding,setSearchHitLanding]=useState<SearchHitLanding|null>(null);
  const [searchChatOpening,setSearchChatOpening]=useState<{current:()=>boolean;back:()=>boolean;pending:boolean}|null>(null);
  const openingSearchChat=route==='chat'&&searchChatOpening?.current()?searchChatOpening:null;
  const backDuringSearchChat=useCallback(()=>!commandOpen&&openingSearchChat?.pending===true&&openingSearchChat.back(),[commandOpen,openingSearchChat]);
@@ -1138,6 +1149,7 @@ export default function App(){
   const arm=returnFromResult?currentSearchReturn():undefined;
   if(returnFromResult&&!arm&&searchResultReturn.current?.reader)workSearchMemory.current.selectedId=undefined;
   searchWorkPin.current=null;searchResultReturn.current=null;workSearchMemory.current.returnAnchor=undefined;
+  setSearchHitLanding(null);
   arm?.();
   const from=chatSearchOriginal.current;
   if(from){chatSearchOriginal.current=null;setSearchOriginal(item=>item===from.hit?null:item)}
@@ -1507,7 +1519,8 @@ export default function App(){
  },[taskToolsPlace,taskOpen,taskOpening,selectedTask,snapshot?.view,can]);
  const historyPage=state.conversationReader||null,workRequestPin=obj(historyPage?.workRequest),workRequestOrigin=workRequestVisit.current;
  const searchAnchor=obj(historyPage?.searchAnchor),searchView=obj(snapshot?.view);
- const searchContextHere=!!searchContext&&searchContext.hit===searchOriginal&&route==='chat'&&intent==='chat'&&!document.hidden&&
+ const searchContextHere=!!searchContext&&(searchContext.landing?searchContext.landing===searchHitLanding&&searchContext.landing.current():searchContext.hit===searchOriginal)&&
+  route==='chat'&&intent==='chat'&&!document.hidden&&
   searchOpenRequest.current===searchContext.request&&bridge.getDocumentEpoch()===searchContext.document&&
   navigationWindow.current===searchContext.navigation&&searchView.resumeRevision===searchContext.resume&&searchView.section===null&&searchView.taskId===null&&
   state.conversationId===searchContext.conversation&&composer.ready===true&&composer.key===searchContext.key&&composer.epoch===searchContext.epoch&&
@@ -1571,7 +1584,7 @@ export default function App(){
   if(!searchContext||searchContextHere)return;
   if(searchContextFlight.current===searchContext.requestId)searchContextFlight.current=null;
   setSearchContext(current=>current===searchContext?null:current);
-  if(searchOriginal===searchContext.hit){setSearchOriginal(null);setSearchReturn(false)}
+  if(searchContext.hit&&searchOriginal===searchContext.hit){setSearchOriginal(null);setSearchReturn(false)}
  },[searchContext,searchContextHere,searchOriginal]);
  useEffect(()=>{
   // A late acknowledgement after Back cannot become an ordinary History window.
@@ -2024,7 +2037,7 @@ export default function App(){
     }
     if(!current())return false;
    }
-   searchWorkPin.current=null;searchResultReturn.current=null;setSearchReturn(false);setWorkOptionsOpen(false);setSearchOriginal(null);
+   searchWorkPin.current=null;searchResultReturn.current=null;setSearchReturn(false);setWorkOptionsOpen(false);setSearchOriginal(null);setSearchHitLanding(null);
    setSentPhoneFocus(null);
    if(next!=='teams'){setTeamAttentionFocus(undefined);setTeamRunFocus(undefined);}
    if(requested==='memory'||requested==='profile'){setPersonalTarget({view:requested==='memory'?'memories':'home'});setPersonalTargetKey(key=>key+1);}
@@ -6948,28 +6961,30 @@ export default function App(){
   {key:'settings',label:'设置',icon:IconSettings,group:'偏好'},
    {key:'developer-logs',label:'开发诊断',icon:IconTerminal,group:'偏好'}
  ],[attentionTasks.length,state.remoteInbox?.unread,can]);
- const canLocateSearchOriginal=(hit:WorkSearchItem)=>{
-  const live=bridge.getState(),owner=live.state,view=obj(live.view),draft=live.composer,loc=hit.ownerLocator;
+ const canLocateSearchOriginal=(loc:Record<string,unknown>|undefined)=>{
+  const live=bridge.getState(),owner=live.state,view=obj(live.view),draft=live.composer;
   return route==='chat'&&intent==='chat'&&live.host?.ready===true&&obj(live.phoneDraft).phone===false&&
    obj(live.phoneDraft).channelOrigin===false&&view.taskId===null&&view.section===null&&Number.isSafeInteger(view.resumeRevision)&&
-   hit.kind==='conversation'&&loc?.kind==='owner_native_original'&&loc.conversationId===owner.conversationId&&
+   loc?.kind==='owner_native_original'&&loc.conversationId===owner.conversationId&&
    draft?.ready===true&&draft.conversationId===owner.conversationId&&draft.key==='conversation:'+owner.conversationId&&
    Number.isSafeInteger(draft.epoch)&&!owner.conversationReader&&!owner.filePath&&!owner.queuedInputsPage&&!owner.chatAttachmentPickerOpen&&
    owner.attachmentWorkspace?.open===false&&live.capabilities.commands.includes('conversation.reader.open');
  };
- const openSearchContext=async(hit:WorkSearchItem,locator:Record<string,unknown>)=>{
+ const openSearchContext=async(hit:WorkSearchItem|null,locator:Record<string,unknown>,landing?:SearchHitLanding)=>{
   const original=bridge.getState(),composer=original.composer,view=obj(original.view),conversation=original.state.conversationId;
-  const message=locator.recordId,revision=locator.recordVersion,expected=hit.ownerLocator;
-  const failed='暂未在原对话定位这条消息。已核对的原文仍在这里，没有打开其他记录。';
+  const message=locator.recordId,revision=locator.recordVersion,expected:Record<string,unknown>|undefined=landing?.locator??hit?.ownerLocator;
+  const failed=landing?'暂未在原对话定位这条消息。可返回搜索结果重新核对，草稿没有改动。':
+   '暂未在原对话定位这条消息。已核对的原文仍在这里，没有打开其他记录。';
   const keys=['kind','generation','conversationId','recordId','recordVersion','fingerprint'];
-  if(document.hidden||searchOriginal!==hit||searchContextFlight.current||!canLocateSearchOriginal(hit)||!composer||
+  const ownsSource=()=>landing?searchHitLanding===landing&&landing.current():!!hit&&searchOriginal===hit;
+  if(document.hidden||!ownsSource()||searchContextFlight.current||!canLocateSearchOriginal(expected)||!composer||
      !expected||keys.some(key=>expected[key]!==locator[key])||typeof conversation!=='string'||!conversation||locator.conversationId!==conversation||
      typeof message!=='string'||!message||typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<1)throw Error(failed);
   const request=searchOpenRequest.current,requestId=crypto.randomUUID(),doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
   const resume=Number(view.resumeRevision),key=String(composer.key),epoch=Number(composer.epoch);
   const current=()=>{
    const now=bridge.getState(),scope=obj(now.view);
-   return searchOpenRequest.current===request&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&
+   return ownsSource()&&searchOpenRequest.current===request&&bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&
     !document.hidden&&scope.section===null&&scope.taskId===null&&scope.resumeRevision===resume&&
     now.state.conversationId===conversation&&now.composer?.ready===true&&now.composer.key===key&&now.composer.epoch===epoch&&
     obj(now.phoneDraft).phone===false&&obj(now.phoneDraft).channelOrigin===false&&searchContextFlight.current===requestId;
@@ -6997,7 +7012,7 @@ export default function App(){
    if(!current())return;
    if(!visible)throw Error(failed);
    accepted=true;
-   setSearchContext({hit,requestId,request,document:doc,navigation,resume,conversation,key,epoch,message,revision,window:Number(windowId)});
+   setSearchContext({hit,landing,requestId,request,document:doc,navigation,resume,conversation,key,epoch,message,revision,window:Number(windowId)});
   }finally{
    if(!accepted&&searchContextFlight.current===requestId){
     searchContextFlight.current=null;
@@ -7009,7 +7024,7 @@ export default function App(){
    }
   }
  };
- const openSearchResult=async(item:WorkSearchItem,searchCurrent:()=>boolean=()=>true,chatSearch?:ChatSearchVisit,armReturn?:()=>void)=>{
+ const openSearchResult=async(item:WorkSearchItem,searchCurrent:()=>boolean=()=>true,chatSearch?:ChatSearchVisit,armReturn?:()=>void,locator?:OriginalSearchMessage)=>{
   if(!searchCurrent())return;
   if(chatSearch&&(chatSearch!==chatSearchVisit||currentChatSearch()?.identity!==chatSearch.identity||
      item.kind!=='conversation'||item.conversationId!==chatSearch.scope.conversationId||
@@ -7139,7 +7154,7 @@ export default function App(){
       if(reader.error)return 'failed';
       if(reader.continueTargetReady===true)return 'opened';
      }
-     if(selected?.editable)return 'opened';
+     if(selected?.editable&&(!locator||selected.live.composer?.epoch!==before.composer?.epoch))return 'opened';
     };
     // An accepted select is not yet a visible selection; for conversations
     // the host can retain the active draft and open the requested reader.
@@ -7164,6 +7179,17 @@ export default function App(){
     }).then(opened=>{
      if(!opened||!atDestination())return;
      if(item.kind==='conversation'&&armReturn)searchResultReturn.current={arm:armReturn,current:atDestination};
+     // The original was verified at the Search reader. Only its identity follows the admitted editable chat.
+     const selected=locator?.conversationId===id?readSelection():undefined,draft=selected?.live.composer;
+     if(locator&&selected?.editable&&draft){
+      const {key,epoch}=draft;
+      const current=()=>{
+       const live=bridge.getState(),view=obj(live.view),composer=live.composer;
+       return atDestination()&&view.section===null&&view.taskId===null&&live.state.conversationId===id&&
+        composer?.ready===true&&composer.conversationId===id&&composer.key===key&&composer.epoch===epoch;
+      };
+      setSearchHitLanding({locator,current});
+     }
      if(opening)setSearchChatOpening(current=>current===opening?null:current);
      setSearchReturn(true);
     }).catch(failure=>{
@@ -10558,7 +10584,14 @@ export default function App(){
   })}/>
  </div>:null;
  const workspaceNotices=<>{route!=='chat'&&replyActivity}{stopFeedback}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{savedLocalVisible&&<Button variant="ghost" size="small" aria-busy={savedLocalOpening||undefined} disabled={savedLocalOpening} onClick={()=>void viewSavedLocal()}>查看刚才保存的原话</Button>}{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{if(savedLocalVisible)setSavedLocalReturn(null);setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
-  {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={returnToWorkSearch}>返回搜索结果</Button></div>}</>;
+  {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={returnToWorkSearch}>返回搜索结果</Button>
+   {searchHitLanding?.current()&&canLocateSearchOriginal(searchHitLanding.locator)&&<Button variant="ghost" size="small"
+    onClick={()=>{
+     if(searchContextFlight.current||!searchHitLanding.current())return;
+     void openSearchContext(null,searchHitLanding.locator,searchHitLanding).catch(error=>{
+      if(searchHitLanding.current())setLocalError(error instanceof Error?error.message:'暂未定位到这条原消息。');
+     });
+    }}>定位这条原消息</Button>}</div>}</>;
  const archiveVisit=packageReturn.current, archiveChoice=projectPreview.choices;
  // A fixed webpage opened from Work is a child of that Work, not its list's parent.
  const returnToArchiveWork=route==='projects'&&!state.filePath&&projectPreview.expanded&&archiveChoice?.mode==='web_output'&&
@@ -10689,6 +10722,7 @@ export default function App(){
   <ConversationHistoryWindow page={workReportPage||workRequestPage||searchHistoryPage||(!openingSearchChat&&route==='chat'&&!historyPage?.workRequest&&!historyPage?.searchAnchor&&!historyPage?.reminderSource&&
    !(workReportReader&&ownsWorkReportReader(historyPage,workReportReader))?historyPage:null)} covered={taskOpen&&!workRequestPage&&!workReportPage}
    onReturnToChat={focusAfterHistoryClose} onWorkRequestReturn={restoreWorkRequestFocus} onSearchReturn={finishSearchContext}
+   searchReturnToChatWindow={searchContext?.landing?searchContext.window:undefined}
    workReportWindow={workReportReader?.window} onWorkReportReturn={restoreWorkReportFocus}
    activeDraft={!workReportPage&&!workRequestPage&&intent==='chat'&&composer.ready===true&&draftKey&&state.conversationId&&composer.conversationId===state.conversationId?{conversation:state.conversationId,key:draftKey,epoch:draftEpoch}:undefined} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin,alreadyOpen=false)=>openTask(id,entry,alreadyOpen,origin)}
    onOpenResultFiles={!workReportPage&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?openChatResult:undefined}/>
@@ -10712,10 +10746,11 @@ export default function App(){
   {searchOriginal&&(!scopedSearchOriginal||scopedOriginalCurrent)&&<WorkSearchOriginalReader target={searchOriginal} covered={searchContextHere}
     identity={scopedSearchOriginal?.visit.identity||`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} conversation={scopedSearchOriginal?.visit.scope} onClose={closeSearchOriginal}
     onOriginalAccepted={scopedSearchOriginal?undefined:acknowledgeSearchOriginal}
-    onContext={searchContextHere||canLocateSearchOriginal(searchOriginal)||
+    onContext={searchContextHere||canLocateSearchOriginal(searchOriginal.ownerLocator)||
       (searchAnchor.requestId&&searchAnchor.requestId===searchContextFlight.current)?locator=>openSearchContext(searchOriginal,locator):undefined}
-    onConversation={scopedSearchOriginal?undefined:()=>{
-     void openSearchResult({...searchOriginal,ownerLocator:undefined},undefined,undefined,currentSearchReturn())
+    onConversation={scopedSearchOriginal?undefined:originalAccepted=>{
+     void openSearchResult({...searchOriginal,ownerLocator:undefined},undefined,undefined,currentSearchReturn(),
+      originalAccepted?originalSearchMessage(searchOriginal):undefined)
       .catch(error=>setLocalError(error instanceof Error?error.message:String(error)));
     }} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onOriginalBookReply={bookReplyVisit?originalBookReply:undefined} onReturnFocus={(event,messageOriginalWindow)=>{

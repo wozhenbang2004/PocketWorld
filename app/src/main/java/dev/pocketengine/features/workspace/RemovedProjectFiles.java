@@ -67,7 +67,8 @@ public final class RemovedProjectFiles {
     private static String name(String path)throws Exception{
         byte[] b=MessageDigest.getInstance("SHA-256").digest(path.getBytes(StandardCharsets.UTF_8));StringBuilder s=new StringBuilder();for(byte v:b)s.append(String.format(java.util.Locale.ROOT,"%02x",v&255));return s+".json";
     }
-    private static JSONObject read(Path path,BooleanSupplier live)throws Exception{
+    // Bounded, no-create read of one existing private workspace record.
+    static JSONObject read(Path path,BooleanSupplier live)throws Exception{
         var a=Files.readAttributes(path,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
         if(!a.isRegularFile()||a.size()<1||a.size()>VersionedWorkspace.MAX_PROJECT_RECORD_BYTES)throw new IllegalStateException("原项目记录不可读");
         ByteArrayOutputStream bytes=new ByteArrayOutputStream((int)Math.min(a.size(),8192));byte[] buf=new byte[8192];

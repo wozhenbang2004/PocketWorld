@@ -76,6 +76,10 @@ public final class WorkspaceModule implements EngineModule {
     }
     /** Native callers retain their original TaskStore admission; these observations add no authority. */
     public VersionedWorkspace.FileSnapshot fileSnapshotForHost(String project,String path,int version)throws Exception{return workspace.snapshot(project,path,version);}
+    public String[] compareExistingFormalTextForHost(String project,String path,VersionedWorkspace.SelectedTextRevision head,
+            VersionedWorkspace.SelectedTextRevision before,VersionedWorkspace.SelectedTextRevision after)throws Exception{
+        return workspace.compareExistingFormalText(project,path,head,before,after);
+    }
     public RemovedProjectFiles.Shelf removedFilesForOwner(String project,java.util.function.BooleanSupplier live)throws Exception{return workspace.removedFilesForOwner(project,live);}
     public JSONObject removedFileHistoryForOwner(RemovedProjectFiles.Shelf shelf,int index,java.util.function.BooleanSupplier live)throws Exception{return workspace.removedFileHistoryForOwner(shelf,index,live);}
     public JSONObject removedFileTextForOwner(RemovedProjectFiles.Shelf shelf,int index,JSONObject selected,java.util.function.BooleanSupplier live)throws Exception{return workspace.removedFileTextForOwner(shelf,index,selected,live);}

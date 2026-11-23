@@ -54,15 +54,15 @@ export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversatio
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
 type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
  onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void;
- onSearchReturn?:(windowId:number)=>void;workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
+ onSearchReturn?:(windowId:number)=>void;searchReturnToChatWindow?:number;workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn,workReportWindow,onWorkReportReturn}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,workReportWindow,onWorkReportReturn}:Props){
  const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const workReportOnly=workReportWindow!==undefined&&workReportWindow===shown.window&&typeof shown.originalReportMessageId==='string';
  const requestOnly=!!shown.workRequest,searchOnly=!!shown.searchAnchor,workOverlay=requestOnly||workReportOnly;
- const backLabel=workOverlay?'返回原工作':searchOnly?'返回命中的原文':'返回原输入';
+ const backLabel=workOverlay?'返回原工作':searchOnly?(searchReturnToChatWindow===shown.window?'返回原对话':'返回命中的原文'):'返回原输入';
  const can=(action:string)=>available(action)&&(!workOverlay||action==='conversation.reader.close')&&
   (!searchOnly||action==='conversation.reader.close'||action==='conversation.reader.earlier');
  const continueReady=page?.continueTargetReady===true;

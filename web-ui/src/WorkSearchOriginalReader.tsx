@@ -11,7 +11,7 @@ const locatorFields=['kind','generation','conversationId','recordId','recordVers
 /** The existing source-reader and history-window layout reads the exact owner
  * locator. Viewing a search hit never changes the active composer or its scope. */
 export function WorkSearchOriginalReader({target,identity,covered=false,conversation,onClose,onConversation,onContext,onCopy,onOriginalAccepted}:{
- target:WorkSearchItem;identity:string;covered?:boolean;conversation?:WorkSearchConversation;onClose:()=>void;onConversation?:()=>void;
+ target:WorkSearchItem;identity:string;covered?:boolean;conversation?:WorkSearchConversation;onClose:()=>void;onConversation?:(originalAccepted:boolean)=>void;
  onContext?:(locator:Record<string,unknown>)=>Promise<void>;onCopy:(text:string)=>Promise<unknown>;
  onOriginalAccepted?:(target:WorkSearchItem)=>void;
 }){
@@ -89,6 +89,6 @@ export function WorkSearchOriginalReader({target,identity,covered=false,conversa
   </div>
   <footer className="pw-drawer-actions"><Button variant="ghost" onClick={onClose}>返回搜索结果</Button>
    {onContext&&contextReady?<Button ref={contextButton} variant="secondary" disabled={busy||locating} onClick={()=>void locate()}>在原对话中定位</Button>:
-    !onContext&&onConversation&&<Button variant="secondary" disabled={busy||locating} onClick={onConversation}>打开所属对话</Button>}</footer>
+    !onContext&&onConversation&&<Button variant="secondary" disabled={busy||locating} onClick={()=>onConversation(contextReady&&!pending.current)}>打开所属对话</Button>}</footer>
  </Drawer.Content></Drawer.Portal></Drawer.Root>;
 }

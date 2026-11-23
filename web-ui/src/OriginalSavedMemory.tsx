@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
 import { Accordion, AccordionItem, Button } from './forms-library';
+import { IconUndo } from './icons';
 import { ShimmerText } from './library';
 import { VisibleOriginalMemoryQuote } from './VisibleOriginalMemoryQuote';
 import type { ConversationDraftTarget } from './SkillDraftReview';
@@ -15,9 +16,9 @@ export const originalMemoryWindow = () => {
 };
 
 /** Mounted only by an explicit tap. Nothing subscribes in order to read again. */
-export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey, manage, close }: {
+export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey, manage, undoOriginal, close }: {
   target: ConversationDraftTarget; id: string; revision: number; duplicate: boolean; windowKey: string;
-  manage?: () => void; close: () => void;
+  manage?: (verifiedRevision: number) => void; undoOriginal?: () => void; close: () => void;
 }) {
   const [read, setRead] = useState<Read | null>(null), [phase, setPhase] = useState<'loading' | 'settled' | 'unavailable' | 'closed'>('loading');
   const life = useRef({ live: false, seq: 0, timer: undefined as number | undefined, busy: false });
@@ -53,10 +54,11 @@ export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey
   useLayoutEffect(() => {
     const s = life.current; s.live = true; s.busy = false;
     const hidden = () => { if (document.hidden) retire(); };
-    const off = bridge.subscribe(() => { if (s.live && !current()) retire(); });
+    const recheck = () => { if (s.live && !current()) retire(); };
+    const off = bridge.subscribe(recheck), offEpoch = bridge.subscribeDocumentEpoch(recheck);
     document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', retire);
     const first = ++s.seq; queueMicrotask(() => { if (s.live && s.seq === first) void load(); });
-    return () => { s.live = false; s.seq++; clearTimeout(s.timer); off(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', retire); };
+    return () => { s.live = false; s.seq++; clearTimeout(s.timer); off(); offEpoch(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', retire); };
     // Each opened answer/record is keyed separately and never retargets a read.
   }, [windowKey, id, revision]);
   const withCurrentRead = (act: () => void) => { if (current() && read && Date.now() < read.readExpiresAt) act(); else retire(); };
@@ -72,8 +74,11 @@ export function OriginalSavedMemory({ target, id, revision, duplicate, windowKey
       <p className="pw-reading-copy">{read.text}</p><p className="pw-muted">这是回读时的个人记忆，不证明内容属实，也不说明哪次回答用过它。</p>
       {read.visibleQuoteKey && read.currentRevision === revision && <VisibleOriginalMemoryQuote target={target} id={id} revision={revision} duplicate={duplicate}
         spanKey={read.visibleQuoteKey} deadline={read.readExpiresAt} current={current} />}
+      {undoOriginal && !duplicate && revision === 1 && read.currentRevision === revision &&
+        <Button variant="ghost" leadingIcon={IconUndo} onClick={() => withCurrentRead(undoOriginal)}>撤销这次保存</Button>}
       {manage && <Accordion variant="divided" className="pw-compact-disclosures"><AccordionItem id="manage-receipted-memory" title="管理这条记忆" description="编辑内容或核对来源">
-        <p className="pw-muted">进入个人中心会加载个人资料与记忆目录。</p><Button variant="secondary" onClick={() => withCurrentRead(manage)}>进入个人中心</Button>
+        <p className="pw-muted">进入个人中心会加载个人资料与记忆目录，只打开刚核对的第 {read.currentRevision} 版。</p>
+        <Button variant="secondary" onClick={() => withCurrentRead(() => manage(read.currentRevision))}>进入个人中心</Button>
       </AccordionItem></Accordion>}</>}
     <Button variant="ghost" onClick={close}>返回原回答</Button>
   </section>;
