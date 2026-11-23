@@ -416,6 +416,28 @@ function originalSearchMessage(hit:WorkSearchItem):OriginalSearchMessage|undefin
 }
 type ChatSearchVisit={scope:WorkSearchConversation;identity:string;memory:WorkSearchMemory};
 type ChatReferenceVisit={input:ModelSetupInput;resume:number;navigation:number;trigger:HTMLButtonElement};
+type ProjectQuestionOrigin={input:ModelSetupInput;projectId:string;projectRevision:number;resume:number};
+type ProjectQuestionLink=ProjectQuestionOrigin&{navigation:number;revision:number};
+function projectQuestionDraft(native:ReturnType<typeof bridge.getState>,origin:ProjectQuestionOrigin){
+ const draft=native.composer,owner=native.state,view=obj(native.view),phone=obj(native.phoneDraft),voice=obj(owner.voiceInput);
+ if(!draft||native.host?.ready!==true||!sameModelSetupInput(origin.input,native,bridge.getDocumentEpoch())||
+    view.section!==null||view.taskId!==null||view.resumeRevision!==origin.resume||
+    owner.projectId!==origin.projectId||owner.requestedProjectRevision!==origin.projectRevision||
+    phone.phone!==false||phone.channelOrigin!==false||owner.loadingFirstConversationMessages||
+    owner.chatBusy||owner.chatSubmitting||owner.phoneSubmitting||foregroundConversationTurn(owner)||
+    owner.filePath||owner.fileLoading||owner.fileSaving||owner.queuedInputsPage||owner.chatAttachmentPickerOpen||
+    owner.attachmentImporting||owner.attachmentWorkspace?.open||owner.listening||owner.quickPanelVoice?.closed===false||
+    ['active','leaseHeld','resourceReleaseUnknown','reviewAvailable','staged'].some(flag=>voice[flag]===true)||
+    draft.voiceText!==''||draft.primaryDisplayGate||!Number.isSafeInteger(draft.revision)||draft.revision<1||
+    !Array.isArray(draft.objectRefs)||!Array.isArray(draft.pending)||draft.pending.some(row=>row?.draftKey===origin.input.key)||
+    (origin.input.conversation?origin.input.key!==`conversation:${origin.input.conversation}`:
+      owner.conversationId!==null||draft.ordinaryNewAttachmentDraft!==true))return;
+ return draft;
+}
+function projectQuestionChip(draft:Json,projectId:string){
+ const refs=asArray<Json>(draft.objectRefs).filter(row=>row?.kind==='project'&&row.id===projectId);
+ return refs.length===1&&typeof refs[0].label==='string'&&refs[0].label.trim()?refs[0]:undefined;
+}
 function originalChatReferenceInput(native:ReturnType<typeof bridge.getState>,documentEpoch:number){
  const input=modelSetupInput(native,documentEpoch),owner=native.state,view=obj(native.view),phone=obj(native.phoneDraft);
  if(!input?.conversation||input.key!==`conversation:${input.conversation}`||native.host?.ready!==true||
@@ -1513,6 +1535,8 @@ export default function App(){
  const registerSecondaryBack=useCallback((handler:(()=>boolean)|null)=>{secondaryBack.current=handler},[]);
  const [taskErrors,setTaskErrors]=useState<Record<string,string>>({});
  const [taskMenuOpen,setTaskMenuOpen]=useState(false);
+ const projectQuestionRequest=useRef(0);
+ const [projectQuestionLink,setProjectQuestionLink]=useState<ProjectQuestionLink|null>(null);
  const [localError,setLocalError]=useState(''),[localStatus,setLocalStatus]=useState(''),[review,setReview]=useState<Review|null>(null),[reviewPending,setReviewPending]=useState(false),[reviewSubmitted,setReviewSubmitted]=useState(false),[reviewNote,setReviewNote]=useState(''),[reviewFeedbackOpen,setReviewFeedbackOpen]=useState(false),[scopeTools,setScopeTools]=useState(''),[scopeModels,setScopeModels]=useState('');
  const [reviewReceipt,setReviewReceipt]=useState('');
  const [draftAcceptance,setDraftAcceptance]=useState<DraftAcceptanceClick|null>(null);
@@ -3442,7 +3466,7 @@ export default function App(){
     !owner.filePath&&!owner.fileLoading&&!owner.fileSaving&&!owner.chatSubmitting&&!owner.phoneSubmitting&&!owner.queuedInputsPage&&
     !owner.chatAttachmentPickerOpen&&!owner.attachmentImporting&&!owner.attachmentWorkspace?.open&&mode.phone===false&&mode.channelOrigin===false&&
     fresh!=null&&fresh.saving===false&&fresh.revision===firstDraft.revision&&fresh.text===firstDraft.text&&chatDraft.currentValue()===firstDraft.text&&!fresh.primaryDisplayGate&&
-    fresh.independentReportSourceIndex==null&&fresh.independentReportDiscardEmpty!==true&&
+    fresh.ordinaryNewAttachmentDraft===true&&fresh.independentReportDiscardEmpty!==true&&
     owner.modelSelectionBusy===false&&owner.modelSelectionRevision===selection.modelSelectionRevision&&!conversationModelName(owner)&&
     model.scopeKey===preference.scopeKey&&model.revision===preference.revision&&model.inherited===true&&model.target===null;
   };
@@ -6890,17 +6914,62 @@ export default function App(){
   setVoiceOptionsOpen(false);
   run('attachments.openPicker',{key:draftKey,epoch:draftEpoch,ordinaryList:true});
  };
- const askButlerAbout=(reference:Json)=>{
-   if(state.chatSubmitting||state.phoneSubmitting||phoneAction.current||phoneReviewPending){setLocalError('请先等待当前输入处理完成。');return;}
-   void navigate('butler',()=>{
-     const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
-     const current=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden;
-     void changeIntent('chat').then(async changed=>{
-       if(!changed||!current()||!await stageButlerObject(reference,current))return;
-       setLocalStatus('已关联到管家输入，可以继续提问。');
-       requestAnimationFrame(()=>{if(current())workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)')?.focus({preventScroll:true})});
-     }).catch(error=>{if(current())setLocalError(error instanceof Error?error.message:'对象尚未关联，请核对原草稿。')});
-   });
+ const projectQuestionEditorIdle=()=>!document.hidden&&openedTaskId.current===null&&!draftSwitchPending()&&
+  !phoneAction.current&&!phoneReviewLive.current&&!reportDraftFlight.current&&!voiceReviewLive.current&&!voiceWriting.current;
+ const askButlerAboutProject=(projectId:string)=>{
+  if(route!=='projects'||projectSection!=='work'||!projectId||taskOpen||taskOpening||workOpen||commandOpen||preparationTarget)return;
+  const initial=bridge.getState(),documentEpoch=bridge.getDocumentEpoch(),before=navigationWindow.current;
+  const input=modelSetupInput(initial,documentEpoch),resume=obj(initial.view).resumeRevision,projectRevision=initial.state.requestedProjectRevision;
+  if(obj(initial.phoneDraft).phone===true){
+   setLocalError('当前是手机模式。请回管家，在工作设置中选「交给管家」后再关联项目。手机草稿不会因此发送。');return;
+  }
+  const unavailable='尚未核对到项目与原管家草稿的关联。请查看原输入，不会自动重试或发送。';
+  if(!input||!Number.isSafeInteger(resume)||resume<0||!Number.isSafeInteger(projectRevision)||projectRevision<0||!projectQuestionEditorIdle()||
+     !initial.capabilities.commands.includes('composer.object.add')){setLocalError(unavailable);return;}
+  const origin:ProjectQuestionOrigin={input,projectId,projectRevision,resume};
+  const initialDraft=projectQuestionDraft(initial,origin),ownerKey=`${input.key}:${input.epoch}`;
+  if(!initialDraft||initialDraft.saving!==false||typeof initialDraft.text!=='string'||
+     !Array.isArray(initialDraft.sourceRefs)||!Array.isArray(initialDraft.previewRefs)||!Array.isArray(initial.state.selectedChatAttachments)||
+     chatDraft.currentValueFor(ownerKey)!==initialDraft.text){setLocalError(unavailable);return;}
+  const prior=asArray<Json>(initialDraft.objectRefs),already=!!projectQuestionChip(initialDraft,projectId);
+  if(!already&&prior.length>=4){setLocalError('原草稿已有 4 个关联对象。请先移除不需要的对象，再关联项目。');return;}
+  const text=initialDraft.text,revision=Number(initialDraft.revision),edit=chatDraft.currentEditSequence();
+  const kept=(native:ReturnType<typeof bridge.getState>,draft:Json)=>JSON.stringify([
+   draft.mode,draft.sourceRefs,draft.previewRefs,native.state.selectedChatAttachments
+  ]);
+  const originalRefs=JSON.stringify(prior),other=kept(initial,initialDraft);
+  const request=++projectQuestionRequest.current;
+  const current=(navigation:number)=>projectQuestionRequest.current===request&&navigationWindow.current===navigation&&
+   projectQuestionEditorIdle()&&!!projectQuestionDraft(bridge.getState(),origin);
+  const exact=(added:boolean,requireSaved=true)=>{
+   const native=bridge.getState(),draft=projectQuestionDraft(native,origin),refs=asArray<Json>(draft?.objectRefs);
+   if(!draft||requireSaved&&draft.saving!==false||draft.revision!==revision+Number(added)||draft.text!==text||
+      chatDraft.currentEditSequence()!==edit||chatDraft.currentValueFor(ownerKey)!==text||kept(native,draft)!==other||
+      JSON.stringify(added?refs.slice(0,-1):refs)!==originalRefs||
+      added&&(!projectQuestionChip(draft,projectId)||refs.at(-1)?.kind!=='project'||refs.at(-1)?.id!==projectId))return;
+   return draft;
+  };
+  setLocalError('');setLocalStatus('');setProjectQuestionLink(null);
+  // The same ordinary draft is already in text mode. Changing intent here
+  // would revoke its epoch and could lose an edit typed during the transition.
+  void navigate('butler',()=>{
+   const navigation=before+1;
+   const attached=async()=>{
+    if(!current(navigation)||!exact(false))return;
+    if(!already){
+     const receipt=await bridge.command('composer.object.add',{key:input.key,epoch:input.epoch,revision,reference:{kind:'project',id:projectId}});
+     if(!current(navigation))return;
+     if(receipt?.added!==true)throw new Error();
+     const saved=await awaitPickerProjection(()=>current(navigation)&&!!(exact(false,false)||exact(true,false)),
+      ()=>exact(true)?true:undefined);
+     if(!saved)throw new Error();
+    }
+    const draft=exact(!already);
+    if(current(navigation)&&draft&&projectQuestionChip(draft,projectId))
+     setProjectQuestionLink({...origin,navigation,revision:Number(draft.revision)});
+   };
+   void attached().catch(()=>{if(current(navigation))setLocalError(unavailable)});
+  },{stillCurrent:()=>current(before)&&!!exact(false)});
  };
  const askButlerForTeam=(request:TeamButlerRequest={})=>{
    if(request.originalWorkDraft){
@@ -10194,7 +10263,7 @@ export default function App(){
   !composer.primaryDisplayGate&&!displayStagePending&&!setupFeedback&&composer.ready===true&&composer.conversationId===''&&
   phoneDraft.phone===false&&phoneDraft.channelOrigin===false&&
   draftKey.startsWith('new:')&&draftModelPreference.scopeKey==='draft:'+draftKey&&draftModelPreference.inherited===true&&draftModelPreference.target===null&&
-  composer.independentReportSourceIndex==null&&composer.independentReportDiscardEmpty!==true&&
+  composer.ordinaryNewAttachmentDraft===true&&composer.independentReportDiscardEmpty!==true&&
   ['setup.read','models.snapshot','connections.enter','connections.leave'].every(can);
  const localPhoneReadExampleInput=(live:ReturnType<typeof bridge.getState>)=>{
   const {state:owner,composer:draft}=live,phone=obj(live.phoneDraft),view=obj(live.view),preference=obj(owner.conversationModel);
@@ -10241,6 +10310,16 @@ export default function App(){
   (fileDraftTarget.conversationId?fileDraftTarget.key===`conversation:${fileDraftTarget.conversationId}`:
    ordinaryNewAttachmentDraftCurrent(fileDraftTarget,snapshot))?
   JSON.stringify([personalDocumentEpoch,navigationRevision,route,fileDraftTarget.key,fileDraftTarget.epoch,fileDraftTarget.revision]):undefined;
+ const linkedProjectQuestionChip=(link:ProjectQuestionLink,native:ReturnType<typeof bridge.getState>)=>{
+  if(link.navigation!==navigationWindow.current||!projectQuestionEditorIdle())return;
+  const draft=projectQuestionDraft(native,link);
+  if(draft&&draft.revision>=link.revision)return projectQuestionChip(draft,link.projectId);
+ };
+ const projectQuestionHere=projectQuestionLink&&route==='butler'&&intent==='chat'&&
+  !taskOpen&&!taskOpening&&!workOpen&&!commandOpen&&!preparationTarget&&
+  linkedProjectQuestionChip(projectQuestionLink,snapshot)?projectQuestionLink:null;
+ const attachToProjectQuestion=!!projectQuestionHere&&!!attachmentInformationScope&&
+  !registration.waiting&&composer.saving===false&&!fileAttachmentPickerLaunch.current;
  const composerRegion=<div className="pw-composer-region">
    {(homeCurrentConversation||newTopicInComposer)&&<div className="pw-butler-conversation-context">
     {homeCurrentConversation&&<>
@@ -10278,6 +10357,17 @@ export default function App(){
      teamChoice={currentDraftTeam&&replaceDraftTeam?.kind==='goal'?{id:currentDraftTeam.id,disabled:!!pendingDraftTeam||replaceDraftTeam.text!==text,open:()=>{
        if(!pickTeamForCurrentDraft(replaceDraftTeam,currentDraftTeam))setLocalError('原草稿已变化，未离开这条对话。');
      }}:undefined}/>}
+   {projectQuestionHere&&<div className="pw-action-row" aria-label="本次项目关联">
+    <p className="pw-field-hint" role="status">仅关联项目，未带入项目文件，也未发送消息或创建工作。</p>
+    {attachToProjectQuestion&&<Button variant="ghost" size="small" leadingIcon={IconFile} onClick={event=>{
+     const native=bridge.getState(),draft=native.composer;
+     if(!event.nativeEvent.isTrusted||!event.currentTarget.isConnected||!linkedProjectQuestionChip(projectQuestionHere,native)||
+        !draft||draft.key!==draftKey||draft.epoch!==draftEpoch||draft.revision!==ordinaryDraftRevision||draft.saving!==false||
+        chatDraft.currentValueFor(chatOwner)!==draft.text||fileAttachmentPickerLaunch.current||
+        !native.capabilities.commands.includes('attachments.openPicker'))return;
+     void openRegularAttachmentPicker();
+    }}>添加附件（可选）</Button>}
+   </div>}
    {carriedTeamRoster&&rosterDraft&&!rosterDraft.teams.length&&rosterDraft.count<4&&
     <Button variant="ghost" size="small" leadingIcon={IconTeam} onClick={()=>void attachCarriedRoster(carriedTeamRoster)}>也关联这次用的编组</Button>}
    {intent==='chat'&&<ComposerPreviewReferences key={`preview:${draftKey}:${draftEpoch}`} composer={composer} disabled={!!state.chatSubmitting||!can('composer.preview.remove')}/>}
@@ -11266,7 +11356,7 @@ export default function App(){
  };
  const showProjectSection=(section:'work'|'files'|'preview')=>{
   if(section!=='work'&&leaveProjectModelReturnForAction(()=>showProjectSection(section)))return;
-  if(section!=='work')dismissModelWorkArrival();
+  if(section!=='work'){projectQuestionRequest.current++;dismissModelWorkArrival();}
   const commit=()=>{
    if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
    const visit=viteResultLookupNow.current;
@@ -11641,7 +11731,7 @@ export default function App(){
       <TabList aria-label="项目工作方式"><Tab id="work" icon={IconLayers}>工作</Tab><Tab id="files" icon={IconFolder}>文件</Tab><Tab id="preview" icon={IconPlay} isDisabled={!savedStaticFolder&&!canReadCurrentWeb&&!canReadKeptPages&&!can('projects.preview')&&!projectPreview.expanded}>预览</Tab></TabList>
       <TabPanel id="work" shouldForceMount hidden={projectSection!=='work'||projectPreview.expanded}>
        <ProjectWorkspaceOverview project={currentProject} directory={projectDirectory} view={projectWorkView} onViewChange={updateProjectWorkView} directoryAvailable={can('work.tasks.list')} canOpenTask={can('tasks.open')} canReview={can('tasks.review')} canContinue={task=>can(task.raw?.executionRole==='owner_work'?'ownerWork.control':'tasks.resume')}
-        onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAbout({kind:'project',id:currentProject.id}):undefined}
+        onOpenTask={openProjectWork} onOpenTerminal={()=>void openRelatedWorkspace('local')} onOpenPairedDevices={canUsePairedDevice?visitPairedDevices:undefined} onAskButler={can('composer.object.add')?()=>askButlerAboutProject(currentProject.id):undefined}
         editLocalFiles={importedWorkTarget?{onOpen:()=>openOriginalImportedFiles(importedWorkTarget,'work'),label:starterWork?'打开网页源码':fixedTaskCopy?'编辑新副本源码':'编辑导入源码'}:
          firstLocalFilesWorkProject?{onOpen:()=>openLocalProjectFiles('work'),label:'编辑本机文件'}:
          preparedLocalFilesWork?{onOpen:()=>openLocalProjectFiles('work',preparedLocalFilesWork),label:'打开本机源码'}:undefined}

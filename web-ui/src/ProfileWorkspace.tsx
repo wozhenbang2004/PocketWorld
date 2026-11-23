@@ -70,7 +70,8 @@ type Removal = 'forget' | 'reject';
 type MemoryDirectory = 'memories' | 'memory-history';
 export type ConfirmedManualSave = { id: string; revision: 1 };
 type CorrectionSubmission = { beforeRevision: number; draft: string };
-type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave; correction?: CorrectionSubmission; answerForget?: AnswerMemoryForgetEntry };
+type ManualCreateAttempt = { edit: number; expiresAt: number | null };
+type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; manualCreate?: ManualCreateAttempt; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave; correction?: CorrectionSubmission; answerForget?: AnswerMemoryForgetEntry };
 type MemoryOpenPin = { kind: 'answer'; revision: number; conversation: string; originalAnswer?: OriginalMemoryEntry }
   | { kind: 'receipt'; revision: number; feedback: MemoryFeedback }
   | { kind: 'recent'; revision: number };
@@ -231,6 +232,14 @@ function confirmedManualSave(feedback: MemoryFeedback | null): ConfirmedManualSa
   return pin && !pin.candidate && pin.revision === 1 && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pin.id)
     ? { id: pin.id, revision: 1 } : null;
 }
+function confirmedManualDuplicate(feedback: MemoryFeedback | null) {
+  if (!feedback?.manualCreate || feedback.operation !== 'create' || feedback.needsQuery || feedback.priorSave || !feedback.submittedText) return null;
+  const { value, manualCreate } = feedback;
+  if (value.status !== 'already_saved' || value.duplicate !== true || value.saved !== false || value.undoAvailable !== false ||
+      value.requestedExpiresAt !== manualCreate.expiresAt || !!value.record === !!value.candidate) return null;
+  const pin = memoryReceiptPin(feedback);
+  return pin && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pin.id) ? pin : null;
+}
 function recoveredCorrectionPin(feedback: MemoryFeedback | null) {
   const submitted = feedback?.correction;
   if (!submitted || feedback?.operation !== 'correct' || feedback.value.status !== 'saved' ||
@@ -355,6 +364,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const [memorySaveRange, setMemorySaveRange] = useState<MemorySaveRange>('all');
   const [newMemoryText, setNewMemoryText] = useState(''), [newMemoryExpiry, setNewMemoryExpiry] = useState('none'), [createUnknown, setCreateUnknown] = useState(false);
   const [newMemoryCalendar, setNewMemoryCalendar] = useState<CalendarTime | null>(null);
+  const manualCreateEdit = useRef(0), manualCreateInput = useRef<HTMLTextAreaElement>(null);
   const [policy, setPolicy] = useState<MemoryPolicy | null>(null), [controlsError, setControlsError] = useState('');
   const [agentPreferences, setAgentPreferences] = useState<AgentPreferenceControl | null>(null);
   const [feedback, setFeedback] = useState<MemoryFeedback | null>(null);
@@ -673,6 +683,17 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     (returnTarget || heading.current)?.focus({ preventScroll: true });
   }, [view, savedScrollId, selection?.id, locked]);
 
+  const currentManualDuplicate = () => {
+    const form = current.current, last = form.feedback;
+    return manualEntry?.current() && form.view === 'memory-new' && !form.createUnknown &&
+      last && last.manualCreate?.edit === manualCreateEdit.current && last.submittedText === form.newMemoryText.trim()
+      ? confirmedManualDuplicate(last) : null;
+  };
+  const editManualCreate = () => {
+    if (!manualEntry) return;
+    manualCreateEdit.current++;
+    if (confirmedManualDuplicate(current.current.feedback)) setFeedback(null);
+  };
   const beforeLeave: LeaveGuard = next => {
     if (busy.current) { setNotice('正在保存或读取，请稍候。'); return true; }
     closeAvatar();
@@ -681,7 +702,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     const recovered = recoveredCorrectionPin(currentFeedback);
     const alreadySavedDraft = !!recovered && !!currentSelection && currentSelection.id === recovered.id && !currentSelection.candidate &&
       currentSelection.record.revision === currentFeedback?.correction?.beforeRevision && currentSelection.draft === currentFeedback?.correction?.draft;
-    if (profileDirty(current.current.editor) || (memoryDirty(currentSelection) && !alreadySavedDraft) || current.current.newMemoryText.trim() || current.current.newMemoryExpiry !== 'none') { pendingLeave.current = next; setLeaveOpen(true); return true; }
+    // An exact no-write receipt may finish its unchanged form. Any edit restores the normal draft guard.
+    const unsavedNote = !currentManualDuplicate() && (!!current.current.newMemoryText.trim() || current.current.newMemoryExpiry !== 'none');
+    if (profileDirty(current.current.editor) || (memoryDirty(currentSelection) && !alreadySavedDraft) || unsavedNote) { pendingLeave.current = next; setLeaveOpen(true); return true; }
     return false;
   };
   const guarded = (next: () => void) => { if (!beforeLeave(next)) next(); };
@@ -977,8 +1000,10 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const openNewMemory = () => guarded(() => {
     clearSelection(); setEditor(null); setNewMemoryText(''); setNewMemoryExpiry('none'); setNewMemoryCalendar(null); setCreateUnknown(false); setFeedback(null); go('memory-new');
   });
-  const returnFromCreate = (receipt: Data) => {
-    setNewMemoryText(''); setNewMemoryExpiry('none'); setCreateUnknown(false);
+  const returnFromCreate = (receipt: Data, keepManualDuplicate = false) => {
+    setCreateUnknown(false);
+    if (keepManualDuplicate) return;
+    setNewMemoryText(''); setNewMemoryExpiry('none');
     if (manualEntry) return;
     // Saving from the suggestions tab must return to formal memory, not the old tab.
     setShowCandidates(receipt.status === 'already_saved' && receipt.duplicate === true && receipt.saved === false
@@ -993,7 +1018,11 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           closeHandle(prepared.reviewHandle);
           throw new Error('原私人对话窗口已变化。输入保留，没有提交。');
         }
-        rememberReceipt({ receiptHandle: prepared.receiptHandle, undoAvailable: false }, 'create', true, undefined, text);
+        const pendingCreate: MemoryFeedback = { value: { receiptHandle: prepared.receiptHandle, undoAvailable: false },
+          operation: 'create', needsQuery: true, submittedText: text,
+          ...(manualEntry ? { manualCreate: { edit: manualCreateEdit.current, expiresAt } } : {}) };
+        if (manualEntry) setFeedback(pendingCreate);
+        else rememberReceipt(pendingCreate.value, 'create', true, undefined, text);
         sent = true;
         const result = object(await call('profile.memory.confirm', { reviewHandle: prepared.reviewHandle }));
         if (manualEntry && !manualEntry.current()) throw new Error('原窗口已结束，不能在这里核对这次保存。');
@@ -1004,10 +1033,13 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         if (settlePreferenceReceipt(result, prepared.receiptHandle, 'create', undefined, text)) return;
         if (result.duplicate === true && result.status === 'already_saved') {
           if (result.receiptHandle !== prepared.receiptHandle || result.saved !== false || result.requestedExpiresAt !== expiresAt || !string((result.record || result.candidate)?.id)) throw new Error('相同内容的原回执尚未完整核对。');
+          const checked = { ...pendingCreate, value: result, needsQuery: false };
+          if (manualEntry && !confirmedManualDuplicate(checked)) throw new Error('相同内容的原回执尚未完整核对。');
           saved = true; duplicate = true;
           if (!alive.current) return;
-          rememberReceipt({ ...result, receiptHandle: result.receiptHandle || prepared.receiptHandle, undoAvailable: false }, 'create');
-          returnFromCreate(result);
+          if (manualEntry) setFeedback(checked);
+          else rememberReceipt({ ...result, receiptHandle: result.receiptHandle || prepared.receiptHandle, undoAvailable: false }, 'create');
+          returnFromCreate(result, !!manualEntry);
           if (!manualEntry) await readSnapshot();
           return;
         }
@@ -1026,7 +1058,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   };
   const saveNewMemory = () => {
     const original = current.current, text = original.newMemoryText.trim(), expiry = original.newMemoryExpiry, calendar = original.newMemoryCalendar, window = livePresentation.current;
-    if (original.view !== 'memory-new' || manualEntry && (!manualEntry.current() || !!confirmedManualSave(original.feedback)) ||
+    if (original.view !== 'memory-new' || manualEntry && (!manualEntry.current() || !!confirmedManualSave(original.feedback) || !!currentManualDuplicate()) ||
         !text || original.createUnknown || busy.current || settingsRequiredFor(original.feedback, 'create', undefined, text) ||
         !expiryOptions.some(x => x.id === expiry) || expiry === 'custom' && (!calendar || !validCalendarTime(calendar))) return;
     void action(expiry === 'custom' ? '正在核对保存期限' : '正在保存记忆', async () => {
@@ -1346,6 +1378,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         const checked = { ...frozen, value: result, needsQuery: false };
         if (manualEntry && result.status === 'saved' && (!confirmedManualSave(checked) || result.record?.text !== frozen.submittedText))
           throw new Error('尚未核对到这次保存的原记忆。');
+        if (manualEntry && result.status === 'already_saved' && !confirmedManualDuplicate(checked))
+          throw new Error('相同内容的原回执尚未完整核对。');
         const recovered = submission && result.status === 'saved' ? recoveredCorrectionPin(checked) : null;
         if (submission && result.status === 'saved' && !recovered) throw new Error('尚未核对到这次修改的原保存版本。');
         settled = true;
@@ -1402,7 +1436,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         }
         if (result.status === 'saved' || result.status === 'reverted' || result.status === 'already_saved') {
           if (current.current.view === 'memory-new' && current.current.createUnknown && frozen.operation === 'create') {
-            returnFromCreate(result);
+            returnFromCreate(result, !!manualEntry && result.status === 'already_saved');
           }
           const selected = current.current.selection;
           if (selected && selected.id === frozen.targetId) {
@@ -1492,10 +1526,11 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const returnForgottenToAnswer = feedbackVisible && atDirectEntry() && !!confirmedAnswerForget(feedback, originalForget);
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
   const manualSaved = manualEntry ? confirmedManualSave(feedback) : null;
+  const manualDuplicate = currentManualDuplicate();
   const headingLabel = savedChat ? '这次保存的记忆' : view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
   const missingDirectVersion = directVersion && view === 'memory' && !selection;
   const headerSave = savedChat ? null : editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || pendingSavedRead || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
-    : view === 'memory-new' && !manualSaved && !manualRetired ? <Button className="pw-profile-save" size="small" disabled={locked || !!manualEntry && !manualReady || createUnknown || !newMemoryText.trim() || newMemoryExpiry === 'custom' && (!newMemoryCalendar || !validCalendarTime(newMemoryCalendar)) || settingsRequiredFor(feedback, 'create', undefined, newMemoryText.trim()) || !supported('profile.memory.createReview') || !supported('profile.memory.confirm')} onClick={saveNewMemory}>{pending === '正在保存记忆' ? '保存中' : newMemoryExpiry === 'custom' ? '核对' : '保存'}</Button>
+    : view === 'memory-new' && !manualSaved && !manualRetired ? <Button className="pw-profile-save" size="small" disabled={locked || !!manualEntry && !manualReady || !!manualDuplicate || createUnknown || !newMemoryText.trim() || newMemoryExpiry === 'custom' && (!newMemoryCalendar || !validCalendarTime(newMemoryCalendar)) || settingsRequiredFor(feedback, 'create', undefined, newMemoryText.trim()) || !supported('profile.memory.createReview') || !supported('profile.memory.confirm')} onClick={saveNewMemory}>{pending === '正在保存记忆' ? '保存中' : newMemoryExpiry === 'custom' ? '核对' : '保存'}</Button>
       : view === 'memory' && selection && !selection.candidate && !selection.historical ? <Button className="pw-profile-save" size="small" disabled={locked || !memoryDirty(selection) || !selection.draft.trim() || memoryConflict || memoryUnknown || settingsRequiredFor(feedback, 'correct', selection.id, selection.draft.trim()) || !supported('profile.memory.confirm')} onClick={saveMemory}>{pending === '正在保存记忆' ? '保存中' : '保存'}</Button>
         : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label={labels['memory-settings']} title={labels['memory-settings']} disabled={locked} onClick={openMemorySettings} />
           : view === 'home' ? <IconButton icon={IconSettings} aria-label="隐私与数据设置" title="隐私与数据" onClick={() => guarded(onSettings)} /> : <span />;
@@ -1543,14 +1578,19 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {error && <MotionFeedback identity={error} className="pw-profile-feedback is-error" role="alert"><p>{error}</p>{!chatEntry && !locked && !missingDirectVersion && <Button variant="ghost" size="small" leadingIcon={IconRefresh} onClick={view === 'memory' ? reloadMemory : view === 'memory-settings' ? openMemorySettings : refresh}>读取最新{view === 'memory' ? '记忆' : view === 'memory-settings' ? '设置' : '资料'}</Button>}</MotionFeedback>}
         {notice && <MotionFeedback identity={notice} className="pw-profile-feedback" role="status">{['已保存', '记忆已删除', '已记住', '已忽略', '当前内容已核对'].includes(notice) && <IconCheck size={15} aria-hidden="true" />}{notice}</MotionFeedback>}
         {feedbackVisible && feedback && <MotionFeedback identity={JSON.stringify([feedback.operation, feedback.targetId, feedback.value.status, feedback.needsQuery, feedback.value.undoAvailable])} className="pw-profile-feedback pw-profile-memory-feedback" role="status">
-          <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{feedbackLabel(feedback)}</span></div>
+          <div className="pw-profile-receipt-heading">{!feedback.needsQuery && ['saved', 'reverted'].includes(feedback.value.status) && <IconCheck size={16} aria-hidden="true" />}<span>{manualDuplicate ? '提交时' + feedbackLabel(feedback) : feedbackLabel(feedback)}</span></div>
           {!feedback.needsQuery && feedback.value.status === 'saved' && (feedback.operation === 'correct' || feedback.operation === 'forget') && <p>不会重新生成以前的回答。原回答若有「本次记忆」，可在那里核对当时的提供回执。</p>}
           {pendingForget && <p>先查询原回执，再决定下一步。查询不会再次提交遗忘。</p>}
           {retention && <p>{retention}</p>}
+          {manualDuplicate && <p>原输入和所选期限仍保留。你可以继续编辑，或不再保存，返回原对话。</p>}
           {feedback.value.undoUnavailableReason && <p>{string(feedback.value.undoUnavailableReason)}</p>}
           <div className="pw-profile-actions">
             {returnForgottenToAnswer && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={locked} onClick={requestBack}>返回原回答</Button>}
             {manualSaved && <Button variant="secondary" size="small" disabled={locked} onClick={requestBack}>完成，返回原对话</Button>}
+            {manualDuplicate && <>
+              <Button variant="secondary" size="small" disabled={locked} onClick={requestBack}>完成，返回原对话</Button>
+              <Button variant="ghost" size="small" disabled={locked} onClick={() => { if (!busy.current && currentManualDuplicate()) manualCreateInput.current?.focus(); }}>继续编辑</Button>
+            </>}
             {view === 'memories' && retention && string(feedback.value.shortenReviewHandle) && <Button variant="secondary" size="small" disabled={locked || !supported('profile.memory.confirm')} onClick={shortenDuplicate}>仅缩短这条原记忆</Button>}
             {preferenceSection && manualEntry && <p>这类偏好请在对话的默认偏好设置中修改。本次没有保存为记忆。</p>}
             {!manualEntry && preferenceSection && <Button variant="secondary" size="small" trailingIcon={IconChevronRight} disabled={locked} onClick={() => openEditor(preferenceSection)}>去{preferenceSection === 'communication' ? '交流偏好' : '做事偏好'}</Button>}
@@ -1644,9 +1684,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {(loaded || !!manualEntry && enteredProfile) && view === 'memory-new' && !manualSaved && <div className="pw-profile-form">
           <p className="pw-profile-intro">{manualEntry ? '写一件之后可能会用到的事。只有点保存才会写入你的个人记忆，不会发送消息或调用模型。' : '手动保存的背景、兴趣或偏好可供以后参考。只对这次任务有效的要求，留在原对话即可。'}</p>
           {manualRetired ? !!newMemoryText.trim() && <p className="pw-profile-candidate-copy">{newMemoryText}</p> : <>
-            <TextAreaField className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="希望记住什么" placeholder="一件你希望下次不用再解释的事" value={newMemoryText} onChange={setNewMemoryText} rows={5} maxLength={4000} resize="none" isDisabled={locked || createUnknown || !!manualEntry && !manualReady} />
-            <SelectField className="pw-profile-language" label="有效期" value={newMemoryExpiry} options={expiryOptions} onChange={next => { if (next === 'custom' && !newMemoryCalendar) setNewMemoryCalendar(calendarTimeAt(Date.now() + 86400000)); setNewMemoryExpiry(next); }} isDisabled={locked || createUnknown || !!manualEntry && !manualReady} />
-            {newMemoryExpiry === 'custom' && newMemoryCalendar && <CalendarDateTimeFields value={newMemoryCalendar} onChange={setNewMemoryCalendar} disabled={locked || createUnknown || !!manualEntry && !manualReady} label="到期时间" />}
+            <TextAreaField ref={manualEntry ? manualCreateInput : undefined} className="pw-profile-field" fieldClassName="pw-profile-input pw-profile-memory-input" label="希望记住什么" placeholder="一件你希望下次不用再解释的事" value={newMemoryText} onChange={value => { if (value !== current.current.newMemoryText) editManualCreate(); setNewMemoryText(value); }} rows={5} maxLength={4000} resize="none" isDisabled={locked || createUnknown || !!manualEntry && !manualReady} />
+            <SelectField className="pw-profile-language" label="有效期" value={newMemoryExpiry} options={expiryOptions} onChange={next => { if (next !== current.current.newMemoryExpiry) editManualCreate(); if (next === 'custom' && !newMemoryCalendar) setNewMemoryCalendar(calendarTimeAt(Date.now() + 86400000)); setNewMemoryExpiry(next); }} isDisabled={locked || createUnknown || !!manualEntry && !manualReady} />
+            {newMemoryExpiry === 'custom' && newMemoryCalendar && <CalendarDateTimeFields value={newMemoryCalendar} onChange={value => { if (value !== current.current.newMemoryCalendar) editManualCreate(); setNewMemoryCalendar(value); }} disabled={locked || createUnknown || !!manualEntry && !manualReady} label="到期时间" />}
             <p className="pw-profile-preference-priority">到期后不再作为当前背景。回答风格与做事方式可以在明确偏好中设置。</p>
             {!manualEntry && <Button variant="ghost" className="pw-profile-inline-link" trailingIcon={IconChevronRight} disabled={locked || createUnknown} onClick={() => openEditor('communication')}>设置交流偏好</Button>}
           </>}
