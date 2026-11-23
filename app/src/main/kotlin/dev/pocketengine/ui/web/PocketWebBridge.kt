@@ -1074,9 +1074,37 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "projects.historyComparison") {
-                checkedPayload(args, setOf("projectId","path","version","versions"));requireFile(args)
+                checkedPayload(args, setOf("projectId","path","version","versions","textPair"));requireFile(args)
                 require(section == null && taskViewId == null && controller.webPrivateOwnerVisible()) { "请回到这个正式项目文件再比较" }
-                complete(id, dev.pocketengine.ui.originalHistoryComparison(controller.state.fileHistory,requiredString(args,"projectId"),checkedPath(args),requiredInt(args,"version"),requiredString(args,"versions")),null,retainValue=false)
+                val project=requiredString(args,"projectId");val path=checkedPath(args);val version=requiredInt(args,"version")
+                val history=controller.state.fileHistory
+                val metadata=dev.pocketengine.ui.originalHistoryComparison(history,project,path,version,requiredString(args,"versions"))
+                if (!args.has("textPair")) complete(id,metadata,null,retainValue=false)
+                else {
+                    val pair=dev.pocketengine.ui.selectFormalHistoryTextPair(history,version,args.getJSONObject("textPair"))
+                    val owner=captureWindow();val originalDocument=checkNotNull(documentId);val request=id
+                    fun current():Boolean {
+                        val state=controller.state
+                        return !closed && documentId==originalDocument && acceptsWindow(owner) && section==null && taskViewId==null &&
+                            taskReturnSection==null && controller.webPrivateOwnerVisible() && controller.conversationReader==null &&
+                            controller.queuedInputsPage==null && !attachmentPages.hasOpenWorkspace && !state.chatAttachmentPickerOpen &&
+                            state.projectId==project && state.filePath==path && state.fileVersion==version && state.fileHistory==history &&
+                            state.fileReady && !state.fileLoading && !state.fileSaving && !state.revisionLoading &&
+                            state.workspaceArtifactEditorOrigin==null && pair.matchesHead(state.fileObservation)
+                    }
+                    val unavailable="原正式文件窗口已变化，未显示其他版本或改动草稿。"
+                    check(current()) { unavailable }
+                    val workspace=controller.nativeButlerHost().features.module("workspace") as dev.pocketengine.features.workspace.WorkspaceModule
+                    controller.runPluginCatalogWork(Runnable {
+                        val result=runCatching { check(current()) { unavailable };pair.read(workspace) }
+                        main.post {
+                            val stillOriginal=runCatching { current() && (result.isFailure || pair.latestHeadMatches(workspace)) }.getOrDefault(false)
+                            if (!stillOriginal) complete(request,null,unavailable,retainValue=false)
+                            else result.fold({ complete(request,it,null,retainValue=false) },
+                                { complete(request,null,it.message ?: "没有取得所选两版的完整文字。",retainValue=false) })
+                        }
+                    })
+                }
                 return
             }
             if (action == "composer.team.replace") {

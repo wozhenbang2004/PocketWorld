@@ -6,14 +6,14 @@ import { useMemo } from 'react';
 import { IconCheck, IconClose, IconCode } from '../icons';
 import { compareFileText, type FileDiffPart } from '../file-diff';
 
-export function InlineDiff({ before, after, versionLabel, beforeLabel = '原版本', afterLabel = '当前草稿', onApply, onCancel, pending = false, readOnly = false }: { before: string; after: string; versionLabel: string; beforeLabel?: string; afterLabel?: string; onApply?: () => void; onCancel?: () => void; pending?: boolean; readOnly?: boolean }) {
+export function InlineDiff({ before, after, versionLabel, beforeLabel = '原版本', afterLabel = '当前草稿', onApply, onCancel, pending = false, readOnly = false, title, sameText = '当前内容与原版本一致。' }: { before: string; after: string; versionLabel: string; beforeLabel?: string; afterLabel?: string; onApply?: () => void; onCancel?: () => void; pending?: boolean; readOnly?: boolean; title?: string; sameText?: string }) {
   const same = before === after;
   const comparison = useMemo(() => compareFileText(before, after), [before, after]);
   const content = (parts: FileDiffPart[], side: 'before' | 'after') => parts.map((part, index) =>
     !part.changed ? part.text : side === 'before' ? <del key={index}>{part.text}</del> : <ins key={index}>{part.text}</ins>);
-  return <section className="acc-inline acc-card pw-inline-diff" aria-label="当前文件差异" data-diff-mode={comparison.mode}>
-    <header className="acc-head"><span><IconCode size={17} /> 当前修改 <span className="acc-muted">· {versionLabel}</span></span></header>
-    {same ? <p className="pw-empty-small">当前内容与原版本一致。</p> : <>
+  return <section className="acc-inline acc-card pw-inline-diff" aria-label={title ?? '当前文件差异'} data-diff-mode={comparison.mode}>
+    <header className="acc-head"><span><IconCode size={17} /> {title ?? '当前修改'} <span className="acc-muted">· {versionLabel}</span></span></header>
+    {same ? <p className="pw-empty-small">{sameText}</p> : <>
       {comparison.mode !== 'character' && <p className="pw-diff-note" role="status">{comparison.mode === 'line' ? '当前按整行标记变化，行内细节未标记。' : '修改范围较大，未逐处标记。两侧内容完整保留。'}</p>}
       {comparison.whitespaceChanged && <p className="pw-diff-note">标记中包含空白或换行变化。</p>}
       <div className="pw-diff-columns">

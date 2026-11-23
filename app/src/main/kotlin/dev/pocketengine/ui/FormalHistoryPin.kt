@@ -1,5 +1,7 @@
 package dev.pocketengine.ui
 
+import dev.pocketengine.features.workspace.VersionedWorkspace
+import dev.pocketengine.features.workspace.WorkspaceModule
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,4 +39,73 @@ internal fun originalHistoryComparison(rows:List<UiFileRevision>,project:String,
         out.put(JSONObject().put("version",row.version).put("deleted",row.deleted).put("original",pin.json()))
     }
     return JSONObject().put("format","pocketworld.formal-file-observed-history.v1").put("projectId",project).put("path",path).put("version",version).put("versions",versions).put("items",out)
+}
+
+
+private const val FORMAL_HISTORY_TEXT_LIMIT = 64L * 1024
+
+/** The pair is drawn from the same observed native history. It is never an editor selection or a write ticket. */
+internal data class FormalHistoryTextPair(
+    val head:FormalHistoryPin,val before:FormalHistoryPin,val after:FormalHistoryPin
+) {
+    fun matchesHead(value:FormalFileObservation?):Boolean =
+        value!=null && value.project==head.project && value.path==head.path && value.version==head.version &&
+            value.revision==head.revision && value.sha==head.sha && value.size==head.size &&
+            value.kind=="text" && value.representation=="text"
+
+    private fun matchesLatestHead(actual:VersionedWorkspace.HeadObservation):Boolean =
+        actual.authorityKnown && !actual.deleted && actual.state=="current" && actual.projectId==head.project &&
+            actual.path==head.path && actual.version==head.version && actual.revisionId==head.revision &&
+            actual.sha256==head.sha && actual.sizeBytes==head.size
+
+    /** Native head authority only; can be rechecked on the main thread without I/O. */
+    fun latestHeadMatches(workspace:WorkspaceModule):Boolean =
+        matchesLatestHead(workspace.currentFileHeadForHost(head.project,head.path))
+
+    fun read(workspace:WorkspaceModule):JSONObject {
+        fun exact(pin:FormalHistoryPin):JSONObject {
+            val raw=runCatching {
+                workspace.handle("read",JSONObject().put("projectId",pin.project).put("path",pin.path).put("version",pin.version))
+            }.getOrElse { error("未取得所选正式版本，未使用其他版本。") }
+            val (observation,text)=FormalFileObservation.read(raw,pin.project,pin.path,pin.version)
+                ?: error("未取得所选正式版本，未使用其他版本。")
+            check(raw.opt("ok")!=false && text!=null && '\u0000' !in text && observation.representation=="text" &&
+                observation.kind=="text" && observation.revision==pin.revision && observation.sha==pin.sha &&
+                observation.size==pin.size && observation.size in 0L..FORMAL_HISTORY_TEXT_LIMIT) {
+                "未取得所选两版的完整文字，未显示截断内容或其他版本。"
+            }
+            return pin.json().put("text",text)
+        }
+        val changed="正式文件的当前版本已变化或暂不能核对，请重新读取版本记录。"
+        // Ordinary files need not yet have a transient native head. Bootstrap only
+        // this already selected path on IO; its exact reads refresh that same entry.
+        val observed=runCatching { workspace.refreshFileHeadForHost(head.project,head.path) }.getOrElse { error(changed) }
+        check(matchesLatestHead(observed)) { changed }
+        val left=exact(before);val right=exact(after)
+        // Reject a new head even before its notice reaches the editor; it supplies no pair text.
+        check(latestHeadMatches(workspace)) { changed }
+        return JSONObject().put("format","pocketworld.formal-file-text-pair.v1").put("head",head.json())
+            .put("before",left).put("after",right).put("completeText",true).put("readOnly",true)
+    }
+}
+
+internal fun selectFormalHistoryTextPair(rows:List<UiFileRevision>,version:Int,selection:JSONObject):FormalHistoryTextPair {
+    require(selection.keys().asSequence().toSet()==setOf("beforeVersion","beforeRevisionId","afterVersion","afterRevisionId")) {
+        "请明确选择同一正式文件的两个版本。"
+    }
+    fun selected(side:String):FormalHistoryPin {
+        val number=selection.opt(side+"Version")
+        val revision=selection.opt(side+"RevisionId")
+        val pin=rows.singleOrNull { it.version==number && it.original?.revision==revision }?.original
+        require(number is Int && number>0 && pin!=null && pin.kind=="text" && pin.size in 0L..FORMAL_HISTORY_TEXT_LIMIT) {
+            "所选版本没有可完整对照的文字，只保留版本依据。"
+        }
+        return pin
+    }
+    val before=selected("before");val after=selected("after")
+    val head=rows.singleOrNull { it.version==version }?.original
+    require(head!=null && head.kind=="text" && before.version<after.version && before.revision!=after.revision) {
+        "请选择这件正式文件的两个不同版本。"
+    }
+    return FormalHistoryTextPair(head,before,after)
 }
