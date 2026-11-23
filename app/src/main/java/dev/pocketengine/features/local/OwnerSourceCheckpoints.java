@@ -36,6 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Local native foundation only. This history is not a Work, a Workspace artifact, or a capability. */
