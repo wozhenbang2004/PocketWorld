@@ -59,6 +59,13 @@ public final class AgentRunner {
             throw new IllegalStateException("ordinary_summary_requires_original_chat_runner");
         ordinarySummarySelection=new ContextCompactor.OrdinarySummarySelection(main,original);
     }
+    /** Only the already registered fresh private default Project start can supply this opaque proof. */
+    public void bindOriginalDefaultProjectSummary(dev.pocketengine.features.local.project.ProjectOwnerWorkflows.OrdinaryDefaultSummary project,RunControl original){
+        if(lifecycleBegun||ordinarySummarySelection!=null||phone!=null||instructionProfile!=NativeInstructionProfile.OWNER_WORK||
+                ownerInputs==null||requestProjection==null)
+            throw new IllegalStateException("original_default_project_summary_runner_required");
+        ordinarySummarySelection=new ContextCompactor.OrdinarySummarySelection(project,original);
+    }
     private TaskMemoryHistory.PlainInput firstPlainBookInput;
     private TaskMemoryHistory.PlainHistory plainBookHistory;
     /** Installs native-only witnesses before the runner starts. Neither can authorize a request. */
@@ -284,6 +291,8 @@ public final class AgentRunner {
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}
                 catch(Exception unavailable){endUnavailable=true;}
         }finally{
+            // Reentering a retained Project service cannot reuse the first invocation's recipient proof.
+            if(ordinarySummarySelection!=null)ordinarySummarySelection.finishInitialProjectInvocation();
             if(ownerSkill!=null)ownerSkill.close();
             if(!developmentYielded&&capabilities!=null)try{capabilities.close();}
                 catch(dev.pocketengine.features.local.project.ProjectServiceDrainPending pending){serviceDrainObserved=pending;}

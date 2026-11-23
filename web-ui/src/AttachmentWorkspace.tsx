@@ -159,7 +159,7 @@ function standaloneDraftPresentation(native:ReturnType<typeof bridge.getState>,v
 function warmDraftKey(native:ReturnType<typeof bridge.getState>,visit:StandaloneVisit){
  const shown=standaloneDraftPresentation(native,visit),live=obj(native.state.attachmentWorkspace),resume=obj(live.warmSavedDraft);
  // The Android command ticket rotates. The actual Web document and logical Library must remain the same.
- return visit.entry==='catalog'&&shown?.leased===false&&shown.frame.windowId!==visit.windowId&&
+ return (visit.entry==='catalog'||visit.entry==='blank')&&shown?.leased===false&&shown.frame.windowId!==visit.windowId&&
   live.busy===false&&live.exportPending===false&&resume.library===visit.presentation&&resume.previousWindow===visit.windowId&&
   typeof resume.key==='string'&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(resume.key)?resume.key:undefined;
 }

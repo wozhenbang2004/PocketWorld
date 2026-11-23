@@ -150,7 +150,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         JSONObject target=conversationModels().targetForAdmission(conversationId,clientMessageId);
         ModelConfig captured=captureConversationPreferenceTarget(target);
         if(target==null&&projectOwnerWorkflows!=null&&conversationId!=null&&clientMessageId!=null)
-            projectOwnerWorkflows.observeOrdinaryDefaultCapture(conversationId,clientMessageId);
+            projectOwnerWorkflows.observeOrdinaryDefaultCapture(conversationId,clientMessageId,captured);
         return captured;
     }
     private ModelConfig captureConversationPreferenceTarget(JSONObject target)throws Exception {
@@ -4558,7 +4558,14 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                     id.equals(originalInput.task)&&admittedRun.equals(originalInput.run)&&admittedEpoch==originalInput.epoch&&
                     originalInput.conversation.equals(attempt.opt("conversationId"))&&control.matchesHostRun(id,admittedRun,admittedEpoch)&&
                     attempt.isNull("origin")&&selectedProfile==null&&project==null&&ownerSkill==null&&approval==null;
-            if(initialProjectFailure)runner.observeInitialDefaultProjectFailure();
+            if(initialProjectFailure){
+                runner.observeInitialDefaultProjectFailure();
+                // Independent from the Chat binder. No new capture, no saved run rehydration.
+                if(originalInput.config==config){
+                    var originalSummary=originalProject.summaryFor(attempt,projectGoal,config,control);
+                    if(originalSummary!=null)runner.bindOriginalDefaultProjectSummary(originalSummary,control);
+                }
+            }
             if(independentBuild&&(ownerSkill!=null||approval!=null&&approval.attachmentCall))throw new SecurityException("首次构建不能接管其他技能或附件调用");
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
             RetainedDevelopmentRun development=ownerMailbox&&!selectedRevision&&!independentBuild&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;

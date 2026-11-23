@@ -28,24 +28,35 @@ public final class ContextCompactor {
                             dev.pocketengine.runtime.AgentRunner.RequestProjection sourceProjection,OrdinarySummarySelection ordinarySummarySelection){
         this.journal=journal;this.host=host;this.budgets=java.util.Objects.requireNonNull(budgets);this.sourceProjection=sourceProjection;this.ordinarySummarySelection=ordinarySummarySelection;
     }
-    /** Transient exact destination of one native Chat compactor. Other consumers continue to use the original model config. */
+    /** Transient exact destination of one native compactor; never changes the original model config. */
     public static final class OrdinarySummarySelection {
         private final ModelRoutePlan main;
         private final RunControl control;
         private final RunControl.HostRunIdentity owner;
-        private final ModelConfig summary;
-        public OrdinarySummarySelection(ModelRoutePlan main,RunControl control){
+        private final dev.pocketengine.features.local.project.ProjectOwnerWorkflows.OrdinaryDefaultSummary project;
+        private ModelConfig summary;
+        public OrdinarySummarySelection(ModelRoutePlan main,RunControl control){this(main,control,null);}
+        public OrdinarySummarySelection(dev.pocketengine.features.local.project.ProjectOwnerWorkflows.OrdinaryDefaultSummary project,RunControl control){
+            this(project.requireMain(control),control,project);
+        }
+        private OrdinarySummarySelection(ModelRoutePlan main,RunControl control,
+                dev.pocketengine.features.local.project.ProjectOwnerWorkflows.OrdinaryDefaultSummary project){
+            this.project=project;
             this.main=java.util.Objects.requireNonNull(main);this.control=java.util.Objects.requireNonNull(control);owner=control.hostRunIdentity();
             if(owner==null||!main.hasNativeImplicitOrdinarySummary())throw new IllegalStateException("original_ordinary_summary_unproven");
             ModelConfig exact=main.primary().withRoutePlan(null).withPurposePlans(java.util.Map.of());
             summary=exact.withRoutePlan(ModelRoutePlan.exact(exact,"SUMMARY","APP_OWNER"));
         }
-        private ModelConfig select(ModelConfig active,RunControl original)throws Exception {
-            original.check();
+        /** Keep the closed marker on the same Runner so a retained Project turn cannot fall back. */
+        public void finishInitialProjectInvocation(){if(project!=null)summary=null;}
+        private ModelConfig select(ModelConfig active,RunControl original,JSONArray raw)throws Exception {
+            original.check();ModelConfig exact=summary;
+            if(exact==null)throw new CompactionPlan.Unavailable("original_default_project_summary_invocation_ended");
             if(control!=original||!original.matchesHostRun(owner.taskId(),owner.runId(),owner.epoch())||
-                    active.routePlan!=main||!summary.model.equals(active.model)||!summary.capabilityBinding.equals(active.capabilityBinding))
+                    active.routePlan!=main||!exact.model.equals(active.model)||!exact.capabilityBinding.equals(active.capabilityBinding))
                 throw new CompactionPlan.Unavailable("original_ordinary_summary_main_changed");
-            return summary;
+            if(project!=null&&!project.originalGoalOnly(raw))throw new CompactionPlan.Unavailable("original_default_project_summary_input_changed");
+            return exact;
         }
     }
     public boolean available(){return journal!=null&&host!=null;}
@@ -102,7 +113,7 @@ public final class ContextCompactor {
             ContextBudgetPolicy.Resolved resolved=ContextBudgetPolicy.resolve(budgets,selected,ContextBudgetPolicy.REQUEST_BYTES);
             // Both ordinary compaction and provider context-limit recovery use this one exact destination.
             // Once scoped, an unproved destination cannot fall back to the old retained source.
-            ModelConfig summarySelection=ordinarySummarySelection==null?selected.forPurpose("SUMMARY"):ordinarySummarySelection.select(selected,original);
+            ModelConfig summarySelection=ordinarySummarySelection==null?selected.forPurpose("SUMMARY"):ordinarySummarySelection.select(selected,original,raw);
             long summaryDeadline=System.currentTimeMillis()+summarySelection.requestTimeoutSeconds*1000L;
             // Optional local facts only: never prepare an account or admit a candidate here.
             List<ContextWindow.Budget> summaryBudgets=knownSummaryBudgets(summarySelection,original);

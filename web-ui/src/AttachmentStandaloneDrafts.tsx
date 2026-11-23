@@ -177,11 +177,13 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
    if(result.editorHandle!==original.handle||!isHandle(result.versionHandle)||
       (checking?result.status!=='VERIFIED':result.status!=='SAVED'&&result.status!=='VERIFIED')||
       (!first&&(result.status==='VERIFIED')!==(result.versionHandle===original.version))){hold();return}
-   // Later typing may use the existing warm recovery only from this new,
-   // acknowledged baseline. An uncertain write never restores the old key.
-   const warmResumeKey=!first&&!checking&&!original.sourceName&&!original.fromTxt&&result.sourceAvailable!==false&&
-    currentEditor.current===original&&writeAttempt.current===original.handle&&isHandle(original.warmResumeKey)&&
-    isHandle(result.warmResumeKey)&&result.warmResumeKey!==original.warmResumeKey?result.warmResumeKey:undefined;
+   // The bare first save and an already eligible update can each supply a native baseline.
+   // A first-check or uncertain write never enables warm recovery.
+   const warmBaseline=first?result.status==='SAVED'&&!initialResume&&!fromMessage&&!initialTxt:
+    isHandle(original.warmResumeKey)&&result.warmResumeKey!==original.warmResumeKey;
+   const warmResumeKey=!checking&&!original.sourceName&&!original.fromTxt&&result.sourceAvailable!==false&&
+    currentEditor.current===original&&writeAttempt.current===original.handle&&
+    isHandle(result.warmResumeKey)&&warmBaseline?result.warmResumeKey:undefined;
    if(warmResumeKey)writeAttempt.current=undefined;
    setEditor(value=>value===original?{...original,version:result.versionHandle,original:original.input,input:original.input,
     uncertain:undefined,warmResumeKey}:value);

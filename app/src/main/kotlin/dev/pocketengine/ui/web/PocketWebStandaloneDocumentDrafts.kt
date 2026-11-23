@@ -72,7 +72,8 @@ internal class PocketWebStandaloneDocumentDrafts(
         val textSource: TextSeed?, val pendingDocument: String?)
     private data class Editor(val edit: Edit, val pin: Pin, val source: RevisionSource? = null,
                               val removalOnly: Boolean = false, val warmResumeKey: String? = null)
-    private class FirstAttempt(val handle: String, var pin: Pin? = null)
+    private class Blank(val handle: String, val warmAfterFirstSave: Boolean)
+    private class FirstAttempt(val blank: Blank, var pin: Pin? = null)
     private class LinkedAttempt(val source: RevisionSource, var pin: Pin? = null)
     private class TextAttempt(val source: TextSeed, var pin: Pin? = null, var receipt: TextRetention? = null)
     private data class RecentText(val windowId: String, val ticket: PocketWebWindowTicket, val pin: Pin, val origin: TextOrigin)
@@ -84,7 +85,7 @@ internal class PocketWebStandaloneDocumentDrafts(
     private var scope: Scope? = null
     private var rows: Map<String, Pin> = emptyMap()
     private var editor: Editor? = null
-    private var blank: String? = null
+    private var blank: Blank? = null
     private var first: FirstAttempt? = null
     private var linkedFirst: LinkedAttempt? = null
     private var textFirst: TextAttempt? = null
@@ -124,20 +125,22 @@ internal class PocketWebStandaloneDocumentDrafts(
     }
 
     /** A blank editor is only presentation and does not allocate a draft ID. */
-    fun newDraft(frame: Frame): NewDraft {
+    fun newDraft(frame: Frame, warmAfterFirstSave: Boolean = false): NewDraft {
         val current = admission(frame)
         check((scope == null || scope == current) && pending == null && editor == null && blank == null) { "请先退出或核对当前本机草稿" }
-        // The explicit ordinary Library entry can start with a blank without reading the shelf.
+        // Only the bare Library command marks this exact blank; derived editors use the default.
         scope = current
-        return NewDraft(token().also { blank = it }, defaults)
+        val presented = Blank(token(), warmAfterFirstSave).also { blank = it }
+        return NewDraft(presented.handle, defaults)
     }
 
     fun firstSave(frame: Frame, blankHandle: String, fields: Fields, done: (Saved?) -> Unit) {
         val current = admission(frame)
-        check(scope == current && blank == blankHandle && canonicalId(blankHandle) &&
+        val presented = blank?.takeIf { it.handle == blankHandle }
+        check(scope == current && presented != null && canonicalId(blankHandle) &&
             first == null && editor == null && pending == null) { "请先核对本次草稿，没有另建一份" }
         if (defaults == fields) { done(Saved(State.NO_EDIT)); return }
-        val attempt = FirstAttempt(blankHandle)
+        val attempt = FirstAttempt(presented)
         first = attempt
         enqueue(current, frame, fallback = ::unknown, call = { storage, window ->
             val seed = storage.initialize(window)
@@ -166,7 +169,7 @@ internal class PocketWebStandaloneDocumentDrafts(
     /** A missing/uncertain acknowledgement can lead only to a read of the original first pin. */
     fun checkFirst(frame: Frame, blankHandle: String, done: (Saved?) -> Unit) {
         val current = admission(frame)
-        val attempt = first?.takeIf { scope == current && blank == blankHandle && it.handle == blankHandle }
+        val attempt = first?.takeIf { scope == current && blank === it.blank && it.blank.handle == blankHandle }
             ?: error("本次首次保留的来源已变化")
         if (pending != null) { done(Saved(State.UNKNOWN)); return }
         val pin = attempt.pin ?: run { done(Saved(State.UNKNOWN)); return }
@@ -181,12 +184,14 @@ internal class PocketWebStandaloneDocumentDrafts(
     }
 
     private fun bindFirst(attempt: FirstAttempt, pin: Pin, state: State): Saved {
-        check(first === attempt && blank == attempt.handle)
-        val edit = editor?.takeIf { it.pin == pin && it.edit.editorHandle == attempt.handle }?.edit
-            ?: Edit(attempt.handle, token())
-        editor = Editor(edit, pin)
+        check(first === attempt && blank === attempt.blank)
+        val handle = attempt.blank.handle
+        val edit = editor?.takeIf { it.pin == pin && it.edit.editorHandle == handle }?.edit ?: Edit(handle, token())
+        // Only the confirmed first write may offer this ordinary blank's saved baseline.
+        val warmKey = if (state == State.SAVED && attempt.blank.warmAfterFirstSave) token() else null
+        editor = Editor(edit, pin, warmResumeKey = warmKey)
         rows = emptyMap()
-        return Saved(state, edit)
+        return Saved(state, edit, warmResumeKey = warmKey)
     }
 
     /** Explicit selection from this visit's actual projected rows. The caller must never replay its body. */

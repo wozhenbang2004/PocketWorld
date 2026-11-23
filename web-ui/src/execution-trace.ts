@@ -287,8 +287,16 @@ export function nodeDurationLabel(node: TraceNode): string {
 }
 
 const order = (a: TraceNode, b: TraceNode) => (a.startedAt ?? Number.MAX_SAFE_INTEGER) - (b.startedAt ?? Number.MAX_SAFE_INTEGER) || a.sequence - b.sequence || a.id.localeCompare(b.id);
+/** Search aliases come only from an already read, run-bound native model receipt. */
+function nativeModelPurposeText(node: TraceNode): string {
+  if (node.kind !== 'model' || node.source !== 'native_inference_receipt' || node.role !== 'request' || node.legacy ||
+      !safeId(node.runId) || !integer(node.epoch) || node.epoch === 0 ||
+      typeof node.callId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(node.callId) ||
+      node.id !== `model:${node.callId}`) return '';
+  return node.purpose === 'SUMMARY' ? '上下文整理 SUMMARY' : node.purpose === 'MAIN' ? '主请求 MAIN' : '';
+}
 function searchText(node: TraceNode) {
-  return [node.name, traceDisplayName(node), node.kind === 'tool' && node.name === 'agent_settings_set' ? '保存默认偏好' : '', node.model, node.callId, node.operationId, node.memberId, node.turnId, node.logicalRequestId,
+  return [node.name, traceDisplayName(node), nativeModelPurposeText(node), node.kind === 'tool' && node.name === 'agent_settings_set' ? '保存默认偏好' : '', node.model, node.callId, node.operationId, node.memberId, node.turnId, node.logicalRequestId,
     node.stepId, node.requestId, traceRoleLabel(node), node.turnIndex == null ? '' : `Turn ${node.turnIndex}`,
     traceStatus(node.status), traceRecordStatus(node), traceKind(node.kind), traceBody(node.error).text, traceBody(node.message).text].filter(Boolean).join(' ').toLocaleLowerCase();
 }

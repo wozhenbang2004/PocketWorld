@@ -1655,7 +1655,7 @@ internal class PocketWebAttachments(
                                 row.recentTextOrigin?.let { origin -> it.put(origin.rowFlag, true) }
                             } })) })
                 } }
-                "drafts.new" -> { exact(); val new = adapter.newDraft(frame)
+                "drafts.new" -> { exact(); val new = adapter.newDraft(frame, warmAfterFirstSave = true)
                     reply(JSONObject().put("editorHandle", new.editorHandle).put("fields", content(new.fields)))
                 }
                 "drafts.open" -> { exact("rowHandle"); adapter.open(frame, text("rowHandle")) { opened ->

@@ -1,6 +1,8 @@
 package dev.pocketengine.features.local.project;
 
+import dev.pocketengine.core.ModelConfig;
 import dev.pocketengine.core.RunControl;
+import dev.pocketengine.runtime.models.ModelRoutePlan;
 import dev.pocketengine.features.assistant.AssistantModule;
 import dev.pocketengine.features.local.LocalModule;
 import dev.pocketengine.store.TaskStore;
@@ -374,16 +376,82 @@ public final class ProjectOwnerWorkflows {
         synchronized(selected){if(selected.boundTask!=null)throw new SecurityException("原项目选择已用于一项任务，请重新核对");selected.boundTask=task.getString("id");}
         tasks.bindDevelopmentContext(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"),original,new JSONObject(selected.context));
     }
-    /** Presentation provenance only; never a model preference, credential or execution grant. */
-    public record OrdinaryDefaultStart(String projectId,String checkoutId,String clientMessageId) { }
+    /** Original native reviewed default start, not a persisted preference or execution grant. */
+    public static final class OrdinaryDefaultStart {
+        private final String projectId,checkoutId,clientMessageId,sourceDigest;
+        private final ModelRoutePlan implicitSummaryMain;
+        private OrdinaryDefaultStart(JSONObject scope,String client,ModelConfig model) {
+            projectId=scope.optString("projectId");checkoutId=scope.optString("checkoutId");clientMessageId=client;
+            sourceDigest=scope.optString("initialSourceDigest");
+            implicitSummaryMain="managed_process_v1".equals(scope.opt("runtime"))&&model.routePlan!=null&&
+                    model.routePlan.hasNativeImplicitOrdinarySummary()?model.routePlan:null;
+        }
+        public String projectId(){return projectId;}
+        public String checkoutId(){return checkoutId;}
+        public String clientMessageId(){return clientMessageId;}
+
+        /** Engine supplies the registered first private attempt and its already matched original owner row. */
+        public OrdinaryDefaultSummary summaryFor(JSONObject task,JSONObject goal,ModelConfig captured,RunControl original) {
+            JSONObject scope=task.optJSONObject("developmentContext");
+            if(implicitSummaryMain==null||captured.routePlan!=implicitSummaryMain||scope==null||
+                    !"pocketworld.development-context.v1".equals(scope.opt("format"))||!"managed_process_v1".equals(scope.opt("runtime"))||
+                    !projectId.equals(scope.opt("projectId"))||!checkoutId.equals(scope.opt("checkoutId"))||
+                    !clientMessageId.equals(scope.opt("clientMessageId"))||!sourceDigest.matches("[a-f0-9]{64}")||
+                    !sourceDigest.equals(scope.opt("initialSourceDigest"))||!Boolean.TRUE.equals(scope.opt("filesAreUntrusted"))||
+                    !Boolean.FALSE.equals(scope.opt("authorityAdded"))||scope.optJSONObject("deliveryContract")==null||
+                    scope.has("draftOnly")||scope.has(OwnerRevisionSource.FIELD)||scope.has(OwnerDraftFirstBuild.FIELD))return null;
+            String message=goal.optString("messageId");long revision=goal.optLong("ownerMessageRevision",-1);
+            String taskId=task.optString("id"),runId=task.optString("runId");int epoch=task.optInt("coordinatorEpoch",-1);
+            JSONArray attachments=goal.optJSONArray("attachments");
+            if(!"assistant".equals(task.opt("kind"))||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))||
+                    !"capabilities".equals(task.opt("executionMode"))||!task.isNull("origin")||!task.isNull("parentTaskId")||
+                    !task.isNull("executionRole")||!task.isNull("ownerWorkPreparation")||!task.isNull("ownerWorkTakeover")||
+                    !task.isNull("projectMemoryRead")||!task.isNull("workProfileRef")||!task.isNull("workProfileIntent")||
+                    !task.isNull("teamAssignment")||!task.isNull("teamRunId")||!task.isNull("teamWriteScope")||
+                    !"queue".equals(goal.opt("mode"))||!clientMessageId.equals(goal.opt("clientMessageId"))||
+                    message.isEmpty()||revision<1||attachments==null||attachments.length()!=0||
+                    goal.has("ownerSourceRefs")||goal.has("ownerPreviewRefs")||goal.has("ownerObjectRefs")||
+                    epoch!=1||!original.matchesHostRun(taskId,runId,epoch))return null;
+            return new OrdinaryDefaultSummary(implicitSummaryMain,original,original.hostRunIdentity(),message,revision);
+        }
+    }
+    /** Opaque, first-invocation-only input to the existing compactor. No source bodies or public JSON. */
+    public static final class OrdinaryDefaultSummary {
+        private final ModelRoutePlan main;private final RunControl original;
+        private final RunControl.HostRunIdentity owner;private final String message;private final long revision;
+        private OrdinaryDefaultSummary(ModelRoutePlan main,RunControl original,RunControl.HostRunIdentity owner,String message,long revision) {
+            this.main=main;this.original=original;this.owner=owner;this.message=message;this.revision=revision;
+        }
+        public ModelRoutePlan requireMain(RunControl actual) {
+            if(actual!=original||owner==null||!actual.matchesHostRun(owner.taskId(),owner.runId(),owner.epoch()))
+                throw new SecurityException("original_default_project_summary_owner_changed");
+            return main;
+        }
+        /** Reject newly added owner context using only the compactor's already loaded raw checkpoint. */
+        public boolean originalGoalOnly(JSONArray raw) {
+            if(raw.length()>2000)return false;
+            int matched=0;
+            for(int i=0;i<raw.length();i++){
+                JSONObject row=raw.optJSONObject(i);
+                if(row==null||row.has("ownerAttachmentRefs")||row.has("ownerSourceRefs")||
+                        row.has("ownerPreviewRefs")||row.has("ownerObjectRefs")||row.has("ownerRecallFeedback"))return false;
+                boolean user="user".equals(row.opt("role")),observation=Boolean.TRUE.equals(row.opt("hostObservation"));
+                if(row.has("ownerMessageId")||user&&!observation){
+                    if(!user||observation||!message.equals(row.opt("ownerMessageId"))||
+                            revision!=row.optLong("ownerMessageRevision",-1)||++matched!=1)return false;
+                }
+            }
+            return matched==1;
+        }
+    }
     private final ThreadLocal<OrdinaryDefaultStart> ordinaryDefaultStart=new ThreadLocal<>();
-    public void observeOrdinaryDefaultCapture(String conversation,String client) {
+    public void observeOrdinaryDefaultCapture(String conversation,String client,ModelConfig model) {
         JSONObject original=selection.get();
         if(original!=null&&ownerStartFence.get()!=null&&butlerPreparation.get()==null&&ownerConvention.get()==null&&
                 teamRound.get()==null&&conversation.isEmpty()&&client.equals(original.opt("clientMessageId"))&&
                 original.optJSONObject("deliveryContract")!=null&&!original.has("draftOnly")&&
                 !original.has(OwnerRevisionSource.FIELD)&&!original.has(OwnerDraftFirstBuild.FIELD))
-            ordinaryDefaultStart.set(new OrdinaryDefaultStart(original.optString("projectId"),original.optString("checkoutId"),client));
+            ordinaryDefaultStart.set(new OrdinaryDefaultStart(original,client,model));
     }
     public OrdinaryDefaultStart takeOrdinaryDefaultStart(String client) {
         OrdinaryDefaultStart captured=ordinaryDefaultStart.get();
