@@ -192,6 +192,8 @@ import './task-surface.css';
 const Secondary=lazy(()=>import('./Secondary'));
 
 type Json=Record<string,any>;
+type FirstChatRegistration={document:number;key:string;epoch:number;revision:number;projection:number;client?:string;unknown?:true};
+const exactFirstChatClient=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value);
 type Task={id:string;goal:string;status:string;summary?:string;executionMode?:string;updatedAt?:number;raw?:Json;hostReceipt?:Json};
 type OriginalReminderSource={conversationId:string;messageId:string;sourceRevision:number;taskId:string;runId:string;epoch:number;replyId:string};
 type OriginalReminderChatVisit={source:OriginalReminderSource;documentEpoch:number;navigation:number;resume:number;returnFocus?:HTMLButtonElement|null};
@@ -348,9 +350,9 @@ type HomePhoneSetupInput={place:PhonePlaceReturn;composerRevision:number;sourceE
 type SetupWorkspaceOrigin=WorkspaceOrigin&{homePhoneSetup?:HomePhoneSetupInput&{navigation:number}};
 type SavedAttachmentMessage={id:string;revision:number;resume:number;taskRequest:number;liveResult?:LiveResultAttachment;
  historyResult?:LiveResultAttachment&{sourceGeneration:number}};
-type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage;ordinaryNewDraftVisit?:{route:string;resume:number}};
+type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage;ordinaryNewDraftVisit?:{route:string;resume:number};workResultCurrent?:()=>boolean};
 type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:boolean;reopening?:boolean};
-type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'|'ordinaryNewDraftVisit'>&{resume:number;launch:FileAttachmentPickerLaunch};
+type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'|'ordinaryNewDraftVisit'|'workResultCurrent'>&{resume:number;launch:FileAttachmentPickerLaunch};
 type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number};vitePreview?:ProjectVitePreviewArrival};
 type ProjectVitePreviewOpen=({result:ProjectViteResultTarget}|{archive:ProjectViteSavedArchive})&{owner:()=>boolean};
@@ -1358,6 +1360,9 @@ export default function App(){
  const resultFileReturnFocus=useRef<({taskId:string;report?:VerifiedHomeReport;compilerFile?:{id:string;sha256:string;request:number;document:number}}|{conversationId:string;resultMessageId:string;result:TaskResult;revision:number;document:number;navigation:number;resume:number;taskRequest:number;reader?:HistoryResultOrigin;historySourceGeneration?:number;chatReading?:ChatWorkReturn;shelf?:PreferredChatFile})&{target:HTMLButtonElement}|null>(null);
  const [fileAttachmentPicker,setFileAttachmentPicker]=useState<FileAttachmentPickerOrigin|null>(null);
  const fileAttachmentPickerLaunch=useRef<FileAttachmentPickerLaunch|null>(null);
+ const focusedResultFlight=useRef<FileAttachmentPickerOrigin|null>(null);
+ const focusedResultReturn=useRef<(()=>boolean)|null>(null);
+ const [focusedResultFeedback,setFocusedResultFeedback]=useState<{requestId:string;pending:boolean;error?:string}|null>(null);
  const [reopenedAttachmentPicker,setReopenedAttachmentPicker]=useState<ReopenedAttachmentPicker|null>(null);
  const openingChatResult=useRef('');
  const [openingChatResultId,setOpeningChatResultId]=useState('');
@@ -1697,6 +1702,54 @@ export default function App(){
  const pendingOriginal=intent==='chat'&&pendingInputs.find(row=>row.sameDraft&&(can('composer.query')||row.canRetryLocallyUnsent===true&&can('composer.retry')));
  const pendingHere=pendingInputs.some(row=>row.current);
  const registration=useConversationRegistration(chatOwner,composer.revision,text);
+ // The first local registration has no conversation editor until native
+ // migrates this draft. Keep the old textarea copyable, not editable.
+ const firstChatRegistration=useRef<FirstChatRegistration|null>(null);
+ const [firstChatWaiting,setFirstChatWaiting]=useState<FirstChatRegistration|null>(null);
+ const firstChatDraftHeld=useCallback((key:string,epoch:number)=>{
+  const pin=firstChatRegistration.current;
+  return !!pin&&pin.document===bridge.getDocumentEpoch()&&pin.key===key&&pin.epoch===epoch;
+ },[]);
+ const heldFirstChat=intent==='chat'&&firstChatWaiting?.document===personalDocumentEpoch&&
+  firstChatWaiting.key===draftKey&&firstChatWaiting.epoch===draftEpoch?firstChatWaiting:null;
+ const settleFirstChat=useCallback((pin:FirstChatRegistration)=>{
+  if(firstChatRegistration.current!==pin)return;
+  firstChatRegistration.current=null;setFirstChatWaiting(null);
+ },[]);
+ const firstChatUncertain=useCallback((pin:FirstChatRegistration)=>{
+  if(firstChatRegistration.current!==pin||pin.unknown)return;
+  pin.unknown=true;setFirstChatWaiting({...pin});
+ },[]);
+ const observeFirstChat=useCallback(()=>{
+  const pin=firstChatRegistration.current;
+  if(!pin)return;
+  if(pin.document!==bridge.getDocumentEpoch()){settleFirstChat(pin);return;}
+  const live=bridge.getState(),owner=live.state,draft=live.composer;
+  if(typeof live.revision!=='number'||live.revision<=pin.projection)return;
+  const rows=asArray<Json>(draft?.pending).filter(row=>row.draftKey===pin.key&&row.draftRevision===pin.revision&&
+   row.conversationId===''&&exactFirstChatClient(row.clientMessageId)&&Object.keys(obj(row.originalTarget)).length===0);
+  if(!pin.client&&rows.length===1)pin.client=rows[0].clientMessageId;
+  if(!pin.client)return;
+  const receipt=obj(owner.chatReceipts)[pin.client],conversation=receipt?.conversationId;
+  // Another draft can always be typed in. Only this exact receipt plus the
+  // new native editor positively finishes a successful first registration.
+  if(receipt?.clientMessageId===pin.client&&['accepted','queued','consumed'].includes(receipt.status)&&
+     receipt.notAdmitted!==true&&receipt.reconciliationRequired!==true&&typeof conversation==='string'&&!!conversation&&
+     owner.conversationId===conversation&&draft?.ready===true&&draft.conversationId===conversation&&
+     draft.key==='conversation:'+conversation&&Number.isSafeInteger(draft.epoch)&&draft.epoch!==pin.epoch){
+   settleFirstChat(pin);return;
+  }
+  const row=rows.length===1&&rows[0].clientMessageId===pin.client?rows[0]:undefined;
+  const terminal=receipt?.clientMessageId===pin.client&&receipt.conversationId===''&&receipt.status==='not_sent'&&
+   receipt.notAdmitted===true&&receipt.reconciliationRequired===false&&receipt.reason==='before_message_commit';
+  if(row?.canRetryLocallyUnsent===true||terminal){settleFirstChat(pin);return;}
+  if(row&&owner.chatSubmitting===false)firstChatUncertain(pin);
+ },[settleFirstChat,firstChatUncertain]);
+ useEffect(()=>{
+  const stop=bridge.subscribe(observeFirstChat),stopDocument=bridge.subscribeDocumentEpoch(observeFirstChat);
+  observeFirstChat();
+  return()=>{stop();stopDocument()};
+ },[observeFirstChat]);
  const act=useCallback(async(action:string,args:Json={},errorTaskId?:string)=>{
   const errorOwner=errorTaskId||(action.startsWith('tasks.')?String(args.id||''):'');
   const rememberError=(message:string)=>{if(errorOwner)setTaskErrors(previous=>({...previous,[errorOwner]:message}));};
@@ -1708,6 +1761,8 @@ export default function App(){
  const closeChatAttachmentPicker=useCallback((shownOrdinary?:string)=>{
   setPermissionOptionsOpen(current=>typeof current==='object'?false:current);
   const native=bridge.getState().state,exact=obj(native.originalReplyAttachmentPicker);
+  const resultFlight=focusedResultFlight.current;
+  if(resultFlight&&resultFlight.requestId===native.chatAttachmentPickerRequest)return true;
   const ordinary=shownOrdinary??native.ordinaryChatAttachmentListRequest;
   if(typeof ordinary==='string'){
    if(ordinary===native.ordinaryChatAttachmentListRequest&&ordinary===native.chatAttachmentPickerRequest&&can('attachments.closePicker'))
@@ -1826,7 +1881,7 @@ export default function App(){
  });
  const editText=useCallback((next:string)=>{
   if(intent==='chat'){
-   if(reportDraftFlight.current?.key===draftKey&&reportDraftFlight.current?.epoch===draftEpoch)return;
+   if(firstChatDraftHeld(draftKey,draftEpoch)||reportDraftFlight.current?.key===draftKey&&reportDraftFlight.current?.epoch===draftEpoch)return;
    const live=bridge.getState(),owner=live.composer,conversation=String(state.conversationId||'');
    // Do not apply an event from the previous textarea to a departing native window.
    if(draftSwitchPending()||document.hidden||bridge.getDocumentEpoch()!==personalDocumentEpoch||live.state.conversationReader||
@@ -1835,7 +1890,7 @@ export default function App(){
    chatDraft.set(next);run('composer.edit',{key:draftKey,epoch:draftEpoch,text:next});
   }
   else{phoneWindow.current++;phoneText.set(next);setPhoneReview(null);if(can('phone.draft.edit'))run('phone.draft.edit',{text:next,epoch:phoneDraft.epoch,...(Number.isSafeInteger(phoneDraft.sourceEditTicket)?{sourceEditTicket:phoneDraft.sourceEditTicket,draftConversation:String(state.conversationId||'')}:{})});}
- },[intent,chatDraft,phoneText,can,run,draftKey,draftEpoch,draftSwitchPending,personalDocumentEpoch,phoneDraft.epoch,phoneDraft.sourceEditTicket,state.conversationId]);
+ },[intent,chatDraft,phoneText,can,run,draftKey,draftEpoch,draftSwitchPending,personalDocumentEpoch,phoneDraft.epoch,phoneDraft.sourceEditTicket,state.conversationId,firstChatDraftHeld]);
  const rememberTaskPosition=useCallback(()=>{const node=taskScroll.current;if(taskId&&node?.isConnected)taskReading.current.set(`${taskId}:${taskLayer}`,node.scrollTop)},[taskId,taskLayer]);
  const showTaskLayer=useCallback((next:TaskLayer)=>{
   const origin=projectTaskReturn.current;
@@ -4651,6 +4706,7 @@ export default function App(){
  };
  useEffect(()=>{const receipt=phoneDraft.startReceipt;if(receipt&&['accepted','rejected','unknown'].includes(receipt.status)){const original=phoneStartReceipt(receipt);setPhoneStart(original);if(original.status!=='unknown'&&phoneReview&&phoneReview.reviewHandle===receipt.reviewHandle)setPhoneReview(receipt.recheckReview===phoneReview.reviewHandle?{...phoneReview,documentEpoch:undefined}:null)}},[phoneDraft.startReceipt?.status,phoneDraft.startReceipt?.reviewHandle,phoneDraft.startReceipt?.requestId,phoneDraft.startReceipt?.draftRequestId,phoneDraft.startReceipt?.canRetire,phoneDraft.startReceipt?.taskId,phoneDraft.startReceipt?.admitted,phoneDraft.startReceipt?.admissionState,phoneDraft.startReceipt?.runId,phoneDraft.startReceipt?.epoch,phoneOwner]);
  const send=()=>{
+  if(intent==='chat'&&firstChatDraftHeld(draftKey,draftEpoch))return;
   if(intent==='chat'&&teamReplacements.current.has(draftKey)){setLocalStatus('请先核对编组更换，原草稿没有发送。');return;}
   if(displayDraftSettling||reportDraftFlight.current)return;if(keepOriginalPhoneGoal){setLocalStatus('这段目标已有原启动回执。可以核对，或编辑成一个新目标。');return}if(intent!=='chat'&&['changed','elsewhere','unverified'].includes(phoneDraft.sourceState)){setLocalStatus('请先核对所选原话。这份手机目标没有提交。');return}if(inputLimitMessage){setLocalError(inputLimitMessage);return}if(displayBlocked){setLocalError(displayBlocked);return}
   if(shownLocalMainRead){preparePhone(undefined,shownLocalMainRead);return}
@@ -4658,12 +4714,44 @@ export default function App(){
   if(!can('composer.send')||state.chatSubmitting||pendingOriginal)return;
   if(!localDisplayReady&&ordinaryDraftRevision===null){setLocalError('请等本机核对当前草稿，再发送。');return;}
   const settled=registration.begin();if(!settled)return;
+  const live=bridge.getState(),draft=live.composer,owner=live.state,scope=obj(owner.conversationModel),view=obj(live.view);
+  const phone=obj(live.phoneDraft),voice=obj(owner.voiceInput),documentEpoch=bridge.getDocumentEpoch(),revision=ordinaryDraftRevision;
+  const pin:FirstChatRegistration|null=!localDisplayReady&&documentEpoch===personalDocumentEpoch&&!document.hidden&&
+   (route==='butler'||route==='chat')&&!draftSwitchPending()&&!foregroundTurn&&revision!==null&&text.trim()!==''&&
+   view.section===null&&view.taskId===null&&live.host?.ready===true&&!owner.conversationId&&!owner.conversationReader&&
+   !owner.chatBusy&&!owner.chatSubmitting&&!owner.phoneSubmitting&&!owner.chatAttachmentPickerOpen&&!owner.attachmentImporting&&
+   !owner.queuedInputsPage&&!owner.filePath&&!owner.attachmentWorkspace?.open&&phone.phone===false&&phone.channelOrigin===false&&
+   !owner.listening&&!voiceReviewLive.current&&!voiceWriting.current&&owner.quickPanelVoice?.closed!==false&&
+   !['active','leaseHeld','resourceReleaseUnknown','reviewAvailable','staged'].some(flag=>voice[flag]===true)&&
+   owner.modelSelectionBusy===false&&scope.scopeKey==='draft:'+draftKey&&scope.inherited===true&&scope.target===null&&
+   draft?.ready===true&&draft.ordinaryNewAttachmentDraft===true&&draft.key===draftKey&&draft.epoch===draftEpoch&&draft.revision===revision&&
+   draft.text===text&&chatDraft.currentValue()===text&&draft.voiceText===''&&!draft.primaryDisplayGate&&
+   [owner.selectedChatAttachments,draft.sourceRefs,draft.previewRefs,draft.objectRefs].every(rows=>Array.isArray(rows)&&rows.length===0)&&
+   typeof live.revision==='number'?{document:documentEpoch,key:draftKey,epoch:draftEpoch,revision,projection:live.revision}:null;
+  if(pin){firstChatRegistration.current=pin;setFirstChatWaiting(pin)}
   clearStoppedReply();
   if(route==='butler'){butlerSendConversation.current=String(state.conversationId||'');void navigate('chat')}
   setLocalStatus('');goToLatest();chatDraft.markSent();markMessageArrival();
   const displayedTurn=foregroundTurn?{taskId:foregroundTurn.taskId,runId:foregroundTurn.runId,epoch:foregroundTurn.epoch}:{};
   void act('composer.send',{key:draftKey,epoch:draftEpoch,text,...(localDisplayReady?{primaryDisplayRevision:composer.revision}:
-   {expectedDraftRevision:ordinaryDraftRevision,expectedForegroundTurn:displayedTurn})}).catch(error=>{
+   {expectedDraftRevision:ordinaryDraftRevision,expectedForegroundTurn:displayedTurn})}).then(value=>{
+   if(!pin||firstChatRegistration.current!==pin||pin.document!==bridge.getDocumentEpoch())return;
+   const proof=obj(value?.firstChatRegistration);
+   if(value?.accepted===true&&proof.key===pin.key&&proof.epoch===pin.epoch&&proof.revision===pin.revision){
+    if(proof.status==='not_prepared'&&!pin.client){settleFirstChat(pin);return;}
+    if(proof.status==='prepared'&&exactFirstChatClient(proof.clientMessageId)&&(!pin.client||pin.client===proof.clientMessageId)){
+     pin.client=proof.clientMessageId;observeFirstChat();return;
+    }
+   }
+   firstChatUncertain(pin);
+  }).catch(error=>{
+   if(pin){
+    const failure=obj(error),proof=obj(failure.firstChatRegistration);
+    const declined=failure.code==='not_accepted'&&proof.status==='not_prepared'&&
+     proof.key===pin.key&&proof.epoch===pin.epoch&&proof.revision===pin.revision;
+    if((failure.code==='not_sent'||declined)&&!pin.client)settleFirstChat(pin);
+    else firstChatUncertain(pin);
+   }
    const now=bridge.getState().composer;if(now?.key===draftKey&&now?.epoch===draftEpoch)setLocalError(error instanceof Error?error.message:String(error));
   }).finally(settled);
  };
@@ -5206,7 +5294,7 @@ export default function App(){
   };
   unsubscribe=bridge.subscribe(check);check();
  });
- const startFileAttachmentPicker=async(file:OriginalAttachmentChoice,draft:FileDraftTarget,sourceCurrent:()=>boolean,closeOriginal?:()=>Promise<void>,sourceMessage?:SavedAttachmentMessage)=>{
+ const startFileAttachmentPicker=async(file:OriginalAttachmentChoice,draft:FileDraftTarget,sourceCurrent:()=>boolean,closeOriginal?:()=>Promise<void>,sourceMessage?:SavedAttachmentMessage,fromWorkResult=false)=>{
   const documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current,initial=bridge.getState();
   const newDocumentDraft=!!file.standaloneDocument&&draft.conversationId==='';
   const resume=obj(initial.view).resumeRevision;
@@ -5244,7 +5332,7 @@ export default function App(){
     throw new Error('原草稿或附件选择已变化，没有加入文件。');
    // Only reveal the existing picker once the exact source, draft and list are known.
    setFileAttachmentPicker({file,draft,requestId,documentEpoch,navigation,sourceMessage,
-    ordinaryNewDraftVisit:newDocumentDraft?{route,resume:Number(resume)}:undefined});
+    ordinaryNewDraftVisit:newDocumentDraft?{route,resume:Number(resume)}:undefined,workResultCurrent:fromWorkResult?sourceCurrent:undefined});
    shown=true;
   }catch(error){
    if(!launch.requestId&&obj(error).code==='outcome_unknown')throw new Error('这次附件选择未确认，没有加入文件。可回输入框重新点「添加附件」。');
@@ -5335,6 +5423,69 @@ export default function App(){
      native.state.chatAttachmentPickerRequest!==origin.requestId||!Number.isSafeInteger(input.revision)||
      (origin.sourceMessage||origin.file.standaloneDocument)&&(input.revision!==composer.revision||fileInPicker(origin.file,origin.requestId,origin.sourceMessage)!==true))return;
   run('attachments.toggle',{id,sha256,selected,key:origin.draft.key,epoch:origin.draft.epoch,revision:input.revision,pickerRequestId:origin.requestId});
+ };
+ const focusedResultPicker=fileAttachmentPicker&&(fileAttachmentPicker.workResultCurrent||
+  fileAttachmentPicker.sourceMessage?.liveResult||fileAttachmentPicker.sourceMessage?.historyResult)?fileAttachmentPicker:null;
+ const confirmFocusedResultAttachment=async(id:string,sha256:string,returnOnly:boolean)=>{
+  const origin=focusedResultPicker;
+  if(!origin||focusedResultFlight.current||id!==origin.file.fileId||sha256!==origin.file.sha256)return;
+  const {draft,requestId}=origin;
+  const sameDraft=()=>focusedFileDraftCurrent(origin)&&origin.workResultCurrent?.()!==false;
+  const ownsPicker=()=>{
+   const native=bridge.getState().state;
+   return sameDraft()&&!fileAttachmentPickerLaunch.current?.cancelled&&native.chatAttachmentPickerOpen===true&&
+    native.chatAttachmentPickerRequest===requestId&&fileInPicker(origin.file,requestId,origin.sourceMessage)===true;
+  };
+  const selectedRows=(native:ReturnType<typeof bridge.getState>)=>asArray<Json>(native.state.selectedChatAttachments).filter(row=>row?.id===id);
+  const hasFile=(native:ReturnType<typeof bridge.getState>)=>{
+   const rows=selectedRows(native);
+   return rows.length===1&&rows[0].sha256===sha256;
+  };
+  const changed='原文件或草稿已变化，本次没有改动。';
+  const initial=bridge.getState(),revision=initial.composer?.revision;
+  if(initial.state.chatAttachmentPickerRequest!==requestId)return;
+  if(!ownsPicker()||!Number.isSafeInteger(revision)||revision!==composer.revision||
+     !(returnOnly?hasFile(initial):selectedRows(initial).length===0)||
+     !initial.capabilities.commands.includes('attachments.closePicker')||
+     !returnOnly&&!initial.capabilities.commands.includes('attachments.toggle')){
+   setFocusedResultFeedback({requestId,pending:false,error:changed});return;
+  }
+  const confirmed=()=>{
+   const native=bridge.getState(),currentRevision=native.composer?.revision;
+   return sameDraft()&&Number.isSafeInteger(currentRevision)&&
+    (returnOnly?currentRevision===revision:Number(currentRevision)>Number(revision))&&hasFile(native);
+  };
+  const returned=()=>confirmed()&&bridge.getState().state.chatAttachmentPickerOpen===false&&bridge.getState().state.chatAttachmentPickerRequest==null;
+  focusedResultFlight.current=origin;
+  setFocusedResultFeedback({requestId,pending:true});
+  try{
+   if(!returnOnly){
+    await bridge.command('attachments.toggle',{id,sha256,selected:true,key:draft.key,epoch:draft.epoch,revision,pickerRequestId:requestId});
+    // The generic toggle ACK is not a draft receipt. Read the newer native
+    // selection and revision for this very draft and picker before closing.
+    if(!await awaitPickerProjection(ownsPicker,()=>confirmed()?true:undefined))throw new Error('选择尚未确认');
+   }
+   if(!ownsPicker()||!confirmed())throw new Error('原附件选择已变化');
+   focusedResultReturn.current=returned;
+   const close=obj(await bridge.command('attachments.closePicker',{pickerRequestId:requestId}));
+   if(close.accepted!==true||
+      !await awaitPickerProjection(()=>ownsPicker()||returned(),()=>returned()?true:undefined)||!returned())
+    throw new Error('返回原草稿尚未确认');
+   setLocalStatus(returnOnly?'这份文件已在原话题草稿，没有重复加入，也未发送。':'已加入原话题草稿，未发送。');
+  }catch{
+   if(focusedResultReturn.current===returned)focusedResultReturn.current=null;
+   if(focusedFileDraftCurrent(origin)){
+    const error=confirmed()?'文件已在原话题草稿，尚未确认返回。未发送。':
+     '尚未确认文件已加入。请核对原话题草稿，未发送。';
+    if(bridge.getState().state.chatAttachmentPickerRequest===requestId)setFocusedResultFeedback({requestId,pending:false,error});
+    else setLocalError(error);
+   }
+  }finally{
+   if(focusedResultFlight.current===origin){
+    focusedResultFlight.current=null;
+    setFocusedResultFeedback(previous=>previous?.requestId===requestId&&previous.pending?null:previous);
+   }
+  }
  };
  // The native single choice is not an attachments.list result and must not reveal the
  // general catalogue, even briefly, if its exact projection has become unusable.
@@ -5844,7 +5995,7 @@ export default function App(){
   await returnToOriginalTaskConversation(topic.taskId,topic.conversationId,undefined,false,{chooseAttachment:async atEditor=>{
    const native=bridge.getState(),draft=fileDraftFor(obj(native.composer),topic.conversationId,topic.label);
    if(!draft||draft.key!==`conversation:${topic.conversationId}`||!atEditor()||!stillWork())throw new Error(scopeError);
-   await startFileAttachmentPicker(file,draft,()=>atEditor()&&stillWork());
+   await startFileAttachmentPicker(file,draft,()=>atEditor()&&stillWork(),undefined,undefined,true);
    opened=true;
   }},undefined,stillWork);
   return opened;
@@ -9106,14 +9257,15 @@ export default function App(){
      mode={intent==='chat'?null:intent} text={text} editorText={phoneText.currentValue} navigation={navigationRevision}
      navigationCurrent={value=>navigationWindow.current===value}
      arrived={same=>{if(route==='butler')void navigate('chat',undefined,{stillCurrent:same})}}>
-     {(primaryAction,originalDetail)=><ChatComposer primaryInputAction={primaryAction}
+     {(primaryAction,originalDetail)=><ChatComposer primaryInputAction={primaryAction} readOnly={!!heldFirstChat}
        continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
        contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={primaryAction||shownLocalMainRead?undefined:firstDraftConnect?
        <Button variant="secondary" size="small" className="min-h-11" leadingIcon={IconModel} data-workspace-entry="connect-model"
         disabled={modelSetupOpening||state.modelSelectionBusy||state.modelSaving||state.modelTesting||draftSwitching||reportDraftSwitching||
           state.chatSubmitting||registration.waiting||firstHostSaving||composer.saving===true||ordinaryDraftRevision===null}
         aria-busy={modelSetupOpening||undefined} onClick={()=>void openModelSetup(true)}>{modelSetupOpening?'正在核对…':'连接模型'}</Button>
-       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':inputLimitMessage||undefined}
+       :<ConversationModelPickerControls/>} status={intent==='chat'&&draftSwitching?'正在切换对话，等对应草稿恢复后可编辑。':heldFirstChat?
+        heldFirstChat.unknown?'首条发送尚待核对。可复制原文、查询已有回执，或返回后另开对话。不会自动重发。':'正在登记首条消息，原文可复制。登记后可继续输入。':inputLimitMessage||undefined}
      visibleSendLabel={shownLocalMainRead?'核对本机只读一次':undefined}
      sendDisabled={!!pendingDraftTeam||keepOriginalPhoneGoal||!!inputLimitMessage||!!displayBlocked||displayDraftSettling||(!composerModelName&&!localDisplayReady&&!shownLocalMainRead)||intent==='chat'&&(previewRefsUnavailable||newMemoryBlocked||singleLearningBlocked||!localDisplayReady&&ordinaryDraftRevision===null)||!!pendingOriginal} sendLabel={pendingDraftTeam?'先核对编组更换':keepOriginalPhoneGoal?'这段原目标已登记，核对这次启动或编辑新目标':inputLimitMessage||displayBlocked||(displayDraftSettling?'正在核对本机问题':!composerModelName&&!localDisplayReady&&!shownLocalMainRead?'请先连接模型':intent==='chat'&&(newMemoryBlocked||singleLearningBlocked)?'请先核对记忆选择':intent==='chat'&&previewRefsUnavailable?'请重新选择预览元素':pendingOriginal?'请核对这条输入的原回执':undefined)} toolbar={<div className="pw-composer-intent">
     <PopoverTrigger isOpen={voiceOptionsOpen} onOpenChange={setVoiceOptionsOpen}><IconButton icon={IconAdd} size="medium" aria-label="添加内容" data-chat-add-content="true"/><Popover aria-label="添加内容"><PopoverHeader title="添加内容"/>
@@ -9126,7 +9278,7 @@ export default function App(){
     <ComposerWorkOptions intent={intent} onIntent={changeIntent} open={workOptionsOpen} onOpenChange={setWorkOptionsOpen} phoneAvailable={can('phone.prepare')}
       showDestination={route==='butler'&&can('composer.intent')&&can('phone.prepare')} disabled={!!state.chatSubmitting||!!state.phoneSubmitting||phoneReviewPending} cloudGoalLabel={state.conversationId?'带目标去我的主机':'保存到本机（不发送）'} onCloudGoal={!firstHostSave&&!firstHostSaving&&intent==='chat'&&chatDraft.value.trim()&&chatDraft.value.length<=(state.conversationId?8000:4000)&&
       (state.conversationId?can('remote.reviewTask'):can('conversation.saveFirstHostRequest'))?prepareCloudGoal:undefined} onPermissions={()=>{permissionExit.captureReturnFocus(workspace.current?.querySelector<HTMLElement>('textarea[aria-label="工作输入"]')||null);setPermissionOptionsOpen(true)}} onMemory={intent==='chat'&&canEditMemoryHere?()=>setConversationMemoryOpen(true):undefined} memoryPaused={memoryPausedHere} busy={!!state.chatBusy} sendMode={state.chatSendMode||'queue'} onSendMode={can('composer.mode')?mode=>run('composer.mode',{key:draftKey,epoch:draftEpoch,mode}):undefined}/>
-   </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')&&!shownLocalMainRead||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
+   </div>} composerKey={intent==='chat'?chatOwner:phoneOwner} value={text} onChange={editText} onSend={send} onStop={currentCancelIdentity&&can('chat.cancel')?stopOriginalChat:undefined} busy={intent==='chat'&&!!state.chatBusy} submitting={intent==='chat'?!!state.chatSubmitting||registration.waiting||!!heldFirstChat&&!heldFirstChat.unknown:phoneReviewPending||!!state.phoneSubmitting} disabled={!ready||(intent==='chat'?draftSwitching||reportDraftSwitching||!draftKey||!can('composer.edit'):!can('phone.prepare')&&!shownLocalMainRead||phoneDraft.sourceState==='elsewhere')} placeholder={intent==='chat'?(state.chatBusy?'补充要求，或继续写…':route==='butler'?'说说想做什么，或接着聊…':'写下想做的事…'):'想在手机上做什么？'} attachments={(intent==='chat'?asArray<Json>(state.selectedChatAttachments):[]).map(f=>({...f,id:String(f.id),name:f.name||'附件'}))} onRemoveAttachment={can('attachments.remove')?id=>run('attachments.remove',{id,key:draftKey,epoch:draftEpoch}):undefined} onVoice={can('voice.start')?()=>run(isListening?'voice.stop':'voice.start',{phone:intent!=='chat'}):undefined} listening={isListening} voiceStatus={state.voiceInput?.message} onDiscardVoice={can('voice.stop')||can('voice.discard')?discardVoice:undefined}>
      {memoryStatus&&<Button variant="ghost" size="small" className="pw-composer-memory-status" trailingIcon={IconChevronRight} aria-haspopup="dialog" onClick={()=>setConversationMemoryOpen(true)}>{memoryStatus}</Button>}
      {phoneReadExample&&<div className="pw-action-row"><Button variant="ghost" size="small" onClick={()=>fillPhoneReadExample(phoneReadExample)}>填入只读数字示例</Button></div>}
      {originalDetail}
@@ -9162,7 +9314,13 @@ export default function App(){
    }} onAction={(action,row)=>{
     if(action==='return'&&row.work){returnToWorkInput(row);return}
     if(action==='release-prepared'){
-     if(intent==='chat'&&row.current&&row.sameDraft&&row.canReleasePreparedFirstChat===true)run('composer.releasePreparedFirst',{clientMessageId:row.clientMessageId,key:draftKey,epoch:draftEpoch,revision:row.draftRevision});
+     if(intent==='chat'&&row.current&&row.sameDraft&&row.canReleasePreparedFirstChat===true){
+      const pin=firstChatRegistration.current;
+      run('composer.releasePreparedFirst',{clientMessageId:row.clientMessageId,key:draftKey,epoch:draftEpoch,revision:row.draftRevision},value=>{
+       if(pin?.client===row.clientMessageId&&pin.key===draftKey&&pin.epoch===draftEpoch&&pin.revision===row.draftRevision&&
+          pin.document===bridge.getDocumentEpoch()&&value?.draftRetained===true&&value.notDispatched===true)settleFirstChat(pin);
+      });
+     }
      return;
     }
     run(action==='query'?'composer.query':action==='retry'?'composer.retry':'composer.returnPending',{clientMessageId:row.clientMessageId});
@@ -10695,6 +10853,12 @@ export default function App(){
    pagingDenied={!ordinaryAttachmentChanged&&isChatSurface&&intent==='chat'&&!taskOpen&&state.chatAttachmentPagingDenied===true}
    onReviewPagingRule={!ordinaryAttachmentChanged&&!reopenedPickerVisible&&can('attachments.closePicker')&&can('permissions.snapshot')&&can('permissions.save')?openAttachmentPagingRule:undefined}
    openingPagingRule={!!attachmentPermission} onClose={()=>closeChatAttachmentPicker(ordinaryAttachmentList)} onCloseAutoFocus={event=>{
+    const returnToDraft=focusedResultReturn.current;
+    if(returnToDraft&&bridge.getState().state.chatAttachmentPickerOpen===false){
+     focusedResultReturn.current=null;
+     const editor=workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled)');
+     if(editor&&returnToDraft()){event.preventDefault();editor.focus({preventScroll:true});return;}
+    }
     const origin=replyPickerReturn.current;
     if(origin&&bridge.getState().state.chatAttachmentPickerOpen===false){
      replyPickerReturn.current=null;restoreChatMessageOriginal(event,origin.windowId,false);
@@ -10702,6 +10866,9 @@ export default function App(){
    }}
    onImport={!ordinaryAttachmentChanged&&!hasReplyAttachmentPicker&&!fileAttachmentPicker&&draftKey&&can('attachments.pick')?()=>run('attachments.pick',{key:draftKey,epoch:draftEpoch,
     ...(ordinaryAttachmentList&&!reopenedPickerVisible?{ordinaryListRequest:ordinaryAttachmentList}:{})}):undefined}
+   resultAction={!hasReplyAttachmentPicker&&focusedResultPicker&&filePickerVisible?{confirm:confirmFocusedResultAttachment,
+    pending:focusedResultFeedback?.requestId===focusedResultPicker.requestId&&focusedResultFeedback.pending,
+    error:focusedResultFeedback?.requestId===focusedResultPicker.requestId?focusedResultFeedback.error:undefined}:undefined}
    onToggle={!ordinaryAttachmentChanged&&draftKey&&can('attachments.toggle')?(hasReplyAttachmentPicker?
     (replyAttachmentVisible&&replyAttachmentPicker.checking===false?toggleReplyAttachment:undefined):fileAttachmentPicker?toggleFocusedFileAttachment:(id,sha256,selected)=>{
     if(reopenedAttachmentPicker&&!reopenedInventoryCurrent(reopenedAttachmentPicker))return;

@@ -4619,23 +4619,10 @@ public final class TaskStore {
     }
     /** Select only the single user message frozen by ordinary native work admission. */
     public synchronized JSONObject ownerWorkRequestHistoryForOwner(String id,String run,int epoch,RunControl control)throws Exception {
-        if(id==null||id.isBlank()||id.length()>80||run==null||run.isBlank()||run.length()>80||epoch<1||control==null||control.hasHostRun())
-            throw new SecurityException("原工作身份尚不可核对");
+        requireOwnerWorkRequestRead(id,run,epoch,control);
         control.checkpoint();db.beginTransactionNonExclusive();try{
-            JSONObject work;
-            try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=1048576 THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
-                if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("原工作尚不可读取，请返回原记录核对");
-                work=new JSONObject(row.getString(0));
-            }
-            requirePrivateOwner(work);requireOwnerWorkTuple(work,run,epoch);
-            if(!id.equals(work.getString("id"))||work.has("developmentContext")||work.has("ownerPhoneControl")||work.has("ownerDeviceWork"))
-                throw new SecurityException("请在这件普通管家工作的原目标下核对");
-            JSONArray refs=OwnerWorkTask.require(work).optJSONArray("sourceMessageRefs");
-            if(refs==null||refs.length()!=1)throw new SecurityException(refs!=null&&refs.length()>1?"这件工作依据多条原消息，未替你选定其中一条。":"缺少可核对的原请求，没有打开其他消息。");
-            requireOwnerWorkSources(work);
-            var ref=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
-            JSONObject source=conversationRepository.nativeMessageSource(ref);
-            if(!work.getString("conversationId").equals(source.opt("sourceConversationId")))throw new SecurityException("原请求不属于这件工作的所属对话");
+            OwnerWorkRequestSelection selection=ownerWorkRequestSelection(id,run,epoch);
+            JSONObject work=selection.work(),source=selection.source();var ref=selection.ref();
             String selectedTeam=null;
             if(stoppedOwnerSelectedTeamMismatch(work)&&!hasUnresolved(id)){
                 OwnerSelectedTeamSource selected=ownerSelectedTeamSource(work);
@@ -4643,7 +4630,69 @@ public final class TaskStore {
                     selectedTeam=selected.team;
             }
             JSONObject page=conversationRepository.windowAtOwnerWorkRequest(source,control,selectedTeam);
+            if(Boolean.TRUE.equals(selection.meta().opt("hasInitialAttachments"))){
+                JSONArray attachments=ownerWorkRequestAttachmentReferences(selection);
+                if(attachments==null)page.put("requestAttachmentsUnavailable",true);
+                else page.put("requestAttachmentReferences",attachments)
+                        .put("requestAttachmentSourceFingerprint",source.getString("bodyFingerprint"))
+                        .put("requestAttachmentSourceGeneration",source.getString("generation"));
+            }
             control.checkpoint();db.setTransactionSuccessful();return page;
+        }finally{db.endTransaction();}
+    }
+    private record OwnerWorkRequestSelection(JSONObject work,JSONObject meta,dev.pocketengine.features.memory.SourceRef ref,JSONObject source){}
+    private static void requireOwnerWorkRequestRead(String id,String run,int epoch,RunControl control){
+        if(id==null||id.isBlank()||id.length()>80||run==null||run.isBlank()||run.length()>80||epoch<1||control==null||control.hasHostRun())
+            throw new SecurityException("原工作身份尚不可核对");
+    }
+    private OwnerWorkRequestSelection ownerWorkRequestSelection(String id,String run,int epoch)throws Exception {
+        JSONObject work;
+        try(Cursor row=db.rawQuery("SELECT CASE WHEN length(CAST(document AS BLOB))<=1048576 THEN document END FROM tasks WHERE task_id=?",new String[]{id})){
+            if(!row.moveToFirst()||row.isNull(0))throw new SecurityException("原工作尚不可读取，请返回原记录核对");
+            work=new JSONObject(row.getString(0));
+        }
+        requirePrivateOwner(work);requireOwnerWorkTuple(work,run,epoch);
+        if(!id.equals(work.getString("id"))||work.has("developmentContext")||work.has("ownerPhoneControl")||work.has("ownerDeviceWork"))
+            throw new SecurityException("请在这件普通管家工作的原目标下核对");
+        JSONObject meta=OwnerWorkTask.require(work);JSONArray refs=meta.optJSONArray("sourceMessageRefs");
+        if(refs==null||refs.length()!=1)throw new SecurityException(refs!=null&&refs.length()>1?"这件工作依据多条原消息，未替你选定其中一条。":"缺少可核对的原请求，没有打开其他消息。");
+        requireOwnerWorkSources(work);
+        var ref=dev.pocketengine.features.memory.SourceRef.fromJson(refs.getJSONObject(0));
+        JSONObject source=conversationRepository.nativeMessageSource(ref);
+        if(!work.getString("conversationId").equals(source.opt("sourceConversationId")))throw new SecurityException("原请求不属于这件工作的所属对话");
+        return new OwnerWorkRequestSelection(work,meta,ref,source);
+    }
+    /** Presentation-only: never add these pins to the task's attachment/read grant. */
+    private static JSONArray ownerWorkRequestAttachmentReferences(OwnerWorkRequestSelection selection){
+        JSONObject meta=selection.meta();
+        if(!Boolean.TRUE.equals(meta.opt("hasInitialAttachments")))return null;
+        JSONArray messages=meta.optJSONArray("initialMessages");
+        // Single selected owner row followed by the native contract, not an unbounded history.
+        JSONObject user=messages!=null&&messages.length()==2?messages.optJSONObject(0):null;
+        if(user==null||!"user".equals(user.opt("role"))||!selection.ref().sourceId.equals(user.opt("ownerMessageId"))||
+                selection.ref().revision!=user.optLong("ownerMessageRevision",-1L))return null;
+        JSONArray refs=user.optJSONArray("ownerAttachmentRefs"),checked=new JSONArray();Set<String> seen=new java.util.HashSet<>();
+        if(refs==null||refs.length()<1||refs.length()>4)return null;
+        try{for(int i=0;i<refs.length();i++){
+            JSONObject pin=attachmentReference(refs.getJSONObject(i));
+            if(!seen.add(pin.getString("id")))return null;
+            checked.put(pin);
+        }}catch(Exception invalid){return null;}
+        return checked;
+    }
+    /** Recheck the same saved selection after Book metadata lookup, without rereading the request body. */
+    public synchronized void requireOwnerWorkRequestAttachmentsCurrentForOwner(String id,String run,int epoch,JSONObject original,RunControl control)throws Exception {
+        requireOwnerWorkRequestRead(id,run,epoch,control);
+        control.checkpoint();db.beginTransactionNonExclusive();try{
+            OwnerWorkRequestSelection selection=ownerWorkRequestSelection(id,run,epoch);
+            JSONObject source=selection.source();var ref=selection.ref();
+            JSONArray actual=ownerWorkRequestAttachmentReferences(selection),pinned=original.getJSONArray("requestAttachmentReferences");
+            if(!source.getString("sourceConversationId").equals(original.opt("conversationId"))||!ref.sourceId.equals(original.opt("requestMessageId"))||
+                    ref.revision!=original.getLong("requestRevision")||!source.getString("generation").equals(original.opt("requestAttachmentSourceGeneration"))||
+                    !source.getString("bodyFingerprint").equals(original.opt("requestAttachmentSourceFingerprint"))||
+                    actual==null||!actual.toString().equals(pinned.toString()))
+                throw new SecurityException("原请求或交办附件已变化，未显示其他记录。");
+            control.checkpoint();db.setTransactionSuccessful();
         }finally{db.endTransaction();}
     }
     /** Only an exact current receipt can select a report. The report producer may be

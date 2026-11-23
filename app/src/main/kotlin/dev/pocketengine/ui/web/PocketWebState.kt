@@ -293,8 +293,19 @@ internal object PocketWebState {
             .also { out -> page.searchAnchor?.let { search -> out.put("searchAnchor",JSONObject()
                 .put("requestId",search.request).put("messageId",search.message).put("revision",search.revision)) } }
             .also { result -> page.workRequestAnchor?.let { request ->
-                result.put("workRequest", JSONObject().put("taskId",request.task).put("runId",request.run).put("epoch",request.epoch)
-                    .put("messageId",request.message).put("revision",request.revision))
+                val view=JSONObject().put("taskId",request.task).put("runId",request.run).put("epoch",request.epoch)
+                    .put("messageId",request.message).put("revision",request.revision)
+                if (page.initialized && !page.loading && page.error==null && !page.limited && page.messages.singleOrNull()?.let {
+                        it.role=="user" && it.id==request.message && it.sourceRevision==request.revision
+                    }==true) {
+                    if (request.attachmentsUnavailable) view.put("attachmentsUnavailable",true)
+                    val namesCurrent=request.attachmentSourceRevision==controller.messageAttachmentSourceRevision
+                    if (request.attachments.isNotEmpty()) view.put("attachedAtRequest",JSONArray().also { rows ->
+                        request.attachments.forEach { file -> rows.put(JSONObject().put("mimeType",file.mimeType)
+                            .put("size",file.size).putOpt("registeredName",file.registeredName.takeIf { namesCurrent })) }
+                    })
+                }
+                result.put("workRequest",view)
             } }
         } ?: JSONObject.NULL)
         data.put("queuedInputsPage", controller.queuedInputsPage?.let { page -> JSONObject()

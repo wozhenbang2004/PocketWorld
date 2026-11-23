@@ -45,10 +45,11 @@ type Props = {
   listPhase?: 'loading' | 'ready' | 'failed' | 'changed';
   onToggle?: (id: string, sha256: string, selected: boolean) => void;
   original?: {fileId:string;sha256:string;name:string;draftLabel:string};
+  resultAction?: {pending:boolean;error?:string;confirm:(id:string,sha256:string,returnOnly:boolean)=>void};
 };
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
-export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, listPhase, onClose, onCloseAutoFocus, onImport, onToggle, original }: Props) {
+export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, listPhase, onClose, onCloseAutoFocus, onImport, onToggle, original, resultAction }: Props) {
   const catalog = fileObject(inventory), focused = !!original, changed = listPhase === 'changed';
   const [query, setQuery] = useState('');
   const [pickError, setPickError] = useState('');
@@ -107,11 +108,13 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
           <div>
             <Drawer.Title>{original?'选作草稿附件':'选择附件'}</Drawer.Title>
             <Drawer.Description id="pw-attachment-description">{changed ? '原输入已变化。' :
-              <>{original&&`「${original.draftLabel}」 · `}已选 {choices.length}/{maxSelections} · 只加入草稿，不发送。</>}</Drawer.Description>
+              <>{original&&`「${original.draftLabel}」 · `}{!resultAction&&`已选 ${choices.length}/${maxSelections} · `}只加入草稿，不发送。</>}</Drawer.Description>
           </div>
-          <IconButton icon={IconClose} aria-label="关闭附件选择" onClick={onClose}/>
+          <IconButton icon={IconClose} aria-label="关闭附件选择" disabled={resultAction?.pending} onClick={onClose}/>
         </header>
         <div className="pw-drawer-body">
+          {resultAction?.error && <p className="pw-error" role="alert">{resultAction.error}</p>}
+          {resultAction?.pending && <p className="pw-muted" role="status">正在核对原话题草稿…</p>}
           {!changed && (pickError ? <p className="pw-error" role="alert">{pickError}</p> : !focused && typeof snapshot.state.chatFilePickFeedback === 'string' &&
             <p className="pw-muted" role="status">{snapshot.state.chatFilePickFeedback}</p>)}
           {changed && <p className="pw-muted" role="status">这次选择已不可用。关闭后，可在当前输入重新点「添加附件」。</p>}
@@ -149,16 +152,19 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
                   : '只提供文件引用。能否分段读取，发送后由原任务核对。') : hint);
               const disabled = !onToggle || !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections ||
                 overPhotoBytes || newPhoto && photoSlotsFull));
+              const copy = <span className="pw-attachment-copy">
+                <b>{typeof file.name === 'string' && file.name ? file.name : '未命名附件'}</b>
+                {note ? <small>{note}</small> : typeof file.size === 'number' && <small>{fileBytes(file.size)}</small>}
+                {origin && <small>{origin}</small>}
+              </span>;
               return <div className="pw-attachment-object" key={target ? `${target.fileId}:${target.sha256}` : index}>
-                <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={selected => {
+                {resultAction ? <>{copy}{selectedHere&&<small className="pw-muted">已在原话题草稿</small>}
+                  {rows.length===1&&target&&<PressButton label={selectedHere?'返回原话题草稿':'加入原话题草稿并返回'}
+                    disabled={!!resultAction.pending||!selectedHere&&disabled}
+                    onClick={()=>resultAction.confirm(target.fileId,target.sha256,selectedHere)}/>}
+                </> : <CheckboxField isSelected={selectedHere} isDisabled={disabled} onChange={selected => {
                   if (!disabled && target) onToggle?.(target.fileId, target.sha256, selected);
-                }}>
-                  <span className="pw-attachment-copy">
-                    <b>{typeof file.name === 'string' && file.name ? file.name : '未命名附件'}</b>
-                    {note ? <small>{note}</small> : typeof file.size === 'number' && <small>{fileBytes(file.size)}</small>}
-                    {origin && <small>{origin}</small>}
-                  </span>
-                </CheckboxField>
+                }}>{copy}</CheckboxField>}
               </div>;
             })}
           </div>
@@ -167,12 +173,12 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
           </div>}
           {rows.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}
         </div>
-        <footer className="pw-drawer-actions">
+        {!resultAction&&<footer className="pw-drawer-actions">
           {onImport && <Button variant="secondary" leadingIcon={IconAdd} disabled={importing || (addFromPhone && choices.length >= maxSelections)}
             onClick={addFromPhone ? pickForDraft : onImport}>{importing ? '正在导入…' : addFromPhone ? '从手机添加到草稿' : '导入到附件库'}</Button>}
           <span className="pw-grow"/>
           <PressButton label={choices.length ? '保留选择' : '返回输入'} onClick={onClose}/>
-        </footer>
+        </footer>}
       </Drawer.Content>
     </Drawer.Portal>
   </Drawer.Root>;

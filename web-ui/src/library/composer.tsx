@@ -106,7 +106,7 @@ function sizeComposerEditor(measurement:ReturnType<typeof createTextareaMeasure>
  next.onfinish=()=>{if(animation.current===next){animation.current=null;next.cancel()}};
 }
 
-export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,continuationMode,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel,visibleSendLabel,primaryInputAction}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string;visibleSendLabel?:string;primaryInputAction?:ReactElement}){
+export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,continuationMode,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel,visibleSendLabel,primaryInputAction,readOnly=false}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string;visibleSendLabel?:string;primaryInputAction?:ReactElement;readOnly?:boolean}){
  const editor=useRef<HTMLTextAreaElement>(null);
  const allowed=useMotionAllowed(),resizeAnimation=useRef<Animation|null>(null),editorHeight=useRef(0);
  const editorOwner=useRef(composerKey),measurement=useRef<ReturnType<typeof createTextareaMeasure>|null>(null);
@@ -141,7 +141,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
  },[listening,composerKey]);
  const hasContent=composerHasPayload(value,attachments.length);
  // An exact local intake action replaces Send, including its keyboard shortcut.
- const canSend=!primaryInputAction&&!disabled&&!submitting&&!sendDisabled&&hasContent;
+ const canSend=!primaryInputAction&&!disabled&&!readOnly&&!submitting&&!sendDisabled&&hasContent;
  const hasText=!!value.trim();
  const measuredContext=typeof contextPercent==='number'&&Number.isFinite(contextPercent)&&contextPercent>=0&&contextPercent<=100?Math.round(contextPercent):null;
  return <FrameA className={`pw-composer-host pw-squircle-composer ${className}`}>
@@ -151,7 +151,7 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
     <AnimatePresence key={`attachments:${composerKey}`} initial={false}>{attachments.length>0&&<ComposerAttachments key="attachments" files={attachments} onRemove={onRemoveAttachment}/>}</AnimatePresence>
     {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
     <div className="pw-composer-row">
-     {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea key={composerKey} ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(!e.repeat&&canSend)onSend()}}}/>}
+     {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea key={composerKey} ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} readOnly={readOnly} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(!e.repeat&&canSend)onSend()}}}/>}
     </div>
     <div className="pw-composer-toolbar">
      <div className="pw-composer-leading">{toolbar}{onAttach&&<ToolButton label="添加附件" icon="plus" onClick={onAttach} disabled={submitting}/>}

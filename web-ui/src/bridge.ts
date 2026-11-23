@@ -46,7 +46,10 @@ const documentId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value 
 class HostHandshakeTimeout extends Error {}
 class NativeCommandError extends Error {
   code: string;
-  constructor(message: string, code: string) { super(message); this.code = code; }
+  readonly firstChatRegistration?: unknown;
+  constructor(message: string, code: string, firstChatRegistration?: unknown) {
+    super(message); this.code = code; this.firstChatRegistration = firstChatRegistration;
+  }
 }
 let documentBound = false;
 let hostDocumentToken: string | null = null;
@@ -141,7 +144,9 @@ function receive(input: NativeMessage | string) {
       const value = message.error;
       const detail = typeof value === 'string' ? value : value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作未能受理，请保留当前内容并核对原回执。';
       const code = value && typeof value === 'object' && 'code' in value ? String(value.code) : 'unknown';
-      request.reject(new NativeCommandError(detail, code));
+      const originalFirst = request.action === 'composer.send' && code === 'not_accepted' &&
+        value && typeof value === 'object' && 'firstChatRegistration' in value ? value.firstChatRegistration : undefined;
+      request.reject(new NativeCommandError(detail, code, originalFirst));
     }
   }
 }

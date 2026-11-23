@@ -977,6 +977,12 @@ internal class PocketWebBridge(
         phoneObservationExpiry.bind(revision, if (controller.webPrivateOwnerVisible()) bounds else emptyList())
     }
 
+    private class FirstChatPreflightRejection(val proof: JSONObject, message: String) : IllegalArgumentException(message)
+
+    private fun firstChatRegistration(key: String, epoch: Int, revision: Long, phase: String, client: String? = null) =
+        JSONObject().put("status", phase).put("key", key).put("epoch", epoch).put("revision", revision)
+            .also { proof -> client?.let { proof.put("clientMessageId", it) } }
+
     private fun process(raw: String) {
         var id = ""
         var ownsRequest = false
@@ -3173,8 +3179,15 @@ internal class PocketWebBridge(
                 return
             }
             val result = dispatch(action, args)
-            complete(id, result ?: accepted(), null)
+            val firstRegistration = result?.has("firstChatRegistration") == true
+            complete(id, result ?: accepted(), null, retainValue = !firstRegistration,
+                replayHint = if (firstRegistration) "请在原输入核对已有回执，没有重复发送。" else null)
             publishState(action == "app.ready")
+        } catch (rejected: FirstChatPreflightRejection) {
+            // Only the explicit guards above sendChat can produce this proof.
+            RuntimeDiagnostics.event("message_admission", "failed", "WEB_COMMAND_DISPATCH_FAILED", null, rejected)
+            complete(id, null, rejected.message ?: "原输入未发送", retainValue = false,
+                replayHint = "请重新核对原草稿，没有重复发送。", firstChatRegistration = rejected.proof)
         } catch (failure: Exception) {
             RuntimeDiagnostics.event("message_admission", if (ownsRequest) "failed" else "rejected",
                 if (ownsRequest) "WEB_COMMAND_DISPATCH_FAILED" else "WEB_COMMAND_REJECTED", null, failure)
@@ -3283,11 +3296,13 @@ internal class PocketWebBridge(
         complete(id, if (original && confirmed != null) result else confirmed?.summary(), message,
             retainValue = false, replayHint = hint, profileSave = confirmed)
     }
-    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true, replayHint: String? = null, profileSave: ConfirmedProfileSave? = null) {
+    private fun complete(id: String, value: JSONObject?, error: String?, errorCode: String = "not_accepted", retainValue: Boolean = true, replayHint: String? = null, profileSave: ConfirmedProfileSave? = null, firstChatRegistration: JSONObject? = null) {
         if (closed) return
         val identity = pendingCommands.remove(id) ?: return
         val response = JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", error == null)
-        if (error == null) response.put("value", value ?: JSONObject()) else response.put("error", JSONObject().put("code", errorCode).put("message", error))
+        if (error == null) response.put("value", value ?: JSONObject()) else response.put("error", JSONObject().put("code", errorCode).put("message", error).also {
+            firstChatRegistration?.let { proof -> it.put("firstChatRegistration", proof) }
+        })
         // Transient reads are not durable command receipts. Keep only a small replay rejection.
         val replay = if (profileSave != null && error == null) JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", true).put("value", profileSave.summary())
         else if (retainValue || error != null && replayHint == null) response else JSONObject().put("v", 1).put("kind", "result").put("id", id).put("ok", false)
@@ -3523,10 +3538,26 @@ internal class PocketWebBridge(
                     "composer.mode" -> { val mode = requiredString(args, "mode"); require(mode in setOf("queue", "steer")); controller.setChatSendMode(mode, key, epoch) }
                     else -> {
                         val text = requiredString(args, "text", true)
-                        require(controller.composerDraft?.text == text && ChatInputRules.canSend(controller.state, false, text)) { "原输入尚不可发送，请核对保留草稿与原任务" }
-                        val localRevision=if(args.has("primaryDisplayRevision"))requiredLong(args,"primaryDisplayRevision").also { require(it>0) } else null
+                        val draftAtPreflight = controller.composerDraft
                         val ordinary=section==null && taskViewId==null && documentId!=null && !phoneComposer.intent &&
                             controller.conversationReader==null && controller.webPrivateOwnerVisible()
+                        // The key and epoch have already matched. A stale requested revision
+                        // is still the identity of this declined command, not the fresh draft's.
+                        val attemptedFirstRevision = (args.opt("expectedDraftRevision") as? Number)?.takeIf { shown ->
+                            shown.toLong() > 0 && shown.toDouble() == shown.toLong().toDouble() &&
+                                ordinary && !args.has("primaryDisplayRevision") && args.optJSONObject("expectedForegroundTurn")?.length() == 0 &&
+                                text.isNotBlank() && draftAtPreflight?.let(controller::ordinaryNewAttachmentDraft) == true
+                        }?.toLong()
+                        fun rejectBeforePrepare(message: String): Nothing {
+                            if (attemptedFirstRevision != null) throw FirstChatPreflightRejection(
+                                firstChatRegistration(key, epoch, attemptedFirstRevision, "not_prepared"), message)
+                            throw IllegalArgumentException(message)
+                        }
+                        if (draftAtPreflight?.text != text || !ChatInputRules.canSend(controller.state, false, text))
+                            rejectBeforePrepare("原输入尚不可发送，请核对保留草稿与原任务")
+                        if (attemptedFirstRevision != null && attemptedFirstRevision != draftAtPreflight?.revision)
+                            rejectBeforePrepare("草稿或引用已变化；没有发送，请核对当前草稿。")
+                        val localRevision=if(args.has("primaryDisplayRevision"))requiredLong(args,"primaryDisplayRevision").also { require(it>0) } else null
                         val expectedDraftRevision=if(localRevision==null&&args.has("expectedDraftRevision"))
                             requiredLong(args,"expectedDraftRevision").also { require(it>0) { "原草稿版本无效；没有发送。" } } else null
                         val expectedForegroundTurn=if(localRevision==null&&args.has("expectedForegroundTurn")) {
@@ -3537,8 +3568,29 @@ internal class PocketWebBridge(
                                 JSONObject().put("taskId",requiredString(shown,"taskId")).put("runId",requiredString(shown,"runId")).put("epoch",turnEpoch)
                             }
                         } else null
+                        val first = controller.composerDraft?.takeIf { draft ->
+                            ordinary && !controller.state.chatSubmitting && !controller.state.chatBusy &&
+                                !controller.state.phoneSubmitting && !controller.state.listening &&
+                                controller.state.selectedChatAttachments.isEmpty() && localRevision == null && expectedDraftRevision == draft.revision && expectedForegroundTurn?.length() == 0 &&
+                                controller.ordinaryNewAttachmentDraft(draft) && controller.primaryDisplayDraftGate(draft) == null &&
+                                draft.attachments().length() == 0 && draft.sourceRefs().length() == 0 &&
+                                draft.previewRefs().length() == 0 && draft.objectRefs().length() == 0 &&
+                                draft.voiceText.isEmpty() && text.isNotBlank()
+                        }
                         controller.sendChat(text,key,epoch,localRevision,localRevision?.let { primaryDisplayComposerWindow() },
                             originalOrdinaryComposer=ordinary,expectedDraftRevision=expectedDraftRevision,expectedForegroundTurn=expectedForegroundTurn)
+                        if (first != null && controller.composerViewEpoch == epoch && controller.composerDraft === first) {
+                            val rows = controller.composerPending.filter { it.draftKey == key }
+                            val prepared = rows.singleOrNull()?.takeIf { it.draftRevision == first.revision &&
+                                it.conversationId.isEmpty() &&
+                                it.firstChatPhase == dev.pocketengine.features.assistant.OwnerComposerState.FirstChatPhase.PREPARED }
+                            // Commands run on the host main thread: nothing may settle this new local row before dispatch returns.
+                            // This identifies preparation (or a synchronous no-op), not admission or delivery.
+                            val phase = if (prepared != null) "prepared"
+                                else if (rows.isEmpty() && !controller.state.chatSubmitting) "not_prepared" else null
+                            if (phase != null) return accepted().put("firstChatRegistration",
+                                firstChatRegistration(key, epoch, first.revision, phase, prepared?.clientId))
+                        }
                     }
                 }
             }
@@ -3577,7 +3629,8 @@ internal class PocketWebBridge(
             }
             "composer.query", "composer.retry", "composer.returnPending" -> {
                 val client = requiredString(args, "clientMessageId")
-                require(controller.composerPending.any { it.clientId == client } || controller.state.chatReceipts.containsKey(client)) { "原输入回执身份不可核对" }
+                require(controller.composerPending.any { it.clientId == client } ||
+                    controller.state.chatReceipts[client]?.optString("status")?.let { it != "not_sent" } == true) { "原输入回执身份不可核对" }
                 when (action) {
                     "composer.query" -> controller.queryChatSubmission(client)
                     "composer.retry" -> controller.retryLocallyUnsent(client,

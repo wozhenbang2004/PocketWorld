@@ -1,5 +1,6 @@
 import { Button } from './forms-library';
 import { bridge } from './bridge';
+import { completedDirectoryReport } from './ButlerReturnedReport';
 import { ProgressCircle } from './library';
 import { MotionFeedback } from './library/journey-motion';
 import { IconAttention, IconCheckCircle, IconChevronRight, IconClock, IconError, IconFileText, IconHistory, IconInfo, IconPauseCircle, IconReview, IconStop } from './icons';
@@ -125,6 +126,24 @@ function overviewSharesCurrentReview(item: WorkReading) {
   return same.length === 1 && ordinaryReviewPin(same[0]) === shown && workCollectionPresentation(same[0]).group === 'attention';
 }
 
+/** Order only. Native detail still decides what can be read or answered after the click. */
+function knownOrdinaryNext(item: WorkReading) {
+  const { task, kind, next } = item, raw = task.raw;
+  if (!ordinaryReviewPin(task) || raw?.executionMode !== 'capabilities' || raw.cancelRequested !== false ||
+    raw.teamAssignment != null || raw.memberId != null || raw.nativeResultHandling === true) return false;
+  if (kind === 'decision' && item.ownerRequest && next.entry === 'review' && task.status !== 'needs_confirmation')
+    return !workCollectionPresentation(task).reconciliation;
+  if (task.status !== 'completed' || next.entry !== 'overview') return false;
+  if (kind === 'reported')
+    return !!completedDirectoryReport(task) && bridge.getState().capabilities.commands.includes('ownerWork.report.read');
+  const work = raw.ownerWork, deliveries = work.deliveries;
+  return kind === 'saved' && work.phase === 'ended' && Array.isArray(deliveries) &&
+    deliveries.some(row => row?.format === 'pocketworld.owner-work-delivery.v1' && row.taskId === task.id &&
+      row.workTaskId === task.id && row.conversationId === raw.conversationId && row.runId === raw.runId &&
+      row.epoch === raw.coordinatorEpoch && row.status === 'completed' && row.noticeKind == null && row.available === true &&
+      typeof row.resultDigest === 'string' && /^[0-9a-f]{64}$/.test(row.resultDigest));
+}
+
 type ActionProps = { item: WorkReading; canOpen: boolean; visit: (task: WorkCollectionTask, entry: WorkEntry) => void };
 
 export function WorkBrief({ item, canOpen, visit }: ActionProps) {
@@ -143,20 +162,24 @@ export function WorkBrief({ item, canOpen, visit }: ActionProps) {
     facts.push({ name: '执行记录', text: kind === 'queued' ? '工作已登记，尚未开始执行。' : '还没有读到本次执行的具体记录。' });
   const intro = kind === 'decision' ? '等你处理' : kind === 'paused' || kind === 'failed' ? '停下的工作'
     : item.group === 'running' ? '正在跟进' : '最近结束';
+  const nextFirst = canOpen && knownOrdinaryNext(item);
+  const contextBlock = facts.length ? <dl key="context" className="pw-follow-facts">{facts.map(fact => <div key={fact.name}>
+    <dt>{fact.name}</dt><dd dir="auto">{fact.text}</dd></div>)}</dl> : null;
+  const secondary = related && <Button variant="ghost" disabled={!canOpen} data-task-id={task.id} data-work-entry={related.entry}
+    aria-label={item.goal + '：' + related.label} onClick={() => visit(task, related.entry)}>{related.label}</Button>;
+  const actions = <div key="next" className="pw-follow-actions">
+    <Button variant={item.group === 'attention' || nextFirst ? 'secondary' : 'ghost'} trailingIcon={IconChevronRight}
+      disabled={!canOpen} data-task-id={task.id} data-work-entry={next.entry} data-task-status={task.status}
+      aria-label={item.goal + '：' + next.label} onClick={() => visit(task, next.entry)}>{next.label}</Button>
+    {!nextFirst && secondary}
+  </div>;
   return <article className="pw-follow-brief" aria-label={intro} data-motion-key={task.id} data-follow-kind={kind}>
     <header className="pw-follow-heading"><span className="pw-follow-kicker"><StateMark item={item}/>{intro}{item.domain && <span> · {item.domain}</span>}</span>
       {stamp && <time dateTime={new Date(task.updatedAt!).toISOString()} title="工作记录更新时间">{stamp}</time>}</header>
     <h2 dir="auto">{item.goal}</h2>
     <MotionFeedback className="pw-follow-state" as="div" identity={kind + ':' + item.label} initial={false} role="status" aria-atomic="true"><span className="pw-sr-only">{item.goal}：</span>{item.label}</MotionFeedback>
-    {!!facts.length && <dl className="pw-follow-facts">{facts.map(fact => <div key={fact.name}>
-      <dt>{fact.name}</dt><dd dir="auto">{fact.text}</dd></div>)}</dl>}
-    <div className="pw-follow-actions">
-      <Button variant={item.group === 'attention' ? 'secondary' : 'ghost'} trailingIcon={IconChevronRight}
-        disabled={!canOpen} data-task-id={task.id} data-work-entry={next.entry} data-task-status={task.status}
-        aria-label={item.goal + '：' + next.label} onClick={() => visit(task, next.entry)}>{next.label}</Button>
-      {related && <Button variant="ghost" disabled={!canOpen} data-task-id={task.id} data-work-entry={related.entry}
-        aria-label={item.goal + '：' + related.label} onClick={() => visit(task, related.entry)}>{related.label}</Button>}
-    </div>
+    {nextFirst ? [actions, contextBlock] : [contextBlock, actions]}
+    {nextFirst && secondary && <div className="pw-follow-actions">{secondary}</div>}
   </article>;
 }
 

@@ -16,6 +16,7 @@ import {MessageQuote,type MessageQuoteTarget} from './MessageQuote';
 import {MessageAttachment} from './MessageAttachment';
 import {RegisteredQuoteTrail,sameQuoteVisit,type HistoryQuoteVisit} from './RegisteredQuoteTrail';
 import {messageReplyContext,messageTaskResult,type TaskResult} from './conversation-work';
+import {attachmentFileFormat,fileBytes} from './attachment-workspace';
 import './conversation-history-window.css';
 
 type Json=Record<string,any>;
@@ -150,6 +151,9 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
  const rows:Json[]=Array.isArray(shown.messages)?requestOnly?(page&&page.window===shown.window&&!page.error&&shown.messages.length===1&&
   shown.messages[0]?.role==='user'&&shown.messages[0].id===shown.workRequest.messageId&&shown.messages[0].sourceRevision===shown.workRequest.revision?shown.messages:[]):shown.messages:[];
  const workRequestNotice=requestOnly&&readyPage(page)&&rows.length===1&&typeof page?.notice==='string'?page.notice:null;
+ const workRequestFiles=requestOnly&&readyPage(page)&&page.window===shown.window&&rows.length===1&&
+  page.workRequest&&page.workRequest.messageId===rows[0].id&&page.workRequest.revision===rows[0].sourceRevision?page.workRequest:null;
+ const attachedAtRequest:Json[]=Array.isArray(workRequestFiles?.attachedAtRequest)?workRequestFiles.attachedAtRequest:[];
  const fileIndexIdentity=()=>{
   const native=bridge.getState(),owner=native.state,view=native.view as Json|undefined;
   const current=live.current,reader=owner.conversationReader,composer=native.composer,phone=native.phoneDraft as Json|undefined;
@@ -521,6 +525,17 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
       onOriginal={readPhone?t=>{remember();setPhoneOriginal(t)}:undefined}>
       <AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>
      </PhoneMessageReturn>:message.originalHostFinal?<p className="pw-user-text">{message.content}</p>:message.role==='assistant'?<AIAnswer text={message.content} onCopyCode={copy} showActions={false}/>:<p className="pw-user-text">{message.content}</p>}
+    {!!attachedAtRequest.length&&<section aria-label="交办时所附">
+     <p className="pw-field-hint">交办时所附</p>
+     <ul>{attachedAtRequest.map((file,index)=>{
+      const name=typeof file.registeredName==='string'?file.registeredName:null;
+      return <li key={index}><bdi>{name||'附件 '+(index+1)}</bdi>{' · '}<span className="pw-muted">
+       {attachmentFileFormat(file.mimeType).label}{' · '}{fileBytes(file.size)}{!name&&' · 原附件登记暂不可核对'}
+      </span></li>;
+     })}</ul>
+     <p className="pw-field-hint">显示当前登记名称，不表示模型已读取。</p>
+    </section>}
+    {workRequestFiles?.attachmentsUnavailable===true&&<p className="pw-field-hint" role="status">这次交办有附件，但原附件记录暂不可核对。</p>}
     {!workOverlay&&!searchOnly&&Array.isArray(message.attachments)&&message.attachments.length>0&&<div className="pw-message-files">{message.attachments.map((file:Json)=><MessageAttachment
      key={`${file.id}:${file.sha256}`} file={file} history view={`history:${shown.window}`}
      origin={{conversationId:shown.conversation,messageId:message.id,sourceRevision:message.sourceRevision,window:shown.window}}

@@ -2248,6 +2248,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         if(client.isNotBlank())feature("assistant","getSubmission",JSONObject().put("clientMessageId",client))
     }
+    private fun retainChatReceipts(rows:Map<String,JSONObject>) =
+        rows.filterValues{it.optString("status")=="unconfirmed"}+
+            rows.filterValues{it.optString("status")!="unconfirmed"}.entries.toList().takeLast(64).associate{it.toPair()}
+
     private fun clearNotSentChat(client:String) {
         val receipt=notSentChatReceipts[client]?:return
         val model=ownerComposer?:return
@@ -2262,9 +2266,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 state=state.copy(chatSubmitting=submittingChatClient!=null)
                 cleanup.fold({
                     try {
-                        if(model.rejectBeforeAdmission(client,original.conversationId)){publishComposer();scheduleComposerSave()}
+                        val removed = model.rejectBeforeAdmission(client,original.conversationId)
+                        if(removed){publishComposer();scheduleComposerSave()}
                         notSentChatReceipts.remove(client)
-                        state=state.copy(chatReceipts=state.chatReceipts-client,notice=null,
+                        val remaining = state.chatReceipts - client
+                        // Keep only the verified terminal fact for this native first-chat client.
+                        // The pending row has been cleaned up. This projection does not grant a replay or query.
+                        val firstNotSent = removed && original.firstChatPhase == OwnerComposerState.FirstChatPhase.FENCED &&
+                            original.conversationId.isEmpty() && !original.primaryDisplayOnly
+                        val observed = if (firstNotSent) retainChatReceipts(remaining + (client to JSONObject()
+                            .put("clientMessageId", client).put("status", "not_sent").put("conversationId", "")
+                            .put("notAdmitted", true).put("reconciliationRequired", false).put("reason", "before_message_commit"))) else remaining
+                        state=state.copy(chatReceipts=observed,notice=null,
                             error=receipt.optString("error","消息未发送")+"；草稿已保留，修正后可以重新发送。")
                     } catch(error:Exception){state=state.copy(error=message(error))}
                 },{failure->state=state.copy(error="本条确定未发送，草稿仍保留；清理模型回执失败，可再次查询或点击发送重试清理："+message(failure))})
@@ -2290,8 +2303,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         val receipt=ChatInputRules.mergeReceipt(state.chatReceipts[client],result) ?: return
         val ownsPending=submittingChatClient==client;if(ownsPending)submittingChatClient=null
-        val allReceipts=state.chatReceipts+(client to receipt)
-        val retainedReceipts=allReceipts.filterValues{it.optString("status")=="unconfirmed"}+allReceipts.filterValues{it.optString("status")!="unconfirmed"}.entries.toList().takeLast(64).associate{it.toPair()}
+        val retainedReceipts=retainChatReceipts(state.chatReceipts+(client to receipt))
         state=state.copy(chatReceipts=retainedReceipts,chatSubmitting=if(ownsPending)false else state.chatSubmitting)
         if(receipt.optString("status") in setOf("accepted","queued","consumed","withdrawn")) {
             locallyUnsent.remove(client)
@@ -3982,6 +3994,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun openOwnerWorkRequestHistory(task:String,run:String,epoch:Int,current:()->Boolean,done:(JSONObject?,String?)->Unit) {
         val readerAtRequest=conversationReadSequence
         val sourceRevision=conversationSourceRevision
+        val attachmentSourceRevision=messageAttachmentSourceRevision
         val store=app.tasks
         fun original()=current()&&workRequestWindowCurrent(task,run,epoch)&&conversationReader==null&&
             readerAtRequest==conversationReadSequence&&sourceRevision==conversationSourceRevision&&app.tasks===store
@@ -3989,15 +4002,36 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val control=dev.pocketengine.core.RunControl()
         openingOwnerWorkRequest=control
         try { io.execute {
-            val result=runCatching { store.ownerWorkRequestHistoryForOwner(task,run,epoch,control) }
+            val result=runCatching {
+                val native=store.ownerWorkRequestHistoryForOwner(task,run,epoch,control)
+                val attachments=native.optJSONArray("requestAttachmentReferences")?.let { pins ->
+                    control.checkpoint()
+                    // TaskStore has closed its transaction. Resolve only these exact private metadata pins.
+                    val rows=runCatching { app.attachmentOutcomes.messageReferences(pins) }.getOrNull()
+                    store.requireOwnerWorkRequestAttachmentsCurrentForOwner(task,run,epoch,native,control)
+                    (0 until pins.length()).map { index ->
+                        val pin=pins.getJSONObject(index)
+                        val mime=pin.getString("mimeType");val size=pin.getLong("size")
+                        val row=rows?.takeIf { it.length()==pins.length() }?.optJSONObject(index)
+                        val name=if(row!=null&&row.opt("availability")=="available"&&row.opt("id")==pin.opt("id")&&
+                            row.opt("sha256")==pin.opt("sha256")&&row.opt("mimeType")==mime&&row.optLong("size",-1L)==size)
+                            (row.opt("name") as? String)?.takeIf { it.isNotBlank()&&it.length<=240&&'/' !in it&&'\\' !in it }
+                        else null
+                        OwnerWorkRequestAttachment(mime,size,name)
+                    }
+                }.orEmpty()
+                native to attachments
+            }
             main.post {
                 val sameRead=openingOwnerWorkRequest===control
                 if(sameRead)openingOwnerWorkRequest=null
                 if(!sameRead||!original()){done(null,"原工作窗口或来源已变化，没有打开其他消息。");return@post}
-                result.fold({ native ->
+                result.fold({ (native,attachments) ->
                     val opened=runCatching {
                         val conversation=native.getString("conversationId")
-                        val pin=OwnerWorkRequestHistoryAnchor(task,run,epoch,native.getString("requestMessageId"),native.getLong("requestRevision"),sourceRevision)
+                        val pin=OwnerWorkRequestHistoryAnchor(task,run,epoch,native.getString("requestMessageId"),
+                            native.getLong("requestRevision"),sourceRevision,attachmentSourceRevision,attachments,
+                            native.opt("requestAttachmentsUnavailable")==true)
                         val page=ConversationReadPage(Math.addExact(conversationReadSequence,1L),conversation,"原请求",null,
                             anchor=pin.message,workRequestAnchor=pin).accept(native,false)
                         require(pin.revision>0&&page.initialized&&!page.limited&&!page.hasMore&&page.messages.singleOrNull()?.let {

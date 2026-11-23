@@ -56,7 +56,9 @@ internal fun originalDefaultWritesBlocked(row: JSONObject, conversation: String)
 }
 
 internal data class OwnerReportHistoryAnchor(val task:String,val run:String,val epoch:Int,val message:String,val revision:Long,val fingerprint:String)
-internal data class OwnerWorkRequestHistoryAnchor(val task:String,val run:String,val epoch:Int,val message:String,val revision:Long,val sourceRevision:Long)
+internal data class OwnerWorkRequestAttachment(val mimeType:String,val size:Long,val registeredName:String?)
+internal data class OwnerWorkRequestHistoryAnchor(val task:String,val run:String,val epoch:Int,val message:String,val revision:Long,val sourceRevision:Long,
+    val attachmentSourceRevision:Long=-1L,val attachments:List<OwnerWorkRequestAttachment> = emptyList(),val attachmentsUnavailable:Boolean=false)
 internal data class OwnerSearchHistoryAnchor(val request:String,val message:String,val revision:Long,val composerEpoch:Int)
 internal data class OriginalReminderHistoryAnchor(val marker: JSONObject, val sourceRevision: Long, val current: () -> Boolean)
 
