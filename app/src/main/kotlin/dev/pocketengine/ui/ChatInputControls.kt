@@ -16,12 +16,15 @@ internal object ChatInputRules {
  private fun encodedPhotoBytes(file:UiChatAttachment)=4L*((file.size+2L)/3L)
 
  class PhotoAllowance(private val encodedLeft:Long,private val accountLeft:Int?) {
-  fun rejectAdding(files:List<UiChatAttachment>):String? {
+  fun rejectAdding(files:List<UiChatAttachment>, libraryFallback:Boolean=false):String? {
    val photos=files.filter(ChatInputRules::inlinePhoto)
    if(accountLeft!=null&&photos.size>accountLeft)
-    return "当前账号每条最多加入 ${ResponsesRequest.MAX_IMAGES} 张图片。移除一张或分开发送。"
+    return if(!libraryFallback) "当前账号每条最多加入 ${ResponsesRequest.MAX_IMAGES} 张图片。移除一张或分开发送。"
+     else if(accountLeft==0) "这条草稿的图片名额已满。可移除已有图片，再从清单勾选。"
+     else "按当前账号的图片数量上限，最多还能勾选 $accountLeft 张。请从清单选择，回输入框核对。"
    if(photos.sumOf(ChatInputRules::encodedPhotoBytes)>encodedLeft)
-    return "加上这些原图会超过本条发送容量。可减少图片、改用较小版本，或分开发送。"
+    return if(libraryFallback) "这批原图超过本条容量。请从清单少选几张，或选择较小的版本再核对。"
+     else "加上这些原图会超过本条发送容量。可减少图片、改用较小版本，或分开发送。"
    return null
   }
 

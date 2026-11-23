@@ -881,6 +881,14 @@ internal class PocketWebBridge(
             controller.chatFilePickFeedback?.takeIf { it.first == controller.chatAttachmentPickerRequest() }?.let {
                 projection?.getJSONObject("state")?.put("chatFilePickFeedback", it.second)
             }
+            controller.ordinaryChatAttachmentListRequest()?.let { request ->
+                val projected = projection?.getJSONObject("state")
+                val current = chatFilePickSurface() && controller.ordinaryChatAttachmentListCurrent(request)
+                projected?.put("ordinaryChatAttachmentListRequest", request)?.put("ordinaryChatAttachmentListCurrent", current)
+                val inventory = if (current) controller.ordinaryChatAttachmentInventory(request) else null
+                if (inventory != null && inventory !== controller.state.moduleResults["attachments.list"])
+                    projected?.optJSONObject("moduleResults")?.put("attachments.list", PocketWebState.publicValue(inventory, omitProjectContract = true))
+            }
             if (chatFilePickSurface()) controller.chatAttachmentPickerRequest()?.takeIf(controller::chatFilePickReady)?.let {
                 projection?.getJSONObject("state")?.put("chatFilePickReadyFor", it)
                     ?.put("chatFilePickPhotos",controller.chatFilePickPhotos())
@@ -3563,7 +3571,15 @@ internal class PocketWebBridge(
                 require(!controller.state.chatSubmitting) { "请等待原输入回执后再切换对话" }
                 controller.switchFromConversationReader(page.window)
             }
-            "attachments.pick" -> { requireComposer(args, optional = true); controller.pickAttachments() }
+            "attachments.pick" -> {
+                val ordinary = args.has("ordinaryListRequest")
+                requireComposer(args, optional = !ordinary)
+                if (ordinary) {
+                    checkedPayload(args, setOf("key", "epoch", "ordinaryListRequest"))
+                    check(chatFilePickSurface() && controller.webPrivateOwnerVisible() && controller.conversationReader == null) { "附件选择窗口已变化" }
+                    controller.pickLibraryFilesForOrdinaryAttachmentList(requiredString(args, "ordinaryListRequest"))
+                } else controller.pickAttachments()
+            }
             "attachments.pickForDraft" -> {
                 checkedPayload(args, setOf("key", "epoch", "revision", "pickerRequestId"))
                 requireComposer(args); requireAttachmentDraft(args)
@@ -3578,14 +3594,20 @@ internal class PocketWebBridge(
             }
             "attachments.openPicker" -> {
                 val exact = args.has("revision")
-                requireComposer(args, optional = !exact)
+                val ordinary = args.has("ordinaryList")
+                requireComposer(args, optional = !exact && !ordinary)
                 if (exact) {
                     checkedPayload(args, setOf("key", "epoch", "revision"))
                     requireAttachmentDraft(args)
                     require(!controller.state.chatAttachmentPickerOpen) { "请先关闭原附件选择" }
                 }
-                val list = controller.openChatAttachmentPicker()
-                if (exact) return JSONObject().put("requestId", list ?: error(controller.state.error ?: "原附件选择未打开，请核对输入和模型设置"))
+                if (ordinary) {
+                    checkedPayload(args, setOf("key", "epoch", "ordinaryList"))
+                    check(requiredBoolean(args, "ordinaryList") && chatFilePickSurface() && controller.webPrivateOwnerVisible() &&
+                        controller.conversationReader == null && !controller.state.chatAttachmentPickerOpen) { "请从当前管家输入打开附件选择" }
+                }
+                val list = if (ordinary) controller.openOrdinaryChatAttachmentPicker() else controller.openChatAttachmentPicker()
+                if (exact || ordinary) return JSONObject().put("requestId", list ?: error(controller.state.error ?: "原附件选择未打开，请核对输入和模型设置"))
             }
             "attachments.closePicker" -> {
                 val request = if (args.has("pickerRequestId")) {
@@ -3593,12 +3615,16 @@ internal class PocketWebBridge(
                 } else null
                 val exact=replyPicker
                 if(exact!=null){check(request==exact.request){"原附件选择编号已变化"};retireReplyPicker()}
-                else controller.closeChatAttachmentPicker(request)
+                else {
+                    controller.ordinaryChatAttachmentListRequest()?.let { check(request == it) { "请关闭当前这次附件选择" } }
+                    controller.closeChatAttachmentPicker(request)
+                }
             }
             "attachments.remove" -> { requireComposer(args); controller.removeChatAttachment(requiredString(args, "id"), requiredString(args, "key"), requiredInt(args, "epoch")) }
             "attachments.toggle" -> {
                 val focused = args.has("pickerRequestId")
-                requireComposer(args, optional = !focused)
+                val ordinary = args.has("ordinaryListRequest")
+                requireComposer(args, optional = !focused && !ordinary)
                 val id = requiredString(args, "id"); val sha = requiredString(args, "sha256")
                 val inventory = if (focused) {
                     checkedPayload(args, setOf("key", "epoch", "revision", "id", "sha256", "pickerRequestId", "selected"))
@@ -3607,10 +3633,22 @@ internal class PocketWebBridge(
                     check(request == controller.chatAttachmentPickerRequest() && "attachments.list" !in controller.state.moduleBusy &&
                         controller.state.moduleResultInputs["attachments.list"]?.optString("_requestId") == request) { "原附件选择清单已变化" }
                     controller.state.moduleResults["attachments.list"] ?: error("未读取这份原附件")
-                } else controller.state.feature("attachments")
-                val selected = inventory.optJSONArray("attachments").objects().firstOrNull { it.optString("id") == id && it.optString("sha256") == sha }
-                    ?: error("附件原件已变化，请重新选择")
-                if (focused) {
+                } else if (ordinary) {
+                    checkedPayload(args, setOf("key", "epoch", "id", "sha256", "ordinaryListRequest", "selected"))
+                    check(chatFilePickSurface() && controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+                        !controller.state.chatSubmitting) { "原附件选择窗口已变化" }
+                    controller.ordinaryChatAttachmentInventory(requiredString(args, "ordinaryListRequest")) ?: error("原附件清单尚未核对")
+                } else {
+                    check(controller.ordinaryChatAttachmentListRequest() == null) { "请从当前已读取的附件清单选择" }
+                    controller.state.feature("attachments")
+                }
+                val matches = inventory.optJSONArray("attachments").objects().filter { it.optString("id") == id && it.optString("sha256") == sha }
+                val selected = (if (ordinary) matches.singleOrNull() else matches.firstOrNull()) ?: error("附件原件已变化，请重新选择")
+                if (ordinary) check(selected.opt("principalId") == "owner" && selected.opt("spaceId") == "private" &&
+                    selected.optString("availability","available") == "available" && selected.optJSONObject("source")?.has("groupSpaceId") != true) {
+                    "未核对到这份私人附件"
+                }
+                if (focused || ordinary) {
                     check(!selected.optBoolean("outputSourceRetired")) { "原文件已撤回，没有加入草稿" }
                     val held = controller.state.selectedChatAttachments.firstOrNull { it.id == id }
                     check(held == null || held.sha256 == sha) { "草稿选的是另一版本，没有替换" }
@@ -3660,6 +3698,13 @@ internal class PocketWebBridge(
             "projects.refresh" -> { retireKeptStaticPages(); controller.state.projectId?.let(controller::selectProject) ?: controller.refresh() }
             "projects.select" -> {
                 val project = requiredString(args, "id")
+                if (args.has("fromSearch")) {
+                    checkedPayload(args, setOf("id", "fromSearch"))
+                    require(args.opt("fromSearch") == true) { "请从原项目搜索结果重新打开。" }
+                    // The write can start before its busy state reaches the Web view.
+                    val active = controller.state
+                    require(!active.fileSaving || active.filePath == null) { "正在保存当前文件，请等保存结果后再切换项目。" }
+                }
                 if (args.has("creationTicket")) {
                     checkedPayload(args, setOf("id", "creationTicket"))
                     val original = projectCreateSelection

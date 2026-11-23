@@ -42,13 +42,14 @@ type Props = {
   open: boolean; inventory: unknown; selected: unknown; inputModel: unknown;
   importing: boolean; onClose: () => void; onCloseAutoFocus?: (event: Event) => void; onImport?: () => void;
   pagingDenied: boolean; onReviewPagingRule?: () => void; openingPagingRule?: boolean;
+  listPhase?: 'loading' | 'ready' | 'failed' | 'changed';
   onToggle?: (id: string, sha256: string, selected: boolean) => void;
   original?: {fileId:string;sha256:string;name:string;draftLabel:string};
 };
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
-export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onCloseAutoFocus, onImport, onToggle, original }: Props) {
-  const catalog = fileObject(inventory), focused = !!original;
+export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, listPhase, onClose, onCloseAutoFocus, onImport, onToggle, original }: Props) {
+  const catalog = fileObject(inventory), focused = !!original, changed = listPhase === 'changed';
   const [query, setQuery] = useState('');
   const [pickError, setPickError] = useState('');
   const snapshot = bridge.getState(), input = snapshot.composer, picker = snapshot.state.chatAttachmentPickerRequest;
@@ -91,16 +92,20 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
         <header className="pw-drawer-header">
           <div>
             <Drawer.Title>{original?'选作草稿附件':'选择附件'}</Drawer.Title>
-            <Drawer.Description id="pw-attachment-description">{original&&`「${original.draftLabel}」 · `}已选 {choices.length}/{maxSelections} · 只加入草稿，不发送。</Drawer.Description>
+            <Drawer.Description id="pw-attachment-description">{changed ? '原输入已变化。' :
+              <>{original&&`「${original.draftLabel}」 · `}已选 {choices.length}/{maxSelections} · 只加入草稿，不发送。</>}</Drawer.Description>
           </div>
           <IconButton icon={IconClose} aria-label="关闭附件选择" onClick={onClose}/>
         </header>
         <div className="pw-drawer-body">
-          {pickError ? <p className="pw-error" role="alert">{pickError}</p> : !focused && typeof snapshot.state.chatFilePickFeedback === 'string' &&
-            <p className="pw-muted" role="status">{snapshot.state.chatFilePickFeedback}</p>}
+          {!changed && (pickError ? <p className="pw-error" role="alert">{pickError}</p> : !focused && typeof snapshot.state.chatFilePickFeedback === 'string' &&
+            <p className="pw-muted" role="status">{snapshot.state.chatFilePickFeedback}</p>)}
+          {changed && <p className="pw-muted" role="status">这次选择已不可用。关闭后，可在当前输入重新点「添加附件」。</p>}
           {photoSlotsFull && <p className="pw-muted" role="status">当前账号每条最多加入 {photoAllowance.accountMax} 张图；可移除一张后替换，文档不计入这个上限。</p>}
+          {listPhase === 'loading' && <p className="pw-muted" role="status">正在读取本机附件…</p>}
+          {listPhase === 'failed' && <p className="pw-error" role="alert">未能读取本机附件清单。草稿不变，可关闭后重新打开附件选择。</p>}
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
-          {!focused && (files.length > 0 || query !== '') && <div role="search" aria-label="在当前附件清单中查找">
+          {!changed && !focused && (files.length > 0 || query !== '') && <div role="search" aria-label="在当前附件清单中查找">
             <TextField label="文件名" leadingIcon={IconSearch} type="search" placeholder="查找当前清单" value={query}
               onChange={value => setQuery(value.slice(0, 180))}/>
           </div>}
@@ -135,7 +140,7 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
               </div>;
             })}
           </div>
-          {!rows.length && !importing && <div className="pw-empty-small" role={needle ? 'status' : undefined}>
+          {!rows.length && !importing && (!listPhase || listPhase === 'ready') && <div className="pw-empty-small" role={needle ? 'status' : undefined}>
             {needle ? '当前已读取的附件没有匹配的文件名。' : original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : addFromPhone ? '从手机选照片、PDF 等文件，返回后可在草稿中移除或发送。' : '还没有附件，可以先导入。'}
           </div>}
           {rows.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}

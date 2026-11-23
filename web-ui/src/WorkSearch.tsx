@@ -304,7 +304,8 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     transition={reduce ? motionTransition.instant : present ? motionTransition.enter : motionTransition.exit}
     onAnimationComplete={() => { if (present) focusSearch(); }}>
 
-    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} scrollActive={conversation ? 'auto' : 'keyboard'} commands={commands} query={query} queryLabel={conversation ? '查找此对话的本机原文' : undefined} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
+    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} scrollActive={conversation ? 'auto' : 'keyboard'} commands={commands} query={query}
+      queryLabel={conversation ? '查找此对话的本机原文' : undefined} clearQueryLabel="清除搜索词" closeOnFooterEscape queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
       closeOnSelect={false} onClose={() => { openingRequest.current++; openingRef.current = false; onClose(); }} selectedId={memory.returnAnchor?.scope === scope ? undefined : memory.selectedId}
       controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{conversation ?
         <Button variant="ghost" disabled={opening} onClick={onFindAll}>返回全部记录搜索</Button> : <>

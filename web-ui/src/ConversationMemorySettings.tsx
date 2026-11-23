@@ -15,7 +15,7 @@ function controlsOf(value:unknown,conversationId:string):ConversationMemoryContr
   return {conversationId,enabled:row.enabled,revision:Number(row.revision),excludeNewInputs:row.excludeNewInputs,globalMemoryPolicy};
 }
 function memoryScope(controls:ConversationMemoryControls) {
-  if(!controls.enabled)return '本对话已暂停参考个人背景，也不从本对话整理记忆候选。';
+  if(!controls.enabled)return '已保存的记忆：本对话已暂停参考。从新原话整理候选：本对话已暂停。';
   const policy=controls.globalMemoryPolicy;
   const reading=policy?policy.readingEnabled?'设置允许按相关性参考':'总设置已暂停':'总设置尚未核对';
   const learning=controls.excludeNewInputs===true?'本对话已排除新原话':
@@ -82,7 +82,10 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
     {controls&&<><StretchSwitch label="允许此对话参考我的资料、偏好和记忆" description="只改本对话。开启不改变记忆的总设置；关闭也不删除已保存的记忆。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save('enabled',enabled);}}/>
-      <p className="pw-muted" role="status">{pending?'正在核对当前范围…':memoryScope(controls)}</p></>}
+      <p className="pw-muted" role="status">{pending?'正在核对当前范围…':<>
+        你填写的资料和偏好：{controls.enabled?'本对话允许参考':'本对话已暂停参考'}。<br/>
+        {memoryScope(controls)}
+      </>}</p></>}
     <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
     {typeof controls?.excludeNewInputs==='boolean'&&<StretchSwitch label="从现在起，新原话不参与自动整理" description={controls.enabled?
       '适合临时项目：仍可按原规则参考已有偏好，但此对话之后发的原话不用于后台提炼或记忆建议。关闭不会补整理，既有记忆和手动设置不变。':

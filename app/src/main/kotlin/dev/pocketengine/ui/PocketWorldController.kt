@@ -1023,6 +1023,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
     private var attachmentPickerListRequest: String? = null
+    private var ordinaryAttachmentList: String? = null
+    private var ordinaryLibraryImport: Pair<String,String>? = null
+    private val ordinaryListImports = linkedSetOf<Pair<String,String>>()
     private data class AttachmentDraftModel(val scope: String, val preferenceRevision: Long, val globalRevision: Long)
     private var attachmentDraftModel: AttachmentDraftModel? = null
     // A restored OS picker may finish importing, but cannot adopt the next open draft.
@@ -1886,6 +1889,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     fun setChatSendMode(mode:String,key:String,viewEpoch:Int) { if(composerDraft?.key==key&&chatViewEpoch==viewEpoch&&mode in setOf("queue","steer")) editComposerSelection(mode,state.selectedChatAttachments) }
     fun openChatAttachmentPicker(): String? = openChatAttachmentPicker(null)
+    internal fun openOrdinaryChatAttachmentPicker(): String? = openChatAttachmentPicker(null, ordinaryList = true)
     internal fun openOriginalReplyAttachmentPicker(closeOriginal: () -> Boolean): String? = openChatAttachmentPicker(closeOriginal)
     private fun currentAttachmentDraftModel(scope: String): AttachmentDraftModel? {
         val coordinator = app.settings.modelSelection()
@@ -1896,7 +1900,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             AttachmentDraftModel(scope, revision, global.revision()).takeIf { coordinator.status() == global }
         }.getOrNull()
     }
-    private fun openChatAttachmentPicker(closeOriginal: (() -> Boolean)?): String? {
+    private fun openChatAttachmentPicker(closeOriginal: (() -> Boolean)?, ordinaryList: Boolean = false): String? {
         val draft=composerDraft ?: run{state=state.copy(error="请等待原私聊草稿读取完成");return null}
         if(!refreshCurrentConversationTurn())return null
         val scope = if(draft.conversationId.isNotBlank())
@@ -1925,8 +1929,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         }.getOrNull() else null
         state=state.copy(chatAttachmentPickerOpen=true,chatAttachmentModel=model)
-        return (if(closeOriginal==null)feature("attachments","list") else UUID.randomUUID().toString())
-            .also { attachmentPickerListRequest=it }
+        return (if(closeOriginal==null)feature("attachments","list") else UUID.randomUUID().toString()).also {
+            attachmentPickerListRequest=it
+            ordinaryAttachmentList=it.takeIf { ordinaryList }
+            ordinaryLibraryImport=null
+            ordinaryListImports.clear()
+        }
     }
     internal fun verifyOriginalReplyAttachment(target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,
         current:()->Boolean,done:(JSONObject?,String?)->Unit){
@@ -1948,6 +1956,31 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             runCatching { app.settings.permissionPolicyRevision() == revision }.getOrDefault(false)
     }
     internal fun chatAttachmentPickerRequest():String? = attachmentPickerListRequest.takeIf { state.chatAttachmentPickerOpen }
+    // Retain the original picker kind/ID even after the draft owner changes. A stale ordinary
+    // window cannot fall through to the inventory or close action of an untagged picker.
+    internal fun ordinaryChatAttachmentListRequest(): String? = ordinaryAttachmentList?.takeIf { it == chatAttachmentPickerRequest() }
+    internal fun ordinaryChatAttachmentListCurrent(request: String): Boolean =
+        request == ordinaryChatAttachmentListRequest() && webPrivateOwnerVisible() && !hasChannelPhoneOrigin &&
+            conversationReader == null && webTaskViewId == null && attachmentComposerEpoch == chatViewEpoch &&
+            composerDraft?.let { it.key == attachmentComposerKey && it.conversationId == state.conversationId.orEmpty() } == true
+    internal fun ordinaryChatAttachmentInventory(request: String): JSONObject? {
+        if (!ordinaryChatAttachmentListCurrent(request)) return null
+        if (state.moduleResultInputs["attachments.list"]?.let { it.opt("_requestId") == request && !it.optBoolean("_failed") } != true)
+            return null
+        val receipt = state.moduleResults["attachments.list"] ?: return null
+        val original = receipt.optJSONArray("attachments") ?: return null
+        if (ordinaryListImports.isEmpty()) return receipt
+        fun pin(row: JSONObject) = row.optString("id") to row.optString("sha256")
+        val shown = original.objects().map(::pin).toMutableSet()
+        // Only native registrations from this original OS selection may add rows. Their metadata
+        // comes from the existing post-import refresh, not a fresh read or a fallback to its whole list.
+        val added = state.feature("attachments").optJSONArray("attachments").objects().filter {
+            pin(it) in ordinaryListImports && it.opt("principalId") == "owner" && it.opt("spaceId") == "private" &&
+                !it.optBoolean("outputSourceRetired") && it.optJSONObject("source")?.has("groupSpaceId") != true &&
+                shown.add(pin(it))
+        }
+        return if (added.isEmpty()) receipt else JSONObject(receipt.toString()).put("attachments", JSONArray(original.objects()+added))
+    }
     internal fun chatFilePickReady(picker: String): Boolean {
         val model = attachmentDraftModel ?: return false
         val draft = composerDraft ?: return false
@@ -1963,6 +1996,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         chatFilePickFeedback = null
         attachmentDraftModel = null
         attachmentPickerListRequest = null
+        ordinaryAttachmentList = null
+        ordinaryLibraryImport = null
+        ordinaryListImports.clear()
         attachmentPagingDeniedAt = null
         state=state.copy(chatAttachmentPickerOpen=false)
     }
@@ -3522,6 +3558,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openBrowserResearch() { native("openBrowserResearch") }
     fun openBrowserResearch(taskId: String) { native("openBrowserResearch", JSONObject().put("taskId", taskId)) }
     fun pickAttachments(projectId: String? = null) { activity.pickAttachments(null, projectId) }
+    internal fun pickLibraryFilesForOrdinaryAttachmentList(picker: String) {
+        check(ordinaryChatAttachmentListCurrent(picker) && ordinaryLibraryImport == null) { "原附件选择已变化或仍在等待" }
+        val target = OwnerAttachmentImport.Target(null, null)
+        val origin = target.requestId to picker
+        ordinaryLibraryImport = origin
+        val status = try { activity.pickAttachments(target) }
+        catch (failure: Exception) { if (ordinaryLibraryImport === origin) ordinaryLibraryImport = null; throw failure }
+        if (status !in setOf(AttachmentImportPicker.Launch.REQUESTED, AttachmentImportPicker.Launch.UNKNOWN) && ordinaryLibraryImport === origin)
+            ordinaryLibraryImport = null
+    }
+    private fun takeOrdinaryLibraryPick(original: OwnerAttachmentImport.Target?): String? =
+        ordinaryLibraryImport?.takeIf { it.first == original?.requestId }?.also { ordinaryLibraryImport = null }?.second
+    private fun recordOrdinaryListImports(picker: String?, original: OwnerAttachmentImport.Target?, receipt: OwnerAttachmentImport.Receipt) {
+        if (picker == null || !ordinaryChatAttachmentListCurrent(picker) || original == null || original.taskId != null ||
+            original.projectId != null || receipt.imported !in 1..10 || receipt.linked != 0 || receipt.associationUnconfirmed != 0) return
+        val files = runCatching { receipt.registration().optJSONArray("files").objects() }.getOrNull() ?: return
+        if (files.size != receipt.imported) return
+        files.forEach {
+            val id = it.optString("id"); val sha = it.optString("sha256")
+            if (id.matches(Regex("[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}")) && sha.matches(Regex("[a-f0-9]{64}")) &&
+                ordinaryListImports.size < 200) ordinaryListImports.add(id to sha)
+        }
+    }
     internal fun pickFilesForChatDraft(picker: String, current: () -> Boolean) {
         check(current() && chatFilePickReady(picker)) { "原输入或模型已变化，请回输入框重新打开附件选择" }
         check(state.selectedChatAttachments.size < AttachmentRequestProjection.MAX_ATTACHMENTS) { "每条消息最多选择4个附件" }
@@ -3546,8 +3605,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 chatFilePickFeedback = pick.picker to "没有文件成功导入，草稿未改动。可检查文件权限后重新选择。"
             return
         }
-        fun keepOnly(reason: String) {
-            val notice = "已保存到附件库。$reason 草稿未改动。"
+        fun keepOnly(reason: String, verifiedBatch: Boolean = false) {
+            val notice = if (verifiedBatch) "已保存 ${receipt.imported} 个文件到附件库。草稿未改动。$reason"
+                else "已保存到附件库。$reason 草稿未改动。"
             if (chatAttachmentPickerRequest() == pick.picker) chatFilePickFeedback = pick.picker to notice
             state = state.copy(notice = notice)
         }
@@ -3568,14 +3628,17 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             if (rejection != null) { keepOnly(rejection); return }
         }
         if (next.size > AttachmentRequestProjection.MAX_ATTACHMENTS) { keepOnly("加上已有附件会超过4个，可从清单选择。"); return }
-        draftPhotoAllowance()?.rejectAdding(next.drop(previous.size))?.let { keepOnly(it); return }
+        draftPhotoAllowance()?.rejectAdding(next.drop(previous.size), libraryFallback = true)?.let {
+            keepOnly(it, verifiedBatch = true)
+            return
+        }
         if (next != previous) editComposerSelection(state.chatSendMode, next)
         if (state.selectedChatAttachments != next) { keepOnly("没有确认加入这条输入，可从清单重新勾选。"); return }
         closeChatAttachmentPicker(pick.picker)
         state = state.copy(notice = "附件已加入这条草稿，尚未发送。")
     }
-    internal fun attachmentImportContextUnavailable() { attachmentOutcomes.libraryImportContextUnavailable(); state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
-    internal fun attachmentImportSelectionEnded(cancelled: Boolean, original: OwnerAttachmentImport.Target? = null) { takeChatFilePick(original); attachmentOutcomes.libraryImportSelectionEnded(original,cancelled); state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
+    internal fun attachmentImportContextUnavailable() { ordinaryLibraryImport=null; attachmentOutcomes.libraryImportContextUnavailable(); state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
+    internal fun attachmentImportSelectionEnded(cancelled: Boolean, original: OwnerAttachmentImport.Target? = null) { takeChatFilePick(original); takeOrdinaryLibraryPick(original); attachmentOutcomes.libraryImportSelectionEnded(original,cancelled); state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
     internal fun attachmentImportPickerStatus(status: AttachmentImportPicker.Launch) {
         state = when (status) {
             AttachmentImportPicker.Launch.REQUESTED -> state.copy(notice = null, error = null)
@@ -3604,6 +3667,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (closed) return
         val received = Intent(intent)
         val draftPick = takeChatFilePick(original)
+        val ordinaryPicker = takeOrdinaryLibraryPick(original) ?: draftPick?.picker
         attachmentOutcomes.libraryImportSelected(original)
         state = state.copy(attachmentImporting = true, notice = null, error = null)
         try { io.execute {
@@ -3626,6 +3690,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }.getOrNull() else null
                 main.post {
                     if (!closed) {
+                        recordOrdinaryListImports(ordinaryPicker,original,receipt)
                         state = state.copy(attachmentImporting = false, notice = receipt.notice, error = receipt.error)
                         attachmentOutcomes.imported(original,receipt)
                         if (draftPick != null) stagePickedChatFiles(draftPick, receipt, files)
@@ -6951,6 +7016,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             // Only the current selection's read owns its spinner, not older worker results.
             if (latestWorkspaceFileList == requestId) state = state.copy(moduleBusy = state.moduleBusy - key)
         } else state = state.copy(moduleBusy = if (pending.values.any { it.first == key }) state.moduleBusy else state.moduleBusy - key)
+        // A closed previous picker cannot replace a newly opened ordinary picker’s own result.
+        if (key == "attachments.list" && ordinaryChatAttachmentListRequest()?.let { it != requestId } == true) return
         if (feature == "workspace" && command in setOf("read", "write", "history") && requestId !in setOf(fileRequestId, historyRequestId, revisionRequestId)) return
         if (feature == "workspace" && (command == "listArtifacts" && requestId != workspaceArtifactsRequest || command == "readArtifact" && (requestId != workspaceArtifactReadRequest || state.workspaceArtifactView == null) || command == "diffArtifact" && (requestId != workspaceArtifactDiffRequest || state.workspaceArtifactView == null))) return
         val result = event.optJSONObject("result") ?: JSONObject()

@@ -434,6 +434,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(()=>{if(!active)setLockVisit(null);},[active,projectId]);
   const [importEditChoice,setImportEditChoice]=useState<{original:ProjectImportedEditor;viewHandle:string}|null>(null);
   const [importEditorNotice,setImportEditorNotice]=useState('');
+  const [localFilesDraftNotice,setLocalFilesDraftNotice]=useState<{viewHandle:string;window:string}|null>(null);
   const buildReturnAnchor=useRef<HTMLElement>(null), buildStepSection=useRef<HTMLElement>(null), buildNextAction=useRef<HTMLButtonElement>(null), focusingBeforeDeparture=useRef(false);
   const buildAfterSave=useRef<{saved:CheckoutSavedPosition;viewHandle:string;window:string}|null>(null);
   const sourceRecoveryReturn=useRef<{window:string;viewHandle:string;seen:boolean}|null>(null);
@@ -546,7 +547,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       returned.current=pinned.handle;focusReturned.current=true;setDeliveryOpen(true);
     }
     handle.current = value.viewHandle; if(staticVisit)staticFilesPage.current=value.viewHandle;
-    setView(value); sourceAttempt.current = ''; setSource(null); closeBuildPreview(); closeRetainedOriginal();
+    setView(value); setLocalFilesDraftNotice(null); sourceAttempt.current = ''; setSource(null); closeBuildPreview(); closeRetainedOriginal();
     const incoming = value.draft || {}, here = draft.current;
     if(value.draftRecoveryRequired!==true)setCopyResult(previous =>
       incoming.copyRequestId && (previous?.unconfirmed===true || previous?.requestId===incoming.copyRequestId) ? previous : null);
@@ -622,11 +623,15 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       setImportEditorNotice('未核对到原先所选的本机副本。请先确认副本选择，没有打开其他文件。');
     // An explicit edit tap in a genuinely empty new project can instead offer
     // one user-confirmed preparation that opens just the newly prepared list.
-    if(sameFilesVisit&&openLocalFiles&&!openLocalFiles.originalCopy&&!touched.current&&
-       Array.isArray(value.checkouts)&&value.checkouts.length===0&&!value.phoneSourceRecovery&&
-       incoming.checkoutId===''&&incoming.goal===''&&deliveryFields.every(key=>incoming[key]==='')&&
-       !incoming.submission&&!incoming.copyRequestId&&!incoming.copyStatus&&latest.current.can('projects.development.prepare'))
-      firstFilesPreparation.current={intent:openLocalFiles,viewHandle:value.viewHandle};
+    if(sameFilesVisit&&openLocalFiles&&!openLocalFiles.originalCopy&&
+       Array.isArray(value.checkouts)&&value.checkouts.length===0&&!value.phoneSourceRecovery&&incoming.checkoutId===''&&
+       !incoming.submission&&!incoming.copyRequestId&&!incoming.copyStatus&&latest.current.can('projects.development.prepare')){
+      if(!touched.current&&incoming.goal===''&&deliveryFields.every(key=>incoming[key]===''))
+        firstFilesPreparation.current={intent:openLocalFiles,viewHandle:value.viewHandle};
+      else if(copyIdentity(value.viewHandle)&&typeof incoming.goal==='string'&&incoming.goal.trim()&&
+         draft.current.goal===incoming.goal&&draft.current.checkoutId==='')
+        setLocalFilesDraftNotice({viewHandle:value.viewHandle,window:ownerWindow()});
+    }
     },staticVisit?failure=>staticVisit.finish(failureText(failure)):undefined,scopedOwner);
     return openLocalFiles?reading.finally(()=>latest.current.onLocalFilesIntentHandled?.(openLocalFiles)):reading;
   };
@@ -686,7 +691,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const retire = () => {
       generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null; firstFilesPreparation.current=null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null; previewOpen.current=false; retainedOriginalOpen.current=false; activeRetainedVisit.current=null;
-      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); }
+      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); setLocalFilesDraftNotice(null); }
       const closeHere=original===staticFilesPage.current?bridge.command:latest.current.run;
       staticFilesPage.current='';
       if (original) void closeHere('projects.development.close', { viewHandle: original }).catch(() => {});
@@ -1654,6 +1659,11 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     </header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {importEditorNotice && <p className="pw-local-inline-notice" role="status">{importEditorNotice}</p>}
+    {active&&view&&localFilesDraftNotice&&localFilesDraftNotice.viewHandle===view.viewHandle&&handle.current===view.viewHandle&&
+      localFilesDraftNotice.window===ownerWindow()&&goal===view.draft?.goal&&!checkout&&!available.length&&!copyResult&&!review&&!pending&&
+      can('projects.development.prepare')&&canEditImportedCheckout(can)&&<p className="pw-local-inline-notice" role="status">
+      原工作草稿仍保留，未打开文件。先选择「准备这个项目的私人副本」，再用「编辑这份副本的文件」。
+    </p>}
     {buildCopyMissing&&<p className="pw-local-inline-notice" role="status">原构建所用的私人副本暂不可用，没有打开替代副本。</p>}
     {heldLock?.state==='saved'&&heldLock.saved===true&&<p className="pw-field-hint" role="status">已补入并回读这份锁文件。准备依赖和构建仍要分别确认。</p>}
     {heldLock&&['unknown','not_written'].includes(heldLock.state)&&<div className="pw-root-lock-intake">
