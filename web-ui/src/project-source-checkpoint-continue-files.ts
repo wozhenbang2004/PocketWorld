@@ -13,14 +13,14 @@ export const checkpointHandle = (value: unknown): value is string => typeof valu
   /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
-type Origin = Readonly<{ scope: Scope; before: Version; selected: Version }>;
+type Origin = Readonly<{ scope: Scope; before: Version | null; selected: Version }>;
 type Resume = Readonly<{ visitId: string; shelfHandle: string; scope: Scope; comparison: Comparison | null }>;
 type Arrival = Readonly<{
   viewHandle: string; transferHandle: string; projectId: string; checkoutId: string;
   previousFilesHandle: string; filesHandle: string; listing: Data;
 }>;
 export type CheckpointSiblingFiles = Arrival & Readonly<{ side: 'sibling'; original: Origin }>;
-export type ReturnedCheckpointFiles = Arrival & Readonly<{ side: 'original'; resume: Resume | null }>;
+export type ReturnedCheckpointFiles = Arrival & Readonly<{ side: 'original'; fromComparison: boolean; resume: Resume | null }>;
 export type CheckpointFilesArrival = CheckpointSiblingFiles | ReturnedCheckpointFiles;
 
 /** These are only native renderer receipts. A Project owner must still accept
@@ -50,16 +50,18 @@ export async function returnCheckpointFiles(sibling: CheckpointSiblingFiles): Pr
   if ((raw.status === 'STOCK_CLOSE' || raw.status === 'ORIGINAL_UNAVAILABLE') && raw.filesHandle === filesHandle) return null;
   if (raw.status !== 'FILES' || !Object.hasOwn(raw, 'resume')) throw Error();
   const arrival = exactArrival(raw, viewHandle, filesHandle, original.scope.projectId, original.scope.checkoutId);
-  if (raw.resume === null) return { ...arrival, side: 'original', resume: null };
+  const returned = { ...arrival, side: 'original' as const, fromComparison: original.before !== null };
+  if (raw.resume === null) return { ...returned, resume: null };
+  const { scope, before, selected } = original;
+  if (!before) throw Error();
   const r = checkpointWire(raw.resume), s = checkpointWire(r.scope);
   if (r.opened !== true || r.viewHandle !== viewHandle || r.filesHandle !== arrival.filesHandle || !checkpointHandle(r.visitId) ||
       !checkpointHandle(r.shelfHandle) || s.projectId !== arrival.projectId || s.checkoutId !== arrival.checkoutId ||
       s.projectName !== original.scope.projectName || !Object.hasOwn(r, 'comparison')) throw Error();
-  const { scope, before, selected } = original;
   let comparison: Comparison | null = null;
   if (r.comparison !== null) {
     try { comparison = checkedCheckpointComparison(scope, before, selected, { ...checkpointWire(r.comparison), scope } as Comparison); }
     catch { /* The actual A Files is still known; its comparison isn't. */ }
   }
-  return { ...arrival, side: 'original', resume: { visitId: r.visitId, shelfHandle: r.shelfHandle, scope, comparison } };
+  return { ...returned, resume: { visitId: r.visitId, shelfHandle: r.shelfHandle, scope, comparison } };
 }

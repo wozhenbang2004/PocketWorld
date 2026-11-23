@@ -2,7 +2,8 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
 import { checkedCheckpointComparison, recoveryHere, sameVersion, type Catalog, type Comparison, type PendingCheckpointReview,
   type ProjectSourceCheckpointVisit, type Recovery, type Review, type Save, type Scope, type Version } from './ProjectSourceCheckpointScreen';
-import { targetFor, type Observation, type Published, type Review as ContinueReview, type SourceCheckpointContinuation, type Target }
+import { comparisonBase, selectedVersion, singleSelection, targetFor, type CheckpointContinuationSource,
+  type Observation, type Published, type Review as ContinueReview, type SourceCheckpointContinuation, type Target }
   from './ProjectSourceCheckpointContinue';
 import { checkedSiblingFiles, checkpointContinuePrefix, hasCheckpointContinue, type CheckpointContinueAction,
   type CheckpointSiblingFiles, type ReturnedCheckpointFiles } from './project-source-checkpoint-continue-files';
@@ -115,16 +116,20 @@ export function useSourceCheckpointFiles() {
     let pendingReview: { catalogId: string; value: PendingCheckpointReview } | undefined;
     let consumed = false;
     let recovery = v.recovery;
-    type Selected = { catalog: Catalog; catalogId: string; id: string; comparison: Comparison };
-    let compared: Selected | undefined;
+    type Selected = { catalog: Catalog; catalogId: string; id: string; source: CheckpointContinuationSource };
+    let admitted: Selected | undefined, selectionEpoch = 0;
     let continuationReview: { selection: Selected; offered: ContinueReview } | undefined;
     type Attempt = { id: string; target: Target; selection: Selected; checked?: true };
     let attempt: Attempt | undefined;
     let publication: { value: Observation; id: string; selection: Selected } | undefined;
     const current = () => livePin(v, pin);
+    const clearSelection = () => {
+      admitted = undefined; continuationReview = undefined; attempt = undefined; publication = undefined;
+      return ++selectionEpoch;
+    };
     const call = async (action: Exclude<Action, 'open' | 'close'>, extra: Data = {}) => {
       if (!current()) throw Error();
-      compared = undefined; continuationReview = undefined; attempt = undefined; publication = undefined;
+      clearSelection();
       const val = data(await bridge.command(prefix + action, { ...held, ...extra }));
       if (!current() || !samePin(pin, val)) throw Error();
       return val;
@@ -154,18 +159,19 @@ export function useSourceCheckpointFiles() {
       a.manifestIdentity === b.manifestIdentity && a.archiveSha256 === b.archiveSha256 && a.filteredSourceDigest === b.filteredSourceDigest;
     const handoff = v.source.handoff;
     const mayContinue = () => current() && hasCheckpointContinue() && handoff?.clean() === true && !review && !recovery && !pendingReview;
-    const selected = (list: Catalog, result: Comparison) => mayContinue() && compared && catalog && compared.catalog === list &&
-      compared.comparison === result && catalog.id === compared.catalogId && catalog.value === list ? compared : undefined;
-    const continuationWire = (s: Selected) => ({ ...held, catalogId: s.catalogId, comparisonId: s.id });
+    const selected = (list: Catalog, source: CheckpointContinuationSource) => mayContinue() && admitted && catalog && admitted.catalog === list &&
+      admitted.source === source && catalog.id === admitted.catalogId && catalog.value === list ? admitted : undefined;
+    const ticketField = (s: Selected) => singleSelection(s.source) ? 'selectionId' : 'comparisonId';
+    const continuationWire = (s: Selected) => ({ ...held, catalogId: s.catalogId, [ticketField(s)]: s.id });
     const continueCall = async (s: Selected, action: Exclude<CheckpointContinueAction, 'openFiles' | 'returnFiles'>, extra: Data = {}) => {
-      if (v.moving || selected(s.catalog, s.comparison) !== s) throw Error();
+      if (v.moving || selected(s.catalog, s.source) !== s) throw Error();
       const val = data(await bridge.command(checkpointContinuePrefix + action, { ...continuationWire(s), ...extra }));
-      if (selected(s.catalog, s.comparison) !== s || !samePin(pin, val) || val.catalogId !== s.catalogId || val.comparisonId !== s.id) throw Error();
+      if (selected(s.catalog, s.source) !== s || !samePin(pin, val) || val.catalogId !== s.catalogId || val[ticketField(s)] !== s.id) throw Error();
       return val;
     };
     const observation = (s: Selected, raw: unknown, original?: Attempt) => {
       const row = data(raw), t = row.target as Target | undefined, state = row.state;
-      if (!targetFor(s.comparison.after, t) || original && (!sameTarget(original.target, t) || row.attemptId !== original.id) ||
+      if (!targetFor(selectedVersion(s.source), t) || original && (!sameTarget(original.target, t) || row.attemptId !== original.id) ||
           (state !== 'PUBLISHED' && state !== 'UNCONFIRMED' && state !== 'NOT_OBSERVED' && state !== 'CAPACITY') ||
           (row.attemptId !== null && !uuid(row.attemptId)) || (state === 'PUBLISHED' ? !uuid(row.publicationHandle) : row.publicationHandle !== null)) throw Error();
       const value: Observation = { scope, state, target: t };
@@ -175,13 +181,13 @@ export function useSourceCheckpointFiles() {
       publication = item.publicationId === null ? undefined : { value: item.value, id: item.publicationId, selection: s };
       return item.value;
     };
-    const activeAttempt = (list: Catalog, result: Comparison, target: Target) =>
-      attempt && !attempt.checked && selected(list, result) === attempt.selection && sameTarget(attempt.target, target) ? attempt : undefined;
+    const activeAttempt = (list: Catalog, source: CheckpointContinuationSource, target: Target) =>
+      attempt && !attempt.checked && selected(list, source) === attempt.selection && sameTarget(attempt.target, target) ? attempt : undefined;
     const canOpenSibling = (place: Scope, observed: Published) => !!handoff && !v.moving && place === scope && !!publication &&
-      publication.value === observed && selected(publication.selection.catalog, publication.selection.comparison) === publication.selection && handoff.clean();
+      publication.value === observed && selected(publication.selection.catalog, publication.selection.source) === publication.selection && handoff.clean();
     const continuation: SourceCheckpointContinuation | undefined = handoff && hasCheckpointContinue() ? {
       scope,
-      comparisonId: (list, result) => selected(list, result)?.id,
+      selectionId: (list, source) => selected(list, source)?.id,
       async review(list, result) {
         const selection = selected(list, result);
         if (!selection || continuationReview) throw Error();
@@ -189,7 +195,7 @@ export function useSourceCheckpointFiles() {
         const reply = await continueCall(selection, 'review');
         const received = observation(selection, reply.observed), row = data(reply.review), chosen = row.selected as Version | undefined;
         if (received.value.state === 'NOT_OBSERVED') {
-          const { after } = selection.comparison, target = row.target as Target | undefined;
+          const after = selectedVersion(selection.source), target = row.target as Target | undefined;
           if (received.attemptId !== null || !uuid(row.id) || !chosen || !sameVersion(after, chosen) ||
               !targetFor(after, target) || !sameTarget(received.value.target, target)) throw Error();
           const offered: ContinueReview = { scope, selected: after, id: row.id, target };
@@ -236,8 +242,9 @@ export function useSourceCheckpointFiles() {
           try {
             const reply = data(await bridge.command(checkpointContinuePrefix + 'openFiles',
               { ...continuationWire(original.selection), publicationHandle: original.id }));
-            const { before, after } = original.selection.comparison;
-            const arrival = checkedSiblingFiles(reply, pin.viewHandle, pin.filesHandle, observed.target.checkoutId, { scope, before, selected: after });
+            const source = original.selection.source;
+            const arrival = checkedSiblingFiles(reply, pin.viewHandle, pin.filesHandle, observed.target.checkoutId,
+              { scope, before: comparisonBase(source), selected: selectedVersion(source) });
             if (!liveSource(v) || v.revoked || v.moving !== 'opening' || !handoff.clean() ||
                 !handoff.adopt(arrival, () => finish(v, false))) throw Error();
           } catch (failure) {
@@ -251,10 +258,23 @@ export function useSourceCheckpointFiles() {
         },
       } : undefined,
     } : undefined;
+    const supportsSelect = () => bridge.getState().capabilities.commands.includes(checkpointContinuePrefix + 'select');
+    const canSelect = () => mayContinue() && !v.moving && supportsSelect();
     return {
       scope, recovery: v.recovery ?? null, isCurrent: current, canReviewSavedSource: () => current() && !recovery && !review && !pendingReview,
       onRetired(listener) { v.listeners.add(listener); return () => { v.listeners.delete(listener); }; },
       continuation,
+      selectForContinue: continuation && supportsSelect() ? async (value, row) => {
+        if (value.pending || !canSelect() || continuationReview) throw Error();
+        const id = shown(value, row), epoch = clearSelection();
+        const val = data(await bridge.command(checkpointContinuePrefix + 'select', { ...held, catalogId: id, version: versionPin(row) }));
+        const verified = val.version as Version | undefined;
+        if (selectionEpoch !== epoch || !canSelect() || !samePin(pin, val) || val.catalogId !== id || !uuid(val.selectionId) ||
+            val.verified !== true || !verified || !sameVersion(row, verified) || !catalog || catalog.value !== value || catalog.id !== id) throw Error();
+        const source = { kind: 'single', version: row } as const;
+        admitted = { catalog: value, catalogId: id, id: val.selectionId, source };
+        return source;
+      } : undefined,
       pending: supportsPending() ? {
         canReview: canReviewPending,
         async review(value) {
@@ -337,10 +357,11 @@ export function useSourceCheckpointFiles() {
       async compareSaved(value, before, after) {
         const id = shown(value, before); shown(value, after);
         if (before.checkpointId === after.checkpointId) throw Error();
-        const val = await call('compare', { catalogId: id, before: versionPin(before), after: versionPin(after) });
+        const read = call('compare', { catalogId: id, before: versionPin(before), after: versionPin(after) }), epoch = selectionEpoch;
+        const val = await read;
         const result = checkedCheckpointComparison(scope, before, after, { scope, before: val.before, after: val.after, paths: val.paths } as Comparison);
-        if (continuation && !value.pending && !recovery && uuid(val.comparisonId) && catalog?.value === value && catalog.id === id)
-          compared = { catalog: value, catalogId: id, id: val.comparisonId, comparison: result };
+        if (continuation && selectionEpoch === epoch && !value.pending && !recovery && uuid(val.comparisonId) && catalog?.value === value && catalog.id === id)
+          admitted = { catalog: value, catalogId: id, id: val.comparisonId, source: result };
         return result;
       },
     };

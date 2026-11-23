@@ -23,17 +23,24 @@ type Json=Record<string,any>;
 type Position={index:number;offset:number;anchor:string;revision?:number};
 type DetachedPlace={scope:string;messageId:string;sourceRevision:number;offset:number};
 type LoadedFileIndex={identity:string;top:number};
+type SearchFileHeader={id:string;sha256:string;name:string;mimeType:string;size:number};
+type SearchFilesOrigin={identity:string;window:number;requestId:string;messageId:string;revision:number;result:TaskResult};
+type SearchFilesPanel={origin:SearchFilesOrigin;loading?:boolean;limited?:boolean;offer?:string;files?:SearchFileHeader[];error?:string};
+const searchFileFormats=new Set(['text/plain','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document']);
+const searchFileHeader=(file:Json):file is SearchFileHeader=>typeof file?.id==='string'&&file.id.length===36&&
+ typeof file.sha256==='string'&&/^[0-9a-f]{64}$/.test(file.sha256)&&typeof file.name==='string'&&!!file.name&&file.name.length<=160&&
+ searchFileFormats.has(file.mimeType)&&Number.isSafeInteger(file.size)&&file.size>0;
 const readerScope=(page:Json|null|undefined)=>page?JSON.stringify([bridge.getDocumentEpoch(),page.window,page.conversation]):'';
 const exactRow=(page:Json|null|undefined,id:string,revision?:number):Json|null=>{
  const matches=Array.isArray(page?.messages)?page.messages.filter((row:Json)=>row.id===id):[];
  return matches.length===1&&(revision===undefined||matches[0].sourceRevision===revision)?matches[0]:null;
 };
 const readyPage=(page:Json|null|undefined):page is Json=>!!page&&!page.loading&&!page.error&&!page.limited;
-const loadedFileResult=(row:Json|null)=>{
+const loadedFileResult=(row:Json|null,searchAnchor=false)=>{
  const result=messageTaskResult(row);
  return row?.role==='assistant'&&typeof row.id==='string'&&!!row.id&&Number.isSafeInteger(row.sourceRevision)&&
   row.sourceRevision>0&&!row.phoneResult&&!row.originalHostFinal&&!row.hostGoalTaskId&&
-  result?.kind==='owner_work'&&result.status==='completed'&&result.noticeKind===null?result:null;
+  result?.kind==='owner_work'&&(result.status==='completed'||searchAnchor&&result.status==='needs_confirmation')&&result.noticeKind===null?result:null;
 };
 const loadedFileReplyLabel=(row:Json,result:TaskResult)=>{
  const stamp=new Date(result.endedAt);
@@ -54,10 +61,12 @@ export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversatio
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
 type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
  onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void;
- onSearchReturn?:(windowId:number)=>void;searchReturnToChatWindow?:number;workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
+ onSearchReturn?:(windowId:number)=>void;searchReturnToChatWindow?:number;
+ registerSearchFileReturn?:(handler:((windowId:string)=>boolean)|null)=>void;
+ workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,workReportWindow,onWorkReportReturn}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,registerSearchFileReturn,workReportWindow,onWorkReportReturn}:Props){
  const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const workReportOnly=workReportWindow!==undefined&&workReportWindow===shown.window&&typeof shown.originalReportMessageId==='string';
@@ -170,6 +179,98 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    composer.key!=='conversation:'+reader.conversation||composer.key!==activeDraft.key||composer.epoch!==activeDraft.epoch)return '';
   return JSON.stringify([scope,view.resumeRevision,owner.traceSourceRevision,composer.key,composer.epoch]);
  };
+ const [searchFiles,setSearchFiles]=useState<SearchFilesPanel|null>(null);
+ const searchFileRequest=useRef<SearchFilesPanel|null>(null);
+ const searchFileReturn=useRef<{origin:SearchFilesOrigin;trigger:HTMLButtonElement;windowId?:string}|null>(null);
+ const [openingFile,setOpeningFile]=useState<{identity:string;id:string}|null>(null);
+ const searchFilesOrigin=():SearchFilesOrigin|null=>{
+  const native=bridge.getState(),owner=native.state,reader=owner.conversationReader,current=live.current;
+  const anchor=current?.searchAnchor,observed=reader?.searchAnchor,composer=native.composer,phone=native.phoneDraft as Json|undefined,view=native.view as Json|undefined;
+  if(document.hidden||!searchOnly||workOverlay||!anchor||!observed||!activeDraft||
+     !readyPage(current)||!readyPage(reader)||readerScope(current)!==scope||readerScope(reader)!==scope||
+     current.window!==reader.window||!Number.isSafeInteger(reader.window)||reader.window<1||
+     anchor.requestId!==observed.requestId||typeof anchor.requestId!=='string'||anchor.requestId.length!==36||
+     anchor.messageId!==observed.messageId||typeof anchor.messageId!=='string'||anchor.revision!==observed.revision||
+     !Number.isSafeInteger(anchor.revision)||anchor.revision<1||reader.conversation!==owner.conversationId||
+     reader.conversation!==activeDraft.conversation||view?.section!==null||view.taskId!==null||
+     !Number.isSafeInteger(view.resumeRevision)||!Number.isSafeInteger(owner.traceSourceRevision)||
+     owner.filePath!==null||owner.queuedInputsPage!==null||owner.chatAttachmentPickerOpen!==false||
+     phone?.phone!==false||phone.channelOrigin!==false||composer?.ready!==true||
+     composer.key!=='conversation:'+reader.conversation||composer.key!==activeDraft.key||composer.epoch!==activeDraft.epoch||
+     !available('conversation.reader.searchFiles')||!available('conversation.reader.openSearchFile'))return null;
+  const result=loadedFileResult(exactRow(reader,anchor.messageId,anchor.revision),true);
+  const rendered=loadedFileResult(exactRow(current,anchor.messageId,anchor.revision),true);
+  if(!result||!rendered||result.taskId!==rendered.taskId||result.runId!==rendered.runId||
+     result.epoch!==rendered.epoch||result.deliveryId!==rendered.deliveryId||
+     result.status!==rendered.status||result.endedAt!==rendered.endedAt)return null;
+  return {window:reader.window,requestId:anchor.requestId,messageId:anchor.messageId,revision:anchor.revision,result,
+   identity:JSON.stringify([scope,anchor.requestId,anchor.messageId,anchor.revision,view.resumeRevision,owner.traceSourceRevision,
+    composer.key,composer.epoch,result.taskId,result.runId,result.epoch,result.deliveryId,result.status,result.endedAt])};
+ };
+ const searchOrigin=searchFilesOrigin(),visibleSearchFiles=searchOrigin&&searchFiles?.origin.identity===searchOrigin.identity?searchFiles:null;
+ const openingSearchFile=openingFile?.identity===searchOrigin?.identity?openingFile?.id:'';
+ useEffect(()=>{
+  if(searchFiles&&searchFiles.origin.identity!==searchOrigin?.identity){
+   if(searchFileRequest.current?.origin.identity===searchFiles.origin.identity)searchFileRequest.current=null;
+   setSearchFiles(null);
+  }
+ },[searchFiles,searchOrigin?.identity]);
+ const searchArgs=({window,requestId,messageId,revision}:SearchFilesOrigin)=>({window,requestId,messageId,revision});
+ const listSearchFiles=async(origin:SearchFilesOrigin,trigger:HTMLButtonElement)=>{
+  if(searchFileRequest.current||searchFileReturn.current||sending.current||searchFilesOrigin()?.identity!==origin.identity||
+     !trigger.isConnected||!scroll.current?.contains(trigger)||bridge.getState().state.attachmentWorkspace?.open!==false)return;
+  if(visibleSearchFiles&&!visibleSearchFiles.error){setSearchFiles(null);return;}
+  const panel={origin,loading:true};
+  searchFileRequest.current=panel;setSearchFiles(panel);
+  const current=()=>searchFileRequest.current===panel&&searchFilesOrigin()?.identity===origin.identity;
+  try{
+   const listed=await bridge.command<Json>('conversation.reader.searchFiles',searchArgs(origin));
+   if(!current())return;
+   if(listed?.readOnly!==true||listed.window!==origin.window||listed.requestId!==origin.requestId||
+      listed.messageId!==origin.messageId||listed.revision!==origin.revision||listed.taskId!==origin.result.taskId||
+      listed.runId!==origin.result.runId||listed.epoch!==origin.result.epoch||listed.deliveryId!==origin.result.deliveryId||
+      listed.publicationStatus!==origin.result.status||listed.endedAt!==origin.result.endedAt||
+      typeof listed.limited!=='boolean'||!Array.isArray(listed.files)||listed.files.length>8||!listed.files.every(searchFileHeader)||
+      new Set(listed.files.map((file:SearchFileHeader)=>file.id)).size!==listed.files.length||
+      listed.files.length>0&&(typeof listed.offer!=='string'||listed.offer.length!==36))
+    throw new Error('未核对到这轮原文件的清单。');
+   setSearchFiles({origin,files:listed.files,offer:listed.offer,limited:listed.limited});
+  }catch(failure){
+   if(current())setSearchFiles({origin,error:failure instanceof Error?failure.message:'暂不能核对这轮的原文件。'});
+  }finally{if(searchFileRequest.current===panel)searchFileRequest.current=null;}
+ };
+ const openSearchFile=async(panel:SearchFilesPanel,file:SearchFileHeader,trigger:HTMLButtonElement)=>{
+  if(searchFileReturn.current||!panel.offer||!panel.files?.includes(file)||!trigger.isConnected||!scroll.current?.contains(trigger)||
+     searchFilesOrigin()?.identity!==panel.origin.identity||bridge.getState().state.attachmentWorkspace?.open!==false)return;
+  const opened:{origin:SearchFilesOrigin;trigger:HTMLButtonElement;windowId?:string}={origin:panel.origin,trigger};
+  const pendingFile={identity:panel.origin.identity,id:file.id};
+  searchFileReturn.current=opened;setOpeningFile(pendingFile);
+  try{
+   const value=await bridge.command<Json>('conversation.reader.openSearchFile',{...searchArgs(panel.origin),offer:panel.offer,fileId:file.id,sha256:file.sha256});
+   if(value?.opened!==true||value.readOnly!==true||typeof value.windowId!=='string'||!value.windowId)
+    throw new Error('没有确认打开所选原文件。');
+   if(searchFileReturn.current===opened)opened.windowId=value.windowId;
+  }catch(failure){
+   if(searchFileReturn.current===opened)searchFileReturn.current=null;
+   if(searchFilesOrigin()?.identity===panel.origin.identity)setSearchFiles({...panel,
+    error:failure instanceof Error?failure.message:'所选原文件暂不能打开。'});
+  }finally{setOpeningFile(value=>value===pendingFile?null:value);}
+ };
+ useEffect(()=>{
+  registerSearchFileReturn?.(windowId=>{
+   const opened=searchFileReturn.current;
+   if(!opened||opened.windowId!==windowId)return false;
+   searchFileReturn.current=null;
+   if(!opened.trigger.isConnected||bridge.getState().state.attachmentWorkspace?.open!==false||
+      searchFilesOrigin()?.identity!==opened.origin.identity)return false;
+   opened.trigger.focus({preventScroll:true});return true;
+  });
+  return ()=>registerSearchFileReturn?.(null);
+ });
+ useEffect(()=>{
+  if(searchFileReturn.current?.origin.identity!==searchOrigin?.identity)searchFileReturn.current=null;
+ },[searchOrigin?.identity]);
+
  const indexIdentity=fileIndexIdentity(), shownFileIndex=fileIndex?.identity===indexIdentity?fileIndex:null;
  const indexedReplies=indexIdentity?rows.flatMap(message=>{
   const result=loadedFileResult(message);
@@ -581,6 +682,24 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
     {inputNotice?.error&&inputNotice.window===shown.window&&inputNotice.messageId===message.id&&<p className="pw-input-work-error" role="status">{inputNotice.error}</p>}
     {quoteProblem?.scope===scope&&quoteProblem.messageId===message.id&&<p className="pw-input-work-error" role="status">原消息或草稿已变化，这次没有关联。</p>}
     {readingFiles?.error&&<p className="pw-input-work-error" role="status">{readingFiles.error}</p>}
+    {searchOrigin&&searchOrigin.messageId===message.id&&searchOrigin.revision===message.sourceRevision&&<section aria-label="这轮已保存的文件">
+     <Button variant="ghost" size="small" leadingIcon={IconFolder} aria-expanded={!!visibleSearchFiles}
+      aria-busy={visibleSearchFiles?.loading||undefined} disabled={pending||!!visibleSearchFiles?.loading||!!openingSearchFile}
+      onClick={event=>void listSearchFiles(searchOrigin,event.currentTarget)}>{visibleSearchFiles?.loading?'正在核对本轮文件…':
+       visibleSearchFiles?.error?'重新核对本轮文件':visibleSearchFiles?'收起本轮文件':'查看本轮文件'}</Button>
+     {visibleSearchFiles?.error&&<p className="pw-input-work-error" role="status">{visibleSearchFiles.error}</p>}
+     {visibleSearchFiles&&!visibleSearchFiles.loading&&Array.isArray(visibleSearchFiles.files)&&<>
+      {visibleSearchFiles.files.length>0&&searchOrigin.result.status==='needs_confirmation'&&
+       <p className="pw-muted">原交付时待验收。所列文件已保存，仅供只读核对。</p>}
+      <p className="pw-muted">{visibleSearchFiles.limited?'只列出本次核对到的 TXT、PDF 和 Word 文件。':'只查看这轮保存的 TXT、PDF 和 Word 原件。'}</p>
+      {visibleSearchFiles.files.length>0?<div className="pw-outcome-files">{visibleSearchFiles.files.map(file=>
+       <Button key={file.id} variant="ghost" className="pw-outcome-file" disabled={!!openingSearchFile||!!visibleSearchFiles.error}
+        aria-busy={openingSearchFile===file.id||undefined}
+        onClick={event=>void openSearchFile(visibleSearchFiles,file,event.currentTarget)}>
+        <span className="pw-outcome-file-copy"><bdi>{file.name}</bdi><small>{attachmentFileFormat(file.mimeType).label} · {fileBytes(file.size)} · 查看原件</small></span>
+       </Button>)}</div>:<p className="pw-muted" role="status">本次未核对到可列出的原文件，没有换用其他成果。</p>}
+     </>}
+    </section>}
    </article>})}
    {!shown.loading&&!shown.error&&!rows.length&&<p className="pw-muted">当前窗口未读到可显示的消息。</p>}
   </div>

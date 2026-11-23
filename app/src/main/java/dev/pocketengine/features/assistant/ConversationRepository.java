@@ -116,11 +116,16 @@ public final class ConversationRepository {
         message.put("nativeContext",new JSONObject(context.toString()));saveSource(state);saveMessage(conversation,message);
     }
 
-    private record OriginalOwnerWorkDelivery(String conversation,String task,String run,int epoch,String delivery,String digest){}
+    private record OriginalOwnerWorkDelivery(String conversation,String task,String run,int epoch,String delivery,String digest,
+                                             String generation,String fingerprint,String status,long endedAt){}
     /** One canonical native saved delivery, checked by the same bounded metadata and source proof, not a message-body read. */
     public void requireOriginalOwnerWorkDelivery(String conversation,String message,long revision,String task,String run,int epoch,
                                                 String delivery,String digest)throws Exception{
-        requireDerivedMessageCurrent(message,revision,new OriginalOwnerWorkDelivery(conversation,task,run,epoch,delivery,digest));
+        requireOriginalOwnerWorkDelivery(conversation,message,revision,task,run,epoch,delivery,digest,null,null,null,0);
+    }
+    public void requireOriginalOwnerWorkDelivery(String conversation,String message,long revision,String task,String run,int epoch,
+                                                String delivery,String digest,String generation,String fingerprint,String status,long endedAt)throws Exception{
+        requireDerivedMessageCurrent(message,revision,new OriginalOwnerWorkDelivery(conversation,task,run,epoch,delivery,digest,generation,fingerprint,status,endedAt));
     }
     /** Lock-free, body-free dependency validation. The original run source facts may point
      * to older saved replies; bounded recursion follows that native DAG, never arbitrary JSON. */
@@ -142,7 +147,12 @@ public final class ConversationRepository {
                     ||!sourceId.equals(nativeMessage.opt("id"))||!expected.conversation().equals(conversation)
                     ||!conversation.equals(nativeMessage.opt("conversationId"))||!expected.task().equals(state.opt("nativeTaskId"))
                     ||!expected.run().equals(state.opt("nativeRunId"))||expected.epoch()!=state.optInt("nativeEpoch")
-                    ||!expected.delivery().equals(state.opt("nativeReplyId"))||!expected.digest().equals(state.opt("nativeReplyDigest"))))
+                    ||!expected.delivery().equals(state.opt("nativeReplyId"))||!expected.digest().equals(state.opt("nativeReplyDigest"))
+                    ||expected.generation()!=null&&!expected.generation().equals(gen)
+                    ||expected.fingerprint()!=null&&!expected.fingerprint().equals(fingerprint)
+                    ||expected.status()!=null&&(!expected.status().equals(state.opt("nativeStatus"))
+                    ||!expected.status().equals(nativeMessage.opt("nativeStatus"))||!expected.status().equals(nativeMessage.opt("status"))
+                    ||expected.endedAt()!=dev.pocketengine.features.attachments.OriginalReplyDocument.integer(nativeMessage.opt("taskEndedAt")))))
                 throw new SourceUnavailable("这条消息不是所选原工作发布");
             if("assistant".equals(role)){
                 JSONObject context=state.optJSONObject("nativeContext");

@@ -73,7 +73,7 @@ type MemoryOpenPin = { kind: 'answer'; revision: number; conversation: string; o
   | { kind: 'receipt'; revision: number; feedback: MemoryFeedback };
 type AvatarPicker = { id: string; editor: number };
 type AvatarPoll = { sequence: number; key: string | undefined; visibility: number; picker: AvatarPicker };
-const labels: Record<View, string> = { home: '我与管家', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '记忆设置', 'memory-history': '过去的记忆' };
+const labels: Record<View, string> = { home: '我与管家', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '全局记忆设置', 'memory-history': '过去的记忆' };
 const languageOptions = [{ id: 'auto', label: '跟随对话' }, { id: 'zh-CN', label: '中文' }, { id: 'en', label: 'English' }, { id: 'ja', label: '日本語' }];
 const detailOptions = [{ id: 'concise', label: '简短' }, { id: 'standard', label: '跟随问题' }, { id: 'detailed', label: '详细' }];
 const paceOptions = [{ id: 'fast', label: '高效' }, { id: 'standard', label: '均衡' }, { id: 'careful', label: '细致' }];
@@ -908,7 +908,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         if (result.saved !== true || result.persisted !== true || !controls || controls[kind].enabled !== enabled || controls[kind].revision !== original[kind].revision + 1) throw new Error('设置保存回执尚未确认。');
         if (!alive.current) return;
         setPolicy(controls); setControlsError('');
-        setNotice(kind === 'reading' ? enabled ? '已开启，后续私人回答会按相关性参考个人记忆' : '已暂停参考个人记忆，保存的内容仍可查看和编辑' : enabled ? '已开启，后续对话可整理出待确认的个人记忆' : '已暂停从对话整理新候选');
+        setNotice(kind === 'reading'
+          ? enabled ? '全局已允许参考已保存的记忆。已暂停的对话仍保持暂停。' : '全局已暂停参考已保存的记忆。保存的内容仍可查看和编辑。'
+          : enabled ? '全局已允许整理待确认候选。各对话的暂停和原话排除设置不变。' : '全局已暂停整理新的记忆候选。');
       } catch (failure) {
         try { await readControls(); } catch { if (alive.current) setControlsError('请重新读取记忆设置后继续。'); }
         throw new Error((failure instanceof Error ? failure.message : '设置保存结果待核对。') + ' 已尝试核对当前状态，没有重复保存。');
@@ -1409,7 +1411,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const headerSave = editor ? <Button className="pw-profile-save" size="small" disabled={locked || avatarPicking || !profileDirty(editor) || profileConflict || pendingSavedRead || !canSave} onClick={saveProfile}>{pending === '正在保存' ? '保存中' : '保存'}</Button>
     : view === 'memory-new' ? <Button className="pw-profile-save" size="small" disabled={locked || createUnknown || !newMemoryText.trim() || newMemoryExpiry === 'custom' && (!newMemoryCalendar || !validCalendarTime(newMemoryCalendar)) || settingsRequiredFor(feedback, 'create', undefined, newMemoryText.trim()) || !supported('profile.memory.createReview') || !supported('profile.memory.confirm')} onClick={saveNewMemory}>{pending === '正在保存记忆' ? '保存中' : newMemoryExpiry === 'custom' ? '核对' : '保存'}</Button>
       : view === 'memory' && selection && !selection.candidate && !selection.historical ? <Button className="pw-profile-save" size="small" disabled={locked || !memoryDirty(selection) || !selection.draft.trim() || memoryConflict || memoryUnknown || settingsRequiredFor(feedback, 'correct', selection.id, selection.draft.trim()) || !supported('profile.memory.confirm')} onClick={saveMemory}>{pending === '正在保存记忆' ? '保存中' : '保存'}</Button>
-        : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label="记忆设置" title="记忆设置" disabled={locked} onClick={openMemorySettings} />
+        : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label={labels['memory-settings']} title={labels['memory-settings']} disabled={locked} onClick={openMemorySettings} />
           : view === 'home' ? <IconButton icon={IconSettings} aria-label="隐私与数据设置" title="隐私与数据" onClick={() => guarded(onSettings)} /> : <span />;
   const entry = (id: string, title: string, description: string, icon: typeof IconChat, open: () => void, badge?: ReactNode) => <Button variant="ghost" className="pw-profile-entry" leadingIcon={icon} trailingIcon={IconChevronRight} onClick={open} disabled={!loaded || locked} data-profile-entry={id}><span className="pw-profile-entry-copy"><strong>{title}</strong><small>{description}</small></span>{badge}</Button>;
   const memoryRow = (row: Data, candidate: boolean) => {
@@ -1538,10 +1540,10 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           <Button variant="ghost" className="pw-profile-inline-link" trailingIcon={IconChevronRight} disabled={locked || createUnknown} onClick={() => openEditor('communication')}>设置交流偏好</Button>
         </div>}
         {loaded && view === 'memory-settings' && <div className="pw-profile-form pw-profile-memory-controls">
-          <p className="pw-profile-intro">分别决定什么时候参考已有记忆，以及是否从对话整理新的候选。</p>
+          <p className="pw-profile-intro">这两项适用于符合条件的私人对话，不修改各对话的暂停或新原话排除设置。</p>
           {policy ? <>
-            <section className="pw-profile-switches"><StretchSwitch label="回答参考个人记忆" description="后续私人回答按相关性参考已保存内容。暂停后，记忆仍保留在这里。" checked={policy.reading.enabled} onChange={enabled => saveControl('reading', enabled)} disabled={locked || !!controlsError || !supported('profile.memory.reading')} busy={pending === '正在保存记忆设置'} /></section>
-            <section className="pw-profile-switches"><StretchSwitch label="从对话整理记忆候选" description="会使用当前模型整理近期的本人表达，可能产生模型用量。整理出的内容仍由你确认是否记住。" checked={policy.learning.enabled} onChange={enabled => saveControl('learning', enabled)} disabled={locked || !!controlsError || !supported('profile.memory.learning')} busy={pending === '正在保存记忆设置'} /></section>
+            <section className="pw-profile-switches"><StretchSwitch label="允许回答参考已保存的记忆" description="允许参考不代表每次都会用到。暂停参考不会删除已保存的记忆，也不会修改你填写的资料和偏好。" checked={policy.reading.enabled} onChange={enabled => saveControl('reading', enabled)} disabled={locked || !!controlsError || !supported('profile.memory.reading')} busy={pending === '正在保存记忆设置'} /></section>
+            <section className="pw-profile-switches"><StretchSwitch label="允许从对话整理记忆候选" description="符合条件时会使用当前模型整理近期的本人原话，可能产生模型用量。候选仍由你确认是否记住。" checked={policy.learning.enabled} onChange={enabled => saveControl('learning', enabled)} disabled={locked || !!controlsError || !supported('profile.memory.learning')} busy={pending === '正在保存记忆设置'} /></section>
             <p className="pw-profile-preference-priority">明确填写的交流与做事偏好优先于推断的记忆。项目资料在各自项目范围内管理。</p>
           </> : !locked && <p className="pw-profile-list-hint">设置尚未完整读取。</p>}
           {controlsError && <p className="pw-profile-list-hint">{controlsError}</p>}

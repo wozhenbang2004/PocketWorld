@@ -70,7 +70,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     class MarkdownDraftSeed(val viewerId: String, val source: OwnerFilePreviewSource, val fields: Fields,
         internal val decoded: JSONObject)
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
-        val rememberLibraryPdf: (() -> Boolean)?, val wordOrigin: AttachmentWordOrigin?,
+        val rememberLibraryPdf: (() -> Boolean)?, val wordOrigin: AttachmentWordOrigin?, val rememberPosition:Boolean,
         val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
         val kind = declaredKind(source)
@@ -124,12 +124,12 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     }.getOrNull()
     fun bind(source: OwnerFilePreviewSource?, compared: Pair<OwnerFilePreviewSource, OwnerFilePreviewSource>?,
         ticket: PocketWebWindowTicket, rememberLibraryPdf: (() -> Boolean)? = null,
-        wordOrigin: AttachmentWordOrigin? = null, accepts: (PocketWebWindowTicket) -> Boolean) {
+        wordOrigin: AttachmentWordOrigin? = null, rememberPosition:Boolean = true, accepts: (PocketWebWindowTicket) -> Boolean) {
         val same = primary?.source === source && comparison?.first?.source === compared?.first && comparison?.second?.source === compared?.second
         if (same) return
         clear()
-        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, accepts).also { pins[it.id] = it }
-        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, accepts), Pin(compared.second, ticket, null, null, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
+        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, rememberPosition, accepts).also { pins[it.id] = it }
+        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, rememberPosition, accepts), Pin(compared.second, ticket, null, null, rememberPosition, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
         if (pins.isNotEmpty()) main.postDelayed(watchdog, 1500)
     }
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
@@ -237,14 +237,16 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
             pin.pdfRaster = null
             val confirmed = raster.view()
             pin.information = confirmed
-            val position = preferences.edit().putInt("${pin.source.identity}.page", raster.page)
-            if (pin.rememberLibraryPdf?.invoke() == true && bookmarkFileId.matches(pin.fileId)) {
-                // Same displayed native raster acknowledgement and write as the actual page resume.
-                // Only an immutable locator, never a filename, path, file body or a new grant.
-                position.putString(LAST_LIBRARY_PDF, JSONObject().put("fileId", pin.fileId).put("sha256", pin.source.sha256)
-                    .put("identity", pin.source.identity).put("page", raster.page).toString())
+            if(pin.rememberPosition){
+                val position = preferences.edit().putInt("${pin.source.identity}.page", raster.page)
+                if (pin.rememberLibraryPdf?.invoke() == true && bookmarkFileId.matches(pin.fileId)) {
+                    // Same displayed native raster acknowledgement and write as the actual page resume.
+                    // Only an immutable locator, never a filename, path, file body or a new grant.
+                    position.putString(LAST_LIBRARY_PDF, JSONObject().put("fileId", pin.fileId).put("sha256", pin.source.sha256)
+                        .put("identity", pin.source.identity).put("page", raster.page).toString())
+                }
+                position.apply()
             }
-            position.apply()
             done(confirmed, null); changed(); return
         }
         if (pin.kind == "pdf" && command in setOf("load", "read")) pin.pdfRaster = null
@@ -287,13 +289,13 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                         "pdf" -> {
                             val pages = original.pdfPages()
                             check(pages > 0) { "原 PDF 没有可显示的页面" }
-                            val page = request.optInt("page", preferences.getInt("$identity.page", 1)).coerceIn(1, pages)
+                            val page = request.optInt("page", if(pin.rememberPosition)preferences.getInt("$identity.page", 1) else 1).coerceIn(1, pages)
                             PdfRaster(page, pages, original.pdfSearchAvailable()).also { pdfRaster = it }.view()
                         }
                         "image" -> { val image = original.image(); try { JSONObject().put("width", image.originalWidth).put("height", image.originalHeight).put("sampled", image.sampled) } finally { image.bitmap.recycle() } }
                         "audio", "video" -> { original.openMediaDescriptor().use { }; JSONObject().put("localMedia", true) }
                         "office" -> {
-                            val resume = command == "load"
+                            val resume = command == "load" && pin.rememberPosition
                             val fromExcerpt=pin.wordOrigin?.takeIf{resume&&pin.information==null}
                             val unit = fromExcerpt?.unit?: (if (resume) preferences.getInt("$identity.unit", 1) else request.optInt("unit", 1)).coerceAtLeast(1)
                             val chunk = fromExcerpt?.chunk?: if (resume) preferences.getInt("$identity.chunk", 0) else request.optInt("chunk", 0)
@@ -323,10 +325,10 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                             }
                         }
                         "text" -> {
-                            val encoding = request.optString("encoding", preferences.getString("$identity.encoding", "UTF-8") ?: "UTF-8")
-                            val offset = request.optInt("offset", preferences.getInt("$identity.offset", 0)).coerceAtLeast(0)
+                            val encoding = request.optString("encoding", if(pin.rememberPosition)preferences.getString("$identity.encoding", "UTF-8") ?: "UTF-8" else "UTF-8")
+                            val offset = request.optInt("offset", if(pin.rememberPosition)preferences.getInt("$identity.offset", 0) else 0).coerceAtLeast(0)
                             val result = original.text(encoding, offset, 12000, pin.lifetime)
-                            preferences.edit().putInt("$identity.offset", offset).putString("$identity.encoding", encoding).apply()
+                            if(pin.rememberPosition)preferences.edit().putInt("$identity.offset", offset).putString("$identity.encoding", encoding).apply()
                             result.put("encoding", encoding).put("offset", offset)
                         }
                         else -> throw IllegalStateException("此原件没有可用的内置预览")
@@ -344,7 +346,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
                 else if (error == null && command != "find" && command != "check") {
                     val raster = pdfRaster
                     if (raster != null) pin.pdfRaster = raster else pin.information = value
-                    officePosition?.let { (unit, chunk) ->
+                    officePosition?.takeIf { pin.rememberPosition }?.let { (unit, chunk) ->
                         val key = pin.source.identity
                         preferences.edit().putInt("$key.unit", unit).putInt("$key.chunk", chunk).apply()
                     }

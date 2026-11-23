@@ -18,21 +18,22 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 
-/** Issued from one native positive Compare; holds row identities, never its paths or old editor. */
+/** Issued by one exact retained read or a positive Compare; never holds paths or an old editor. */
 internal class SourceCheckpointContinueSelection(
     val viewHandle: String, val filesHandle: String, val visitId: String, val shelfHandle: String,
-    val catalogId: String, val comparisonId: String, val name: String, val local: LocalModule,
+    val catalogId: String, val selectionId: String, val name: String, val local: LocalModule,
     val files: SourceCheckpointFilesPin, val catalog: OwnerSourceCheckpoints.Catalog,
-    val before: Version, val selected: Version,
+    val before: Version?, val selected: Version,
     val current: () -> Boolean, val currentOnMain: () -> Boolean,
 ) {
+    val ticketField = if (before == null) "selectionId" else "comparisonId"
     fun bind(out: JSONObject) = out.put("viewHandle", viewHandle).put("filesHandle", filesHandle)
-        .put("visitId", visitId).put("shelfHandle", shelfHandle).put("catalogId", catalogId).put("comparisonId", comparisonId)
+        .put("visitId", visitId).put("shelfHandle", shelfHandle).put("catalogId", catalogId).put(ticketField, selectionId)
         .put("scope", JSONObject().put("projectId", files.project).put("checkoutId", files.checkout).put("projectName", name))
 }
 
-/** Disabled native dispatch only. A comparison, confirmation, registration and
- * exact Files navigation are separate actions; none is restored from renderer state. */
+/** Exact selection, confirmation, registration and Files navigation are separate
+ * native actions; none is restored from renderer state. */
 internal class PocketWebSourceCheckpointContinue(
     private val controller: PocketWorldController,
     private val shelf: PocketWebSourceCheckpoints,
@@ -40,15 +41,16 @@ internal class PocketWebSourceCheckpointContinue(
 ) {
     companion object {
         private const val PREFIX = "projects.development.files.checkpoints.continue."
+        private const val SELECT = PREFIX + "select"
         private const val REVIEW = PREFIX + "review"
         const val CONFIRM = PREFIX + "confirm"
         private const val DISMISS = PREFIX + "dismiss"
         private const val QUERY = PREFIX + "query"
         private const val OPEN = PREFIX + "openFiles"
         private const val RETURN = PREFIX + "returnFiles"
-        val COMMANDS = setOf(REVIEW, CONFIRM, DISMISS, QUERY, OPEN, RETURN)
+        val COMMANDS = setOf(SELECT, REVIEW, CONFIRM, DISMISS, QUERY, OPEN, RETURN)
         fun mayChangeOriginalWindow(action: String) = action == CONFIRM || action == OPEN || action == RETURN
-        private val base = setOf("viewHandle", "filesHandle", "visitId", "shelfHandle", "catalogId", "comparisonId")
+        private val base = setOf("viewHandle", "filesHandle", "visitId", "shelfHandle", "catalogId")
         private val uuid = Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
         private const val WAIT_MS = 120_000L
         private const val MAX_ATTEMPTS = 160 // four fixed versions for each of up to forty checkouts.
@@ -58,7 +60,7 @@ internal class PocketWebSourceCheckpointContinue(
         // uncertain affirmative request into permission to create a second time.
         private val attempted = WeakHashMap<LocalModule, MutableMap<Version, Attempt>>()
     }
-    private class Attempt(val id: String, val before: Version, val target: Target)
+    private class Attempt(val id: String, val before: Version?, val target: Target)
     private class Flight(val until: Long, val onMain: () -> Boolean, val done: (JSONObject?, String?) -> Unit,
                          val lost: String, val retire: () -> Unit) {
         lateinit var timer: Runnable
@@ -193,6 +195,12 @@ internal class PocketWebSourceCheckpointContinue(
         check(Looper.myLooper() == main.looper && action in COMMANDS)
         retireLostOwner()
         if (action == RETURN) { returnFiles(args, done); return }
+        if (action == SELECT) {
+            check(flight == null && transfer == null && reviewed == null) { "请先完成原继续核对" }
+            published = null
+            shelf.selectForContinuation(args, done)
+            return
+        }
         val extra = when (action) {
             CONFIRM -> setOf("reviewId", "confirmed")
             DISMISS -> setOf("reviewId")
@@ -200,8 +208,9 @@ internal class PocketWebSourceCheckpointContinue(
             OPEN -> setOf("publicationHandle")
             else -> emptySet()
         }
-        fields(args, base + extra)
-        val scope = shelf.captureContinueSelection(args)
+        val ticketField = if (args.has("selectionId")) "selectionId" else "comparisonId"
+        fields(args, base + ticketField + extra)
+        val scope = shelf.captureContinueSelection(args, ticketField)
         val prior = attempted[scope.local]?.get(scope.selected)
         val reply: (JSONObject?, String?) -> Unit = { result, error -> done(result?.let(scope::bind), error) }
         if (action == DISMISS) {
@@ -214,7 +223,7 @@ internal class PocketWebSourceCheckpointContinue(
                 check(reviewed == null) { "请先完成原继续核对" }
                 published = null
                 if (prior != null) {
-                    check(prior.before == scope.before) { "请用此前同一对版本核对原登记，不再次创建" }
+                    check(prior.before == scope.before) { "请回到此前选择的原版本或同一对版本核对原登记，不再次创建" }
                     val expected = Observation(State.UNCONFIRMED, prior.target)
                     reply(JSONObject().put("observed", observed(scope, expected, prior)).put("review", JSONObject.NULL), null)
                     return

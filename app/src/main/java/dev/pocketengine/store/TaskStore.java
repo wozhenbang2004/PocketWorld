@@ -761,6 +761,114 @@ public final class TaskStore {
             return row.moveToFirst()&&"receipt".equals(row.getString(0))&&!row.isNull(1)?new JSONObject(row.getString(1)):null;
         }
     }
+    /** A contextual Search read selects one settled native publication, never a task or file by title. */
+    public record SearchAnchorWorkResult(String conversation,String generation,String message,long revision,String fingerprint,
+                                         String publicationStatus,long endedAt,OwnerWorkDeliveryRef delivery) { }
+    public static boolean isSearchAnchorFilePublicationStatus(String status) {
+        return "completed".equals(status)||"needs_confirmation".equals(status);
+    }
+    public record SearchAnchorFileReceipt(OriginalReplyText text,OriginalReplyDocument document) {
+        public SearchAnchorFileReceipt { if((text==null)==(document==null))throw new IllegalArgumentException("原文件回执不唯一"); }
+        public String operation(){return text!=null?text.operationId():document.operationId();}
+        public String id(){return text!=null?text.id():document.id();}
+        public String sha256(){return text!=null?text.sha256():document.sha256();}
+        public JSONObject header()throws Exception{return text!=null?text.view():document.view();}
+    }
+    public record SearchAnchorFileReceipts(List<SearchAnchorFileReceipt> files,boolean limited) { }
+
+    private void requireSearchAnchorWorkResult(SearchAnchorWorkResult original,RunControl read)throws Exception {
+        if(read==null||read.hasHostRun()||original==null||original.conversation()==null||original.conversation().isBlank()||
+                original.conversation().length()>240||original.generation()==null||original.generation().isBlank()||
+                original.generation().length()>240||!OriginalReplyDocument.uuid(original.message())||original.revision()<1||
+                original.fingerprint()==null||!original.fingerprint().matches("sha256:[a-f0-9]{64}")||
+                !isSearchAnchorFilePublicationStatus(original.publicationStatus())||original.endedAt()<1||
+                original.delivery()==null||conversationRepository==null)throw new SecurityException("未核对到原搜索消息");
+        read.checkpoint();OwnerWorkDeliveryRef ref=original.delivery();
+        if(!OriginalReplyDocument.uuid(ref.taskId())||!OriginalReplyDocument.uuid(ref.runId())||
+                !OriginalReplyDocument.uuid(ref.deliveryId())||ref.epoch()<1)throw new SecurityException("原工作轮次编号不可核对");
+        JSONObject work=boundedHostWorkCore(ref.taskId(),false);
+        if(!OwnerWorkTask.isOwnerWork(work)||!ref.taskId().equals(work.opt("id"))||
+                !"assistant".equals(work.opt("kind"))||!"capabilities".equals(work.opt("executionMode"))||
+                !"owner".equals(work.opt("actorId"))||!"private".equals(work.opt("spaceId"))||
+                !original.conversation().equals(work.opt("conversationId"))||!ref.runId().equals(work.opt("runId"))||
+                ref.epoch()!=OriginalReplyDocument.integer(work.opt("coordinatorEpoch"))||
+                work.optBoolean("cancelRequested")||work.optBoolean("contextWithdrawn")||work.optBoolean("sourceCurrentReadRequired"))
+            throw new SecurityException("原工作已换轮或不可核对，未打开其他成果");
+        // A saved file is not an owner's approval. Successful file runs ordinarily
+        // settle as needs_confirmation; a later owner review can change the task
+        // to completed without rewriting the run or its published message.
+        String publicationStatus=original.publicationStatus(),liveStatus=work.getString("status");
+        if(!publicationStatus.equals(liveStatus)&&
+                !("needs_confirmation".equals(publicationStatus)&&"completed".equals(liveStatus)))
+            throw new SecurityException("原工作尚未结束、已继续处理或不可核对");
+        for(String field:List.of("origin","parentTaskId","teamRunId","teamAssignment","memberId","developmentContext",
+                "ownerPhoneControl","ownerDeviceWork","workProfileRef","workProfileIntent","projectMemoryRead","teamWriteScope"))
+            if(!work.isNull(field))throw new SecurityException("只可在这条搜索消息查看普通私人工作的原文件");
+        JSONArray children=work.optJSONArray("relatedTasks");
+        if(children!=null&&children.length()>0||hasUnresolvedOperations(ref.taskId(),null))
+            throw new SecurityException("原工作关联的成果须从原工作核对");
+        JSONObject delivery=ownerWorkDeliveryById(work,ref.deliveryId());
+        if(!publicationStatus.equals(delivery.opt("status"))||original.endedAt()!=OriginalReplyDocument.integer(delivery.opt("endedAt"))||
+                delivery.has("noticeKind")||delivery.has("resultKind")||delivery.has("baseDeliveryId")||
+                !"delivered".equals(delivery.opt("deliveryState"))||!original.message().equals(delivery.opt("messageId"))||
+                !original.conversation().equals(delivery.opt("conversationId"))||!original.generation().equals(delivery.opt("generation"))||
+                !ref.taskId().equals(delivery.opt("taskId"))||!ref.runId().equals(delivery.opt("runId"))||
+                ref.epoch()!=OriginalReplyDocument.integer(delivery.opt("epoch")))
+            throw new SecurityException("原交付回执不可核对，未换用其他结果");
+        // The direct publication and run ending are saved with the same time in
+        // endAttempt. Do not pair this publication with a later same-run ending.
+        try(Cursor run=db.rawQuery("SELECT 1 FROM runs r WHERE r.task_id=? AND r.run_id=? AND r.epoch=? AND r.status=? AND r.updated_at=? "
+                +"AND NOT EXISTS (SELECT 1 FROM leases l WHERE l.run_id=r.run_id AND l.epoch=r.epoch) LIMIT 1",
+                new String[]{ref.taskId(),ref.runId(),Integer.toString(ref.epoch()),publicationStatus,Long.toString(original.endedAt())})){
+            if(!run.moveToFirst())throw new SecurityException("原执行结束回执暂不可核对");
+        }
+        conversationRepository.requireOriginalOwnerWorkDelivery(original.conversation(),original.message(),original.revision(),
+                ref.taskId(),ref.runId(),ref.epoch(),ref.deliveryId(),delivery.getString("resultDigest"),original.generation(),original.fingerprint(),
+                publicationStatus,original.endedAt());
+        read.checkpoint();
+    }
+
+    /** Bounded, receipt-only catalogue for this one original Work run. Never reads output blobs, arguments or other runs. */
+    public synchronized SearchAnchorFileReceipts searchAnchorFileReceipts(SearchAnchorWorkResult original,RunControl read)throws Exception {
+        if(db.inTransaction())throw new SecurityException("原搜索文件须从独立只读窗口核对");
+        db.beginTransactionNonExclusive();try{
+            requireSearchAnchorWorkResult(original,read);OwnerWorkDeliveryRef ref=original.delivery();
+            java.util.ArrayList<SearchAnchorFileReceipt> files=new java.util.ArrayList<>();boolean limited=false;int inspected=0;
+            try(Cursor rows=db.rawQuery("SELECT operation_id,tool,CASE WHEN length(CAST(receipt AS BLOB))<=32768 THEN receipt END FROM operations "+
+                    "WHERE task_id=? AND run_id=? AND state='receipt' AND tool IN (?,?) ORDER BY created_at DESC,operation_id DESC LIMIT 9",
+                    new String[]{ref.taskId(),ref.runId(),OriginalReplyText.TOOL,OriginalReplyDocument.TOOL})){
+                while(rows.moveToNext()){
+                    read.checkpoint();if(inspected++>=8){limited=true;break;}
+                    if(rows.isNull(2)){limited=true;continue;}
+                    SearchAnchorFileReceipt pin=checkedSearchAnchorFile(rows.getString(0),rows.getString(1),new JSONObject(rows.getString(2)),ref);
+                    if(pin==null)limited=true;else files.add(pin);
+                }
+            }
+            read.checkpoint();db.setTransactionSuccessful();return new SearchAnchorFileReceipts(List.copyOf(files),limited);
+        }finally{db.endTransaction();}
+    }
+    public synchronized void requireSearchAnchorFileReceipt(SearchAnchorWorkResult original,SearchAnchorFileReceipt file,RunControl read)throws Exception {
+        if(file==null||db.inTransaction())throw new SecurityException("文件不在原搜索文件窗口");
+        db.beginTransactionNonExclusive();try{
+            requireSearchAnchorWorkResult(original,read);OwnerWorkDeliveryRef ref=original.delivery();
+            String tool=file.text()!=null?OriginalReplyText.TOOL:OriginalReplyDocument.TOOL;
+            JSONObject receipt=originalReplyFileReceipt(ref.taskId(),ref.runId(),file.operation(),tool);
+            if(receipt==null||!file.equals(checkedSearchAnchorFile(file.operation(),tool,receipt,ref)))
+                throw new SecurityException("原文件回执已变化，未打开其他文件");
+            read.checkpoint();db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    private static SearchAnchorFileReceipt checkedSearchAnchorFile(String operation,String tool,JSONObject receipt,OwnerWorkDeliveryRef ref)throws Exception {
+        if(OriginalReplyText.TOOL.equals(tool)){
+            OriginalReplyText file=OriginalReplyText.fromReceipt(receipt);
+            return file!=null&&operation.equals(file.operationId())?new SearchAnchorFileReceipt(file,null):null;
+        }
+        if(!OriginalReplyDocument.TOOL.equals(tool))return null;
+        OriginalReplyDocument file=OriginalReplyDocument.fromReceipt(receipt);
+        return file!=null&&operation.equals(file.operationId())&&file.publication(ref.taskId(),ref.runId())?
+                new SearchAnchorFileReceipt(null,file):null;
+    }
+
     private static String originalReplyDocumentInput(JSONObject task,JSONObject input){
         if(input==null)return null;
         String id=task.optString("id"),run=task.optString("runId");int epoch=task.optInt("coordinatorEpoch");

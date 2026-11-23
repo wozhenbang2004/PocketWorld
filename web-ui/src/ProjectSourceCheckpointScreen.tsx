@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Accordion, AccordionItem, Button, SelectField } from './forms-library';
-import { ProjectSourceCheckpointContinue, type SourceCheckpointContinuation,
+import { ProjectSourceCheckpointContinue, type SingleCheckpointSelection, type SourceCheckpointContinuation,
   type SourceCheckpointContinuationMemory } from './ProjectSourceCheckpointContinue';
 
 export type Scope = Readonly<{ projectId: string; checkoutId: string; projectName: string }>;
@@ -36,8 +36,8 @@ export type Comparison = Readonly<{ scope: Scope; before: Version; after: Versio
  * clean private Files view. Call onRetired at actual window/selection/authority
  * loss. Discard only that review, without recapturing or publishing. A failed
  * Save is UNKNOWN unless native can prove a definite outcome before publication.
- * Comparison uses only included paths and positive omissions. A future owner host
- * may supply the independent Continue capability; absent it nothing is shown.
+ * Comparison uses only included paths and positive omissions. The independent
+ * Continue and exact single-version selection capabilities are optional.
  */
 export type ProjectSourceCheckpointVisit = Readonly<{
   scope: Scope;
@@ -51,6 +51,7 @@ export type ProjectSourceCheckpointVisit = Readonly<{
   saveReviewedSource: (review: Review) => Promise<Save>;
   readSaved: (catalog: Catalog, version: Version) => Promise<Version>;
   compareSaved: (catalog: Catalog, before: Version, after: Version) => Promise<Comparison>;
+  selectForContinue?: (catalog: Catalog, selected: Version) => Promise<SingleCheckpointSelection>;
   pending?: Readonly<{
     canReview: (catalog: Catalog) => boolean;
     review: (catalog: Catalog) => Promise<PendingCheckpointReview | null>;
@@ -228,8 +229,9 @@ type Staging = { kind: 'review'; offer: PendingCheckpointReview } | { kind: 'ref
 type Shelf = { kind: 'shelf'; catalog?: Catalog; knownSaved?: Version; restore?: string; notice?: string; staging?: Staging };
 type Pick = { kind: 'pick'; shelf: Shelf; catalog: Catalog; after: Version; before?: Version; notice?: string };
 type ReviewPage = { kind: 'review'; shelf: Shelf; review: Review; leaveUnknown?: true };
-type Page = Shelf | ReviewPage | Pick | { kind: 'comparison'; pick: Pick; comparison: Comparison };
-type Operation = 'catalog' | 'review' | 'save' | 'dismiss' | 'read' | 'compare' | 'pendingReview' | 'pendingClear' | 'pendingDismiss';
+type Page = Shelf | ReviewPage | Pick | { kind: 'comparison'; pick: Pick; comparison: Comparison } |
+  { kind: 'single'; pick: Pick; selection: SingleCheckpointSelection };
+type Operation = 'catalog' | 'review' | 'save' | 'dismiss' | 'read' | 'compare' | 'select' | 'pendingReview' | 'pendingClear' | 'pendingDismiss';
 type Session = {
   visit: ProjectSourceCheckpointVisit; scope: Scope; projectId: string; checkoutId: string;
   stage?: Review; flight?: { kind: Operation }; unconfirmed?: SavePin; expected?: Version; saveBlocked?: 'capacity' | 'pending';
@@ -333,7 +335,7 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
   function back() {
     if (!showing || owner.current !== showing.session || !isCurrent(showing.session)) return false;
     const { page, session } = showing;
-    if (page.kind === 'comparison' && continuationBack.current?.()) return true;
+    if ((page.kind === 'comparison' || page.kind === 'single') && continuationBack.current?.()) return true;
     if (session.flight?.kind === 'dismiss' || session.flight?.kind === 'pendingDismiss') return true;
     if (session.flight?.kind === 'save' || session.flight?.kind === 'pendingClear') return false; // Close the exact native visit first.
     if (page.kind === 'shelf' && page.staging?.kind === 'review') { settlePending(page, false); return true; }
@@ -353,7 +355,7 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
       });
     } else {
       session.flight = undefined;
-      if (page.kind === 'comparison') show(session, page.pick);
+      if (page.kind === 'comparison' || page.kind === 'single') show(session, page.pick);
       else if (page.kind === 'pick') show(session, { ...page.shelf, restore: page.after.checkpointId });
       else return false;
     }
@@ -518,9 +520,19 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
       return { kind: 'comparison', pick, comparison: checkedCheckpointComparison(scope, before, after, result) };
     }, () => ({ ...pick, notice: '没有核对到所选两版的原记录。没有改用最新版本或当前文件。' }));
   };
+  const canSelect = (pick: Pick) => !!session.visit.continuation && !!session.visit.selectForContinue &&
+    !pick.catalog.pending && !session.unconfirmed && !pick.shelf.knownSaved;
+  const select = (pick: Pick) => {
+    const selectForContinue = session.visit.selectForContinue;
+    if (!canSelect(pick) || !selectForContinue || !pick.catalog.versions.includes(pick.after)) return;
+    void inspect('select', () => selectForContinue(pick.catalog, pick.after), result => {
+      if (result?.kind !== 'single' || !versionHere(scope, result.version) || !sameVersion(pick.after, result.version)) throw Error();
+      return { kind: 'single', pick, selection: result };
+    }, () => ({ ...pick, notice: '未核对到这份已保留的源码。没有另建副本，也没有使用其他版本。' }));
+  };
 
-  const label = page.kind === 'review' ? '核对当前已保存源码' : page.kind === 'pick' ? '选择对照版' :
-    page.kind === 'comparison' ? '两版源码的收录差异' : '源码版本';
+  const label = page.kind === 'review' ? '核对当前已保存源码' : page.kind === 'pick' ? canSelect(page) ? '所选源码版本' : '选择对照版' :
+    page.kind === 'comparison' ? '两版源码的收录差异' : page.kind === 'single' ? '这版保留源码' : '源码版本';
   const canReview = page.kind === 'shelf' && !page.staging && !page.knownSaved && !page.catalog?.pending &&
     (page.catalog?.versions.length ?? 0) < MAX_VERSIONS && (page.catalog?.storedBytes ?? 0) < MAX_STORED && mayReview();
   return <div className="pw-form-flow" aria-busy={!!busy}>
@@ -591,27 +603,37 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
     </>}
     {page.kind === 'pick' && <>
       <p>所选版：{versionName(page.after, page.catalog)}</p>
+      {canSelect(page) && <div className="pw-form-actions">
+        <Button disabled={!!busy} onClick={() => select(page)}>核对这版并继续</Button>
+      </div>}
       {page.catalog.versions.length >= 2 ? <>
         <SelectField label="对照版" value={page.before?.checkpointId ?? ''} placeholder="选择另一份已保留版本"
           isDisabled={!!busy} options={page.catalog.versions.filter(row => row !== page.after).map(row =>
             ({ id: row.checkpointId, label: versionName(row, page.catalog) }))}
           onChange={id => { if (!session.flight) show(session, { ...page,
             before: page.catalog.versions.find(row => row !== page.after && row.checkpointId === id), notice: undefined }); }} />
-        {page.notice && <p role="status">{page.notice}</p>}
         <div className="pw-form-actions"><Button disabled={!page.before || !!busy} onClick={() => compare(page)}>比较两版</Button></div>
-      </> : <p className="pw-field-hint">目前只有一版，暂无对照版。</p>}
+      </> : !canSelect(page) && <p className="pw-field-hint">目前只有一版，暂无对照版。</p>}
+      {page.notice && <p role="status">{page.notice}</p>}
     </>}
     {page.kind === 'comparison' && <ProjectSourceCheckpointContinue authority={session.visit.continuation} scope={scope}
-      catalog={page.pick.catalog} comparison={page.comparison} versionLabel={versionName(page.comparison.after, page.pick.catalog)}
+      catalog={page.pick.catalog} source={page.comparison} versionLabel={versionName(page.comparison.after, page.pick.catalog)}
       memory={session.continuations} registerBack={registerContinuationBack}
-      comparisonBack={<Button variant="ghost" onClick={back}>返回两版选择</Button>}>
+      selectionBack={<Button variant="ghost" onClick={back}>返回两版选择</Button>}>
       <ComparisonRows comparison={page.comparison} catalog={page.pick.catalog} />
     </ProjectSourceCheckpointContinue>}
+    {page.kind === 'single' && <ProjectSourceCheckpointContinue authority={session.visit.continuation} scope={scope}
+      catalog={page.pick.catalog} source={page.selection} versionLabel={versionName(page.selection.version, page.pick.catalog)}
+      memory={session.continuations} registerBack={registerContinuationBack}
+      selectionBack={<Button variant="ghost" onClick={back}>返回版本选择</Button>}>
+      <p>{versionName(page.selection.version, page.pick.catalog)} · 已核对保留版</p>
+      <p className="pw-field-hint">{page.selection.version.fileCount} 个收录文件 · {page.selection.version.omittedCount} 项排除记录。核对没有改动原文件。</p>
+    </ProjectSourceCheckpointContinue>}
     {!!busy && busy !== 'save' && <p role="status">{({catalog:'正在核对本机版本…',review:'正在核对这份副本的已保存源码…',
-      dismiss:'正在结束这次原核对…',read:'正在核对本机原记录…',compare:'正在核对选中的两版…',
+      dismiss:'正在结束这次原核对…',read:'正在核对本机原记录…',compare:'正在核对选中的两版…',select:'正在核对这版保留的源码…',
       pendingReview:'正在核对未完成暂存…',pendingDismiss:'正在退出暂存核对…',
       pendingClear:'正在核对这次清除。返回不代表撤销已发生的清除。'})[busy]}</p>}
-    {page.kind !== 'shelf' && page.kind !== 'comparison' && busy !== 'save' &&
+    {page.kind !== 'shelf' && page.kind !== 'comparison' && page.kind !== 'single' && busy !== 'save' &&
       !(page.kind === 'review' && page.leaveUnknown) && <div className="pw-form-actions">
       <Button variant="ghost" onClick={back}>返回版本列表</Button>
     </div>}

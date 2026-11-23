@@ -1105,6 +1105,8 @@ export default function App(){
  const attemptedRosterAttach=useRef<CarriedTeamRoster|null>(null);
  useEffect(()=>{const cancel=()=>{if(document.hidden){conversationReturnRequest.current++;setReturningConversation('');setCarriedTeamRoster(null)}};document.addEventListener('visibilitychange',cancel);return()=>document.removeEventListener('visibilitychange',cancel)},[]);
  const historyWindowBack=useRef<(()=>boolean)|null>(null);
+ const searchFileReturn=useRef<((windowId:string)=>boolean)|null>(null);
+ const registerSearchFileReturn=useCallback((handler:((windowId:string)=>boolean)|null)=>{searchFileReturn.current=handler},[]);
  const [workReportReader,setWorkReportReader]=useState<WorkReportReader|null>(null);
  const chatHistoryReturn=useRef<{conversationId:string;document:number;navigation:number;trigger:HTMLButtonElement}|null>(null);
  const chatHistoryBrowse=useRef<HTMLButtonElement>(null);
@@ -1562,11 +1564,12 @@ export default function App(){
   const conversation=owner.conversationId,reader=owner.conversationReader,anchor=obj(reader?.searchAnchor);
   const sameContext=hit&&reader?.conversation===conversation&&searchContextFlight.current!==null&&
    anchor.requestId===searchContextFlight.current&&anchor.messageId===hit.recordId&&anchor.revision===hit.ownerLocator?.recordVersion;
+  const coveringFile=!!sameContext&&!!reader&&owner.attachmentWorkspace?.open===true&&owner.attachmentWorkspace.searchAnchorReader===reader.window;
   if(route!=='chat'||intent!=='chat'||document.hidden||live.host?.ready!==true||typeof conversation!=='string'||!conversation||
      phone.phone!==false||phone.channelOrigin!==false||view.taskId!==null||view.section!==null||!Number.isSafeInteger(view.resumeRevision)||
      draft?.ready!==true||draft.conversationId!==conversation||draft.key!=='conversation:'+conversation||!Number.isSafeInteger(draft.epoch)||
-     reader&&!sameContext||owner.filePath||owner.queuedInputsPage||owner.chatAttachmentPickerOpen||owner.attachmentWorkspace?.open!==false||
-     !['work.search','work.search.read','conversation.reader.open'].every(action=>live.capabilities.commands.includes(action)))return null;
+     reader&&!sameContext||owner.filePath||owner.queuedInputsPage||owner.chatAttachmentPickerOpen||
+     owner.attachmentWorkspace?.open!==false&&!coveringFile||!['work.search','work.search.read','conversation.reader.open'].every(action=>live.capabilities.commands.includes(action)))return null;
   const scope={conversationId:conversation,composerEpoch:Number(draft.epoch)};
   return {scope,identity:JSON.stringify([bridge.getDocumentEpoch(),navigationWindow.current,view.resumeRevision,conversation,scope.composerEpoch])};
  },[route,intent]);
@@ -4499,7 +4502,10 @@ export default function App(){
  },[state.requestedConnectionRevision,state.requestedConnectionSection,state.requestedReminderNotice?.connectionRevision,navigate,ready,personalDocumentEpoch,route,secondaryPage,taskOpen]);
  const reminderNotice=route==='automation'&&reminderNoticeVisit.current?.navigation===navigationRevision&&
   reminderNoticeVisit.current.documentEpoch===personalDocumentEpoch?reminderNoticeVisit.current:undefined;
- useEffect(()=>{bridge.setBackHandler(()=>{if(backDuringSearchChat())return true;if(route==='projects'&&keptStaticShelf.current?.back())return true;if((workReportPage||searchHistoryPage)&&historyWindowBack.current?.())return true;if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
+ useEffect(()=>{bridge.setBackHandler(()=>{if(backDuringSearchChat())return true;if(route==='projects'&&keptStaticShelf.current?.back())return true;
+  const searchFile=searchHistoryPage?bridge.getState().state.attachmentWorkspace:null;
+  if(searchFile?.open===true&&searchFile.searchAnchorReader===searchHistoryPage?.window){attachmentBack.current?.();return true;}
+  if((workReportPage||searchHistoryPage)&&historyWindowBack.current?.())return true;if(searchOriginal){closeSearchOriginal();return true}if(!preparationBeforeLeave.current&&preparationBack.current?.())return true;if(providedMemoryBack.current?.())return true;if(conversationMemoryBack.current?.())return true;if(shownChatReference){closeChatReference(shownChatReference,'menu');return true}if(originalReminderBack.current?.())return true;if(queuedInputsBack.current?.())return true;
   if(deliveredFileRef.current){
    const origin=resultFileReturnFocus.current,frame=bridge.getState().state.attachmentWorkspace;
    const reply=deliveredFileReader&&'reply' in deliveredFileReader?deliveredFileReader:null;
@@ -10816,7 +10822,7 @@ export default function App(){
   </div>{allWork}
   <ConversationHistoryWindow page={workReportPage||workRequestPage||searchHistoryPage||(!openingSearchChat&&route==='chat'&&!historyPage?.workRequest&&!historyPage?.searchAnchor&&!historyPage?.reminderSource&&
    !(workReportReader&&ownsWorkReportReader(historyPage,workReportReader))?historyPage:null)} covered={taskOpen&&!workRequestPage&&!workReportPage}
-   onReturnToChat={focusAfterHistoryClose} onWorkRequestReturn={restoreWorkRequestFocus} onSearchReturn={finishSearchContext}
+   onReturnToChat={focusAfterHistoryClose} onWorkRequestReturn={restoreWorkRequestFocus} onSearchReturn={finishSearchContext} registerSearchFileReturn={registerSearchFileReturn}
    searchReturnToChatWindow={searchContext?.landing?searchContext.window:undefined}
    workReportWindow={workReportReader?.window} onWorkReportReturn={restoreWorkReportFocus}
    activeDraft={!workReportPage&&!workRequestPage&&intent==='chat'&&composer.ready===true&&draftKey&&state.conversationId&&composer.conversationId===state.conversationId?{conversation:state.conversationId,key:draftKey,epoch:draftEpoch}:undefined} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin,alreadyOpen=false)=>openTask(id,entry,alreadyOpen,origin)}
@@ -10851,6 +10857,7 @@ export default function App(){
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onOriginalBookReply={bookReplyVisit?originalBookReply:undefined} onReturnFocus={(event,messageOriginalWindow)=>{
    restoreTaskFileFocus(event);
    if(messageOriginalWindow){
+    if(searchFileReturn.current?.(messageOriginalWindow)){event.preventDefault();return;}
     const exact=obj(bridge.getState().state.originalReplyAttachmentPicker),origin=messageOriginalReturn.current;
     if(exact.sourceWindow===messageOriginalWindow&&origin?.windowId===messageOriginalWindow&&origin.kind==='replyDocument'){
      replyPickerReturn.current={windowId:messageOriginalWindow};event.preventDefault();

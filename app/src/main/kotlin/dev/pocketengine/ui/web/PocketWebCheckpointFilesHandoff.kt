@@ -41,7 +41,7 @@ internal class PocketWebCheckpointFilesHandoff(
     source: SourceCheckpointFilesPin,
     leaving: CheckpointFilesDeparture,
     shown: OwnerSourceCheckpoints.Catalog,
-    private val before: OwnerSourceCheckpoints.Version,
+    private val before: OwnerSourceCheckpoints.Version?,
     private val selected: OwnerSourceCheckpoints.Version,
     published: OwnerSourceCheckpointContinuation.Observation,
     private val parentFast: () -> Boolean,
@@ -66,16 +66,15 @@ internal class PocketWebCheckpointFilesHandoff(
 
     init {
         require(Looper.myLooper() == Looper.getMainLooper())
+        val comparisonMatches = before == null || before.projectId() == project && before.checkoutId() == checkout &&
+            before.checkpointId() != selected.checkpointId() && before.storageSlot() != selected.storageSlot() && shown.versions().contains(before)
         require(published.state() == OwnerSourceCheckpointContinuation.State.PUBLISHED && parentMain() &&
-            source.currentOnMain() && leaving.readyOnMain() && before != selected &&
-            before.projectId() == project && selected.projectId() == project &&
-            before.checkoutId() == checkout && selected.checkoutId() == checkout &&
-            before.checkpointId() != selected.checkpointId() && before.storageSlot() != selected.storageSlot() &&
-            shown.versions().contains(before) && shown.versions().contains(selected) &&
+            source.currentOnMain() && leaving.readyOnMain() && comparisonMatches &&
+            selected.projectId() == project && selected.checkoutId() == checkout && shown.versions().contains(selected) &&
             target.projectId() == project && target.originatingCheckoutId() == checkout && target.checkoutId() != checkout &&
             target.checkpointId() == selected.checkpointId() && target.manifestIdentity() == selected.manifestIdentity() &&
             target.archiveSha256() == selected.archiveSha256() && target.filteredSourceDigest() == selected.filteredSourceDigest()) {
-            "只打开本次原比较中已核对登记的新副本"
+            "只打开本次原所选版本已核对登记的新副本"
         }
     }
 
@@ -162,7 +161,7 @@ internal class PocketWebCheckpointFilesHandoff(
         if (!sameOriginal()) return unavailable()
         val pending = leg.leaving.prepare(checkout, false, ::live)
         val local = leg.sibling.local
-        val comparison = try {
+        val comparison = if (before == null) null else try {
             val fresh = local.sourceCheckpointCatalogForOwner(window)
             val earlier = fresh.versions().singleOrNull { it == before }
             val later = fresh.versions().singleOrNull { it == selected }
@@ -174,7 +173,8 @@ internal class PocketWebCheckpointFilesHandoff(
         return PreparedCheckpointFilesLeg {
             check(live() && parentMain() && leg.leaving.readyOnMain()) { "原项目已变化，没有打开其他副本" }
             val arrival = pending.install()
-            val pin = runCatching { captureReturned(arrival) }.getOrNull()
+            // The singleton goes back to authoritative A Files, never a fabricated pair.
+            val pin = if (before == null) null else runCatching { captureReturned(arrival) }.getOrNull()
             retire()
             Return.Files(arrival, pin, comparison.takeIf { pin != null })
         }

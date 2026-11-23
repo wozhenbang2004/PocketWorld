@@ -11,33 +11,39 @@ export type Published = Observation & Readonly<{ state: 'PUBLISHED' }>;
 export type Review = Readonly<{ scope: Scope; id: string; selected: Version; target: Target }>;
 export type Offer = Readonly<{ observed: Observation; review: Review | null }>;
 
-/** Only future native admission can supply this adapter. It owns the same actual
- * native comparison/catalog and selected after-version, and maps the offered
- * objects back to their exact native one-use Review and Observation. No wire
- * format, derived target ID, current-checkout selection, or execution authority.
+export type SingleCheckpointSelection = Readonly<{ kind: 'single'; version: Version }>;
+export type CheckpointContinuationSource = SingleCheckpointSelection | Comparison;
+export const singleSelection = (source: CheckpointContinuationSource): source is SingleCheckpointSelection =>
+  'kind' in source && source.kind === 'single';
+export const selectedVersion = (source: CheckpointContinuationSource) => singleSelection(source) ? source.version : source.after;
+export const comparisonBase = (source: CheckpointContinuationSource) => singleSelection(source) ? null : source.before;
+
+/** The adapter owns the exact admitted selection from the native catalog, and
+ * maps offers back to their native one-use Review and Observation. No derived
+ * target ID, current-checkout selection, or execution authority.
  * Opening is separately optional: the existing native private Files path must
  * revalidate the published sibling, retire the source Files visit as needed, and
  * check authority through publication without persisting a new draft selection.
  */
 export type SourceCheckpointContinuation = Readonly<{
   scope: Scope;
-  comparisonId: (catalog: Catalog, comparison: Comparison) => string | undefined;
-  review: (catalog: Catalog, comparison: Comparison) => Promise<Offer>;
+  selectionId: (catalog: Catalog, source: CheckpointContinuationSource) => string | undefined;
+  review: (catalog: Catalog, source: CheckpointContinuationSource) => Promise<Offer>;
   discard: (review: Review) => Promise<void>;
   confirm: (review: Review) => Promise<Observation>;
-  recheck: (catalog: Catalog, comparison: Comparison, target: Target) => Promise<Observation>;
-  canRecheck: (catalog: Catalog, comparison: Comparison, target: Target) => boolean;
+  recheck: (catalog: Catalog, source: CheckpointContinuationSource, target: Target) => Promise<Observation>;
+  canRecheck: (catalog: Catalog, source: CheckpointContinuationSource, target: Target) => boolean;
   files?: Readonly<{
     canOpen: (scope: Scope, published: Published) => boolean;
     open: (scope: Scope, published: Published) => Promise<void>;
   }>;
 }>;
 
-type Attempt = { comparisonId: string; before: Version; selected: Version; target: Target; observed?: Observation; rechecked?: true };
-/** Body-free attempt facts across comparisons in this one original Files visit. */
+type Attempt = { selectionId: string; before: Version | null; selected: Version; target: Target; observed?: Observation; rechecked?: true };
+/** Body-free attempt facts across selections in this one original Files visit. */
 export type SourceCheckpointContinuationMemory = Map<string, Attempt>;
-type Selection = { authority: SourceCheckpointContinuation; scope: Scope; catalog: Catalog; comparison: Comparison };
-type Binding = Selection & { comparisonId: string };
+type Selection = { authority: SourceCheckpointContinuation; scope: Scope; catalog: Catalog; source: CheckpointContinuationSource };
+type Binding = Selection & { selectionId: string };
 type Layer = { kind: 'check' } | { kind: 'review'; review: Review } | { kind: 'result'; attempt: Attempt };
 type Action = 'review' | 'confirm' | 'recheck' | 'dismiss' | 'files';
 type Panel = { binding: Binding; layer?: Layer; error?: string; busy?: Action };
@@ -56,31 +62,33 @@ export function targetFor(selected: Version, target: Target | undefined): target
     target.filteredSourceDigest === selected.filteredSourceDigest && typeof target.name === 'string' && !!target.name.trim() && target.name.length <= 80;
 }
 function observedHere(binding: Binding, value: Observation | undefined, expected?: Target): value is Observation {
-  return !!value && value.scope === binding.scope && targetFor(binding.comparison.after, value.target) &&
+  return !!value && value.scope === binding.scope && targetFor(selectedVersion(binding.source), value.target) &&
     (!expected || value.target.checkoutId === expected.checkoutId && value.target.name === expected.name) &&
     ['NOT_OBSERVED', 'UNCONFIRMED', 'CAPACITY', 'PUBLISHED'].includes(value.state);
 }
-function nativeComparison({ authority, scope, catalog, comparison }: Selection) {
-  if (document.hidden || authority.scope !== scope || catalog.scope !== scope || comparison.scope !== scope ||
-      !uuid(scope.projectId) || comparison.after.projectId !== scope.projectId || comparison.after.checkoutId !== scope.checkoutId ||
-      comparison.before.checkpointId === comparison.after.checkpointId ||
-      !catalog.versions.some(row => sameVersion(comparison.before, row)) || !catalog.versions.some(row => sameVersion(comparison.after, row))) return;
+function nativeSelection({ authority, scope, catalog, source }: Selection) {
+  const selected = selectedVersion(source);
+  if (document.hidden || authority.scope !== scope || catalog.scope !== scope || !uuid(scope.projectId) ||
+      selected.projectId !== scope.projectId || selected.checkoutId !== scope.checkoutId ||
+      !catalog.versions.some(row => sameVersion(selected, row))) return;
+  if (!singleSelection(source) && (source.scope !== scope || source.before.checkpointId === selected.checkpointId ||
+      !catalog.versions.some(row => sameVersion(source.before, row)))) return;
   try {
-    const id = authority.comparisonId(catalog, comparison);
+    const id = authority.selectionId(catalog, source);
     return uuid(id) ? id : undefined;
   } catch { return; }
 }
-const current = (binding: Binding) => nativeComparison(binding) === binding.comparisonId;
+const current = (binding: Binding) => nativeSelection(binding) === binding.selectionId;
 function release(binding: Binding, review: Review | null | undefined) {
-  if (!review || review.scope !== binding.scope || !uuid(review.id) || !sameVersion(binding.comparison.after, review.selected)) return;
+  if (!review || review.scope !== binding.scope || !uuid(review.id) || !sameVersion(selectedVersion(binding.source), review.selected)) return;
   void binding.authority.discard(review).catch(() => {}); // Native expiry/retirement remains final.
 }
 function published(value: Observation | undefined): value is Published { return value?.state === 'PUBLISHED'; }
 
-export function ProjectSourceCheckpointContinue({ authority, scope, catalog, comparison, versionLabel, memory, registerBack, comparisonBack, children }: {
-  authority?: SourceCheckpointContinuation; scope: Scope; catalog: Catalog; comparison: Comparison;
+export function ProjectSourceCheckpointContinue({ authority, scope, catalog, source, versionLabel, memory, registerBack, selectionBack, children }: {
+  authority?: SourceCheckpointContinuation; scope: Scope; catalog: Catalog; source: CheckpointContinuationSource;
   versionLabel: string; memory: SourceCheckpointContinuationMemory; registerBack: (go: (() => boolean) | null) => void;
-  comparisonBack: ReactNode; children: ReactNode;
+  selectionBack: ReactNode; children: ReactNode;
 }) {
   const [panel, setPanel] = useState<Panel>();
   const owner = useRef<Binding | undefined>(undefined);
@@ -89,19 +97,19 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
   const title = useRef<HTMLHeadingElement>(null), action = useRef<HTMLButtonElement>(null), returnFocus = useRef(false);
   useLayoutEffect(() => {
     if (!authority) { setPanel(undefined); return; }
-    const selection = { authority, scope, catalog, comparison }, comparisonId = nativeComparison(selection);
-    if (!comparisonId) { setPanel(undefined); return; }
-    const binding = { ...selection, comparisonId };
+    const selection = { authority, scope, catalog, source }, selectionId = nativeSelection(selection);
+    if (!selectionId) { setPanel(undefined); return; }
+    const binding = { ...selection, selectionId };
     owner.current = binding; setPanel({ binding });
     return () => {
       if (owner.current !== binding) return;
       owner.current = undefined; flight.current = undefined;
       const old = held.current; held.current = undefined; release(binding, old);
     };
-  }, [authority, scope, catalog, comparison]);
+  }, [authority, scope, catalog, source]);
 
   const here = panel && owner.current === panel.binding && panel.binding.authority === authority &&
-    panel.binding.catalog === catalog && panel.binding.comparison === comparison && current(panel.binding) ? panel : undefined;
+    panel.binding.catalog === catalog && panel.binding.source === source && current(panel.binding) ? panel : undefined;
   const layer = here?.layer;
 
   function back() {
@@ -135,13 +143,16 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
     if (!layer) returnFocus.current = false;
   }, [layer?.kind, here?.busy]);
 
-  const original = <>{children}<div className="pw-form-actions">{comparisonBack}</div></>;
+  const original = <>{children}<div className="pw-form-actions">{selectionBack}</div></>;
   if (!here) return original;
-  const binding = here.binding, selected = comparison.after;
+  const binding = here.binding, selected = selectedVersion(source), before = comparisonBase(source);
   const sameVisit = () => owner.current === binding && current(binding);
   const prior = memory.get(selected.checkpointId);
-  if (prior && (!sameVersion(selected, prior.selected) || !sameVersion(comparison.before, prior.before))) return original;
-  const record = prior?.comparisonId === binding.comparisonId ? prior : undefined;
+  if (prior && (!sameVersion(selected, prior.selected) ||
+      (before === null ? prior.before !== null : !sameVersion(before, prior.before ?? undefined)))) {
+    return singleSelection(source) ? <>{original}<p role="status">已有一次副本登记待核对，请回到此前所选方式。没有再次创建。</p></> : original;
+  }
+  const record = prior?.selectionId === binding.selectionId ? prior : undefined;
   const result = layer?.kind === 'result' ? layer.attempt : undefined;
   const receipt = published(result?.observed) && observedHere(binding, result.observed, result.target) ? result.observed : undefined;
   const files = binding.authority.files;
@@ -168,7 +179,7 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
   function enter() {
     if (!sameVisit() || flight.current) return;
     if (record) { setPanel({ binding, layer: { kind: 'result', attempt: record } }); return; }
-    void run('review', { kind: 'check' }, () => binding.authority.review(catalog, comparison), offer => {
+    void run('review', { kind: 'check' }, () => binding.authority.review(catalog, source), offer => {
       const { observed, review } = offer;
       if (!observedHere(binding, observed, prior?.target) ||
           (observed.state === 'NOT_OBSERVED' ? !review || review.scope !== scope || !uuid(review.id) ||
@@ -182,16 +193,16 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
         if (prior) { release(binding, review); throw Error(); }
         held.current = review; return { kind: 'review', review };
       }
-      const attempt = { comparisonId: binding.comparisonId, before: comparison.before, selected, target: observed.target, observed };
+      const attempt = { selectionId: binding.selectionId, before, selected, target: observed.target, observed };
       memory.set(selected.checkpointId, attempt); return { kind: 'result', attempt };
-    }, prior ? '没有核对到此前同一对版本的副本登记。没有重新创建。' :
+    }, prior ? '没有核对到此前所选版本的副本登记。没有重新创建。' :
       '没有核对到所选版和原副本。本次没有另建副本。', offer => release(binding, offer?.review));
   }
 
   function confirm(review: Review) {
     if (!sameVisit() || flight.current || held.current !== review || memory.has(selected.checkpointId)) return;
     held.current = undefined; // One actual affirmative request, never remint or replay its review.
-    const attempt: Attempt = { comparisonId: binding.comparisonId, before: comparison.before, selected, target: review.target };
+    const attempt: Attempt = { selectionId: binding.selectionId, before, selected, target: review.target };
     memory.set(selected.checkpointId, attempt);
     const next = { kind: 'result', attempt } as const;
     void run('confirm', next, () => binding.authority.confirm(review), observed => {
@@ -201,11 +212,11 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
   }
 
   function recheck(attempt: Attempt) {
-    if (!sameVisit() || flight.current || attempt.rechecked || !binding.authority.canRecheck(catalog, comparison, attempt.target) ||
+    if (!sameVisit() || flight.current || attempt.rechecked || !binding.authority.canRecheck(catalog, source, attempt.target) ||
         attempt.observed && attempt.observed.state !== 'UNCONFIRMED') return;
     attempt.rechecked = true;
     const next = { kind: 'result', attempt } as const;
-    void run('recheck', next, () => binding.authority.recheck(catalog, comparison, attempt.target), observed => {
+    void run('recheck', next, () => binding.authority.recheck(catalog, source, attempt.target), observed => {
       if (!observedHere(binding, observed, attempt.target)) throw Error();
       attempt.observed = observed; return next;
     }, '这次仍无法核对原登记。没有再次创建。');
@@ -214,7 +225,7 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
   function openFiles() {
     if (!files || !receipt || !result || !fileReady()) return;
     const next = { kind: 'result', attempt: result } as const;
-    // The parent adopts the verified new Files ACK. The original comparison
+    // The parent adopts the verified new Files ACK. The original selection
     // must not still be current after that native swap.
     void run('files', next, () => files.open(scope, receipt), () => next,
       '没有确认打开这份新副本的文件。不会改开其他副本。');
@@ -222,14 +233,14 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
 
   const state = result?.observed?.state;
   const mayRecheck = !!result && !result.rechecked && (!state || state === 'UNCONFIRMED') &&
-    binding.authority.canRecheck(catalog, comparison, result.target);
+    binding.authority.canRecheck(catalog, source, result.target);
   const opening = here.busy === 'confirm' || here.busy === 'files';
   const canOpenFiles = !!receipt && fileReady();
   return <>
     <div hidden={!!layer} inert={!!layer}>
       {children}
       {!layer && <div className="pw-form-actions">
-        {comparisonBack}
+        {selectionBack}
         <Button ref={action} onClick={enter}>{record ? published(record.observed) ? '查看已登记的副本' : '查看这次副本核对' :
           prior ? '核对原版本的副本登记' :
           `从 ${versionLabel} 这版另建副本…`}</Button>
@@ -258,7 +269,8 @@ export function ProjectSourceCheckpointContinue({ authority, scope, catalog, com
           {mayRecheck && !opening && <Button disabled={!!here.busy} onClick={() => recheck(result)}>核对这次原登记</Button>}
         </div>
       </>}
-      {!opening && <div className="pw-form-actions"><Button variant="ghost" disabled={!!here.busy} onClick={back}>返回这两版比较</Button></div>}
+      {!opening && <div className="pw-form-actions"><Button variant="ghost" disabled={!!here.busy} onClick={back}>
+        {singleSelection(source) ? '返回所选版本' : '返回这两版比较'}</Button></div>}
     </section>}
   </>;
 }

@@ -388,15 +388,19 @@ internal class AttachmentOutcomeCoordinator(
             else app.attachmentOutcomes.originalReplyDocument(target,control)
         }
     }
+    internal fun openSearchAnchorFile(file:UiChatAttachment,current:()->Boolean,
+        read:(RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource) =
+        openMessageOriginal(file,null,current,searchAnchor=true,read=read)
+
     /** A live message proves one private native Book reference, not an attachment inventory. */
     private fun openMessageOriginal(file:UiChatAttachment,input:AttachmentMessageInput?,current:()->Boolean,
-        read:(RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource){
+        searchAnchor:Boolean=false,read:(RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource){
         check(!state.open&&!exportPending&&current())
         check(file.size in 1L..AttachmentBook.MAX_FILE_BYTES)
         cancel();restoreFile=null;restoredDocumentDraft=null
         state=AttachmentOutcomeState(open=true,messageInput=input,messageReplyDocumentOnly=input==null,originalReturn=AttachmentOriginalReturn.ENTRY)
         var original:dev.pocketengine.features.attachments.OwnerFilePreviewSource?=null
-        val unavailable=when(input){
+        val unavailable=if(searchAnchor)"这轮的原文件暂不能打开，没有换用其他文件。" else when(input){
             null->if(file.mimeType=="text/plain")"未能核对这条原答复保存的 TXT。没有打开其他文件。"
                 else "未能核对这条原答复的文档。原工作仍可查看，没有打开其他文件。"
             AttachmentMessageInput.PDF->"未能核对这份原消息 PDF。请返回原消息，不会打开其他文件或应用。"
@@ -415,7 +419,7 @@ internal class AttachmentOutcomeCoordinator(
             control.check()
             original=source
             JSONObject() to JSONObject().put("id",file.id).put("sha256",source.sha256).put("name",source.name)
-                .put("mimeType",source.mimeType).put("size",source.sizeBytes).put("role","source").put("availability","available")
+                .put("mimeType",source.mimeType).put("size",source.sizeBytes).put("role",if(searchAnchor)"result" else "source").put("availability","available")
         }
     }
     fun openFile(meta:JSONObject,fromTask:String?=null,showOriginal:Boolean=false,fromWorkResult:Boolean=showOriginal,

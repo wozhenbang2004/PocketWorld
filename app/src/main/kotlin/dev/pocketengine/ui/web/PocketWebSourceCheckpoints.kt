@@ -258,7 +258,7 @@ internal class PocketWebSourceCheckpoints(
         }
         val value = visit?.takeIf { it.origin == origin && it.handle == id(args, "shelfHandle") && live(it) } ?: error(LOST)
         val local = value.local ?: error(LOST)
-        if (continueEnabled) continueShown = null // Only a new positive Compare can mint another selection.
+        if (continueEnabled) continueShown = null // A new read or comparison must prove its own selection.
 
         if (action == DISMISS) {
             fields(args, heldFields + setOf("reviewId", "manifestIdentity"))
@@ -357,7 +357,8 @@ internal class PocketWebSourceCheckpoints(
                     }, show = { (actual, output) ->
                         if (continueEnabled && live(value) && value.catalog === shown && value.review == null &&
                             recovery(value) == null && !shown.native.pending() && actual.before() == before && actual.after() == after) {
-                            bindContinueComparison(value, shown, actual).also { output.put("comparisonId", it.comparisonId) }
+                            bindContinueSelection(value, shown, actual.before(), actual.after())
+                                .also { output.put("comparisonId", it.selectionId) }
                         }
                         output
                     })
@@ -458,24 +459,45 @@ internal class PocketWebSourceCheckpoints(
         }))
 
     @Volatile private var continueShown: SourceCheckpointContinueSelection? = null
-    private fun bindContinueComparison(value: Visit, shown: Catalog, actual: OwnerSourceCheckpoints.Comparison): SourceCheckpointContinueSelection {
+    /** A deliberate new intent, not the stock receipt read used after Save. */
+    fun selectForContinuation(args: JSONObject, done: (JSONObject?, String?) -> Unit) {
+        check(Looper.myLooper() == main.looper && continueEnabled)
+        fields(args, heldFields + setOf("catalogId", "version"))
+        val origin = Origin(document() ?: error(LOST), id(args, "viewHandle"), id(args, "filesHandle"), id(args, "visitId"))
+        val value = visit?.takeIf { it.origin == origin && it.handle == id(args, "shelfHandle") && live(it) } ?: error(LOST)
+        val local = value.local ?: error(LOST)
+        check(value.flight == null && value.review == null && value.pendingReview == null && recovery(value) == null) { LOST }
+        val shown = value.catalog?.takeIf { it.id == id(args, "catalogId") && !it.native.pending() }
+            ?: error("请从这次目录选择一版已核对的源码")
+        val selected = exact(shown, args.getJSONObject("version"))
+        continueShown = null
+        work(value, done, read = { local.readSourceCheckpointReceiptForOwner(shown.native, selected) }, show = { saved ->
+            check(saved == selected && live(value) && value.catalog === shown && value.review == null &&
+                value.pendingReview == null && recovery(value) == null) { LOST }
+            val admitted = bindContinueSelection(value, shown, null, saved)
+            JSONObject().put("verified", true).put("version", version(saved))
+                .put("catalogId", shown.id).put("selectionId", admitted.selectionId)
+        })
+    }
+    private fun bindContinueSelection(value: Visit, shown: Catalog, before: OwnerSourceCheckpoints.Version?,
+                                      selected: OwnerSourceCheckpoints.Version): SourceCheckpointContinueSelection {
         lateinit var exact: SourceCheckpointContinueSelection
-        fun kept() = continueShown === exact && fast(value) && value.flight == null && value.review == null
+        fun kept() = continueShown === exact && fast(value) && value.flight == null && value.review == null && value.pendingReview == null
         exact = SourceCheckpointContinueSelection(value.origin.view, value.origin.files, value.origin.visit, value.handle,
-            shown.id, UUID.randomUUID().toString(), value.name, checkNotNull(value.local), value.files, shown.native,
-            actual.before(), actual.after(), ::kept) {
+            shown.id, UUID.randomUUID().toString(), value.name, checkNotNull(value.local), value.files, shown.native, before, selected, ::kept) {
             kept() && live(value) && value.catalog === shown && recovery(value) == null
         }
         continueShown = exact
         return exact
     }
-    fun captureContinueSelection(args: JSONObject): SourceCheckpointContinueSelection {
+    fun captureContinueSelection(args: JSONObject, ticketField: String): SourceCheckpointContinueSelection {
         check(Looper.myLooper() == main.looper && continueEnabled)
         return continueShown?.takeIf {
             it.viewHandle == id(args, "viewHandle") && it.filesHandle == id(args, "filesHandle") &&
                 it.visitId == id(args, "visitId") && it.shelfHandle == id(args, "shelfHandle") &&
-                it.catalogId == id(args, "catalogId") && it.comparisonId == id(args, "comparisonId") && it.currentOnMain()
-        } ?: error("请在原副本的这次已核对比较中选择")
+                it.catalogId == id(args, "catalogId") && it.ticketField == ticketField &&
+                it.selectionId == id(args, ticketField) && it.currentOnMain()
+        } ?: error("请从原副本本次已核对的版本继续")
     }
     fun forgetContinueSelection() { continueShown = null }
 

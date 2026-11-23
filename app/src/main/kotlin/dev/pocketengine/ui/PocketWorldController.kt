@@ -4107,7 +4107,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 if(!current()){done(null,"原私聊或搜索消息已变化，没有打开其他记录");return@post}
                 original.fold({ native ->
                     runCatching {
-                        val pin=OwnerSearchHistoryAnchor(request,locator.getString("recordId"),locator.getLong("recordVersion"),epoch)
+                        val pin=OwnerSearchHistoryAnchor(request,locator.getString("recordId"),locator.getLong("recordVersion"),epoch,
+                            locator.getString("generation"),locator.getString("fingerprint"))
                         val page=ConversationReadPage(Math.addExact(atRequest,1L),conversation,native.optString("title"),null,
                             anchor=pin.message,searchAnchor=pin).accept(native,false)
                         require(page.initialized&&!page.limited&&page.messages.singleOrNull { it.id==pin.message }?.sourceRevision==pin.revision) {

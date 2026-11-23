@@ -1004,7 +1004,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
               !entered.current && !edits.current;
             if (!checkpoints.resumeComparison({ projectId, checkoutId, viewHandle, filesHandle: arrival.filesHandle, current },
                 arrival, () => checkpointTrigger.current)) setMoving('unknown');
-          } else setError('已返回原副本的文件。原来的两版比较暂时无法核对。');
+          } else if (arrival.fromComparison) setError('已返回原副本的文件。原来的两版比较暂时无法核对。');
         }
       }
     }
@@ -1080,8 +1080,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     savedSource.slice(Math.max(savedSource.lastIndexOf('\n',sourceHit.start-1)+1,sourceHit.start-70),sourceHit.start)+sourceHit.query+
       savedSource.slice(sourceHit.end,sourceHit.end+100).split('\n',1)[0]:null;
   const checkpointSibling = checkpointArrival?.side === 'sibling';
-  const returnsToComparison = checkpointSibling && hasCheckpointContinue() && cleanCheckpointDeparture(handle.current, currentFile.current);
-  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : returnsToComparison ? '返回原来的两版比较' :
+  const fromCheckpointComparison = checkpointArrival?.side === 'sibling' && checkpointArrival.original.before !== null;
+  const returnsToCheckpoint = checkpointSibling && hasCheckpointContinue() && cleanCheckpointDeparture(handle.current, currentFile.current);
+  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : returnsToCheckpoint ?
+    fromCheckpointComparison ? '返回原来的两版比较' : '返回原副本的文件' :
     originalDirectoryOpening && !originalDirectoryOpening.chosenSavedFile && !listing ? '返回项目预览' : '返回项目工作区';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
@@ -1132,7 +1134,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     onClose={() => {if(pythonCloseGap.current||checkpointSibling||moving.current){closeCurrent.current();return;}if(checkpoints.back()||backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
     closeLabel={checkpointMove||pythonToolsCloseGap?'返回原项目':checkpoints.active?'返回原文件或上一级':showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
     {checkpointMove && <section className="pw-form-flow">
-      <p role="status">{checkpointMove === 'returning' ? '正在核对并返回原来的两版比较…' : checkpointMove === 'leaving' ?
+      <p role="status">{checkpointMove === 'returning' ? fromCheckpointComparison ? '正在核对并返回原来的两版比较…' : '正在核对并返回原副本的文件…' : checkpointMove === 'leaving' ?
         '正在关闭本次副本窗口…' : checkpointMove === 'close_unknown' ? '尚未确认关闭原窗口。可再关闭同一窗口，不会再次创建。' :
           '没有确认切换到哪个文件窗口。可关闭窗口返回原项目，不会再次创建或改开其他副本。'}</p>
       {(checkpointMove === 'unknown' || checkpointMove === 'close_unknown') && <Button variant="secondary" onClick={leaveUnconfirmedTransfer}>返回原项目</Button>}

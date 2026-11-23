@@ -256,7 +256,7 @@ internal class PocketWebProjectDevelopment(
      * selector: a successful sibling registration can make sole A cease to be sole. */
     fun sourceCheckpointFilesHandoff(viewHandle: String, filesHandle: String, source: SourceCheckpointFilesPin,
             catalog: dev.pocketengine.features.local.OwnerSourceCheckpoints.Catalog,
-            before: dev.pocketengine.features.local.OwnerSourceCheckpoints.Version,
+            before: dev.pocketengine.features.local.OwnerSourceCheckpoints.Version?,
             selected: dev.pocketengine.features.local.OwnerSourceCheckpoints.Version,
             published: dev.pocketengine.features.local.OwnerSourceCheckpointContinuation.Observation,
             shellFast: () -> Boolean, shellMain: () -> Boolean): PocketWebCheckpointFilesHandoff {

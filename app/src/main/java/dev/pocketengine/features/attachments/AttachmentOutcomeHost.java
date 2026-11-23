@@ -400,6 +400,43 @@ public final class AttachmentOutcomeHost {
         control.checkpoint();
         return pin.view();
     }
+    public record SearchAnchorFileList(java.util.List<TaskStore.SearchAnchorFileReceipt> files,boolean limited) { }
+    /** Positive headers only. The exact Book get checks the selected metadata/stat, not the blob. */
+    public SearchAnchorFileList searchAnchorFiles(TaskStore.SearchAnchorWorkResult original,RunControl read)throws Exception{
+        TaskStore.SearchAnchorFileReceipts receipts=tasks.searchAnchorFileReceipts(original,read);
+        java.util.ArrayList<TaskStore.SearchAnchorFileReceipt> verified=new java.util.ArrayList<>();boolean limited=receipts.limited();
+        for(var file:receipts.files()){
+            read.checkpoint();
+            if(receipts.files().stream().filter(other->other.id().equals(file.id())).count()!=1){limited=true;continue;}
+            try{
+                searchAnchorFileMetadata(original,file);
+                verified.add(file);
+            }catch(InterruptedException stopped){throw stopped;}
+            catch(Exception unavailable){limited=true;}
+        }
+        if(!receipts.equals(tasks.searchAnchorFileReceipts(original,read)))
+            throw new SecurityException("原工作或文件回执已变化，未列出旧结果");
+        read.checkpoint();return new SearchAnchorFileList(java.util.List.copyOf(verified),limited);
+    }
+    private JSONObject searchAnchorFileMetadata(TaskStore.SearchAnchorWorkResult original,TaskStore.SearchAnchorFileReceipt file)throws Exception{
+        JSONObject meta=repository.book.get(file.id());var origin=original.delivery();
+        if(!(file.text()!=null?file.text().matchesBook(meta,origin.taskId(),origin.runId()):
+                file.document().matchesBook(meta,origin.taskId(),origin.runId())))
+            throw new SecurityException("原文件版本已变化，没有打开其他文件");
+        return meta;
+    }
+    /** Open only a previously offered receipt. This source cannot copy/export; the
+     * stock reader may decode its bounded original bytes into its existing private session. */
+    public OwnerFilePreviewSource openSearchAnchorFile(TaskStore.SearchAnchorWorkResult original,
+            TaskStore.SearchAnchorFileReceipt file,RunControl read)throws Exception{
+        tasks.requireSearchAnchorFileReceipt(original,file,read);
+        JSONObject meta=searchAnchorFileMetadata(original,file);
+        tasks.requireSearchAnchorFileReceipt(original,file,read);
+        return new OwnerFilePreviewSource("search-anchor-file",meta,
+                current->repository.book.verifiedBytes(file.id(),file.sha256(),current),
+                current->{tasks.requireSearchAnchorFileReceipt(original,file,current);searchAnchorFileMetadata(original,file);},
+                (destination,current)->{throw new SecurityException("从原搜索只能查看本轮文件");});
+    }
     private OwnerFilePreviewSource originalFile(String taskId,String artifactId,String expectedSha256,RunControl control,boolean recordedDocument)throws Exception {
         requireReference(taskId,artifactId,expectedSha256);JSONObject metadata=privateMetadata(artifactId,expectedSha256);
         if(recordedDocument){

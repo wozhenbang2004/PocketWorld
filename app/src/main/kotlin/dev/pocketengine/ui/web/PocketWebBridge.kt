@@ -13,6 +13,7 @@ import android.provider.Settings
 import android.view.Choreographer
 import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
+import dev.pocketengine.core.RunControl
 import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.features.attachments.OriginalReplyDocument
 import dev.pocketengine.features.automation.AutomationModule
@@ -536,6 +537,7 @@ internal class PocketWebBridge(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
+            "conversation.reader.searchFiles", "conversation.reader.openSearchFile",
             "ownerWork.teamReport.read", "ownerWork.deliveryText.read", "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
             "attachments.pick", "attachments.pickForDraft", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original", "phone.result.taskOriginal",
@@ -1937,6 +1939,9 @@ internal class PocketWebBridge(
                     complete(id,value,error,retainValue=false,replayHint="请从同一原私聊重新核对阅读位置");publishState()
                 }
                 return
+            }
+            if(action=="conversation.reader.searchFiles"||action=="conversation.reader.openSearchFile"){
+                searchAnchorFiles(id,action,args);return
             }
             if (action == "conversation.reader.open" && args.has("searchLocator")) {
                 require(args.keys().asSequence().toSet()==setOf("conversationId","searchLocator","requestId"))
@@ -4968,6 +4973,87 @@ internal class PocketWebBridge(
             if(documentId!=document)return@readOriginalCompletedWorkDelivery
             if(!current())complete(id,null,"原交付或阅读窗口已变化，未读取其他版本",retainValue=false)
             else complete(id,page,failure,retainValue=false)
+        }
+    }
+
+    private data class SearchAnchorFileOffer(val handle:String,val original:TaskStore.SearchAnchorWorkResult,
+        val window:Long,val request:String,val source:Long,val files:List<TaskStore.SearchAnchorFileReceipt>)
+    private var searchAnchorFileOffer:SearchAnchorFileOffer?=null
+    private var searchAnchorFileRequest=0L
+
+    /** Separate from generic historical file/task authority: just the exact native Search anchor. */
+    private fun searchAnchorFiles(id:String,action:String,args:JSONObject){
+        val open=action=="conversation.reader.openSearchFile"
+        checkedPayload(args,if(open)setOf("window","requestId","messageId","revision","offer","fileId","sha256")
+            else setOf("window","requestId","messageId","revision"))
+        val window=requiredLong(args,"window");val request=requiredString(args,"requestId")
+        val message=requiredString(args,"messageId");val revision=requiredLong(args,"revision")
+        val page=controller.conversationReader?:error("原搜索消息窗口已关闭")
+        val anchor=page.searchAnchor?:error("请先打开已核对的原搜索消息")
+        check(anchor.request==request&&anchor.message==message&&anchor.revision==revision&&page.window==window&&revision>0){
+            "不是这次搜索已核对的原消息"
+        }
+        fun selected()=controller.conversationReader?.takeIf { it.window==window&&it.conversation==page.conversation&&
+            it.searchAnchor==anchor&&it.initialized&&!it.loading&&it.error==null&&!it.limited }?.messages
+            ?.singleOrNull { it.id==message&&it.sourceRevision==revision&&it.role=="assistant"&&it.phoneResult==null&&
+                it.hostGoalTaskId==null&&it.originalHostFinal==null&&it.taskId==it.taskResult?.taskId }?.taskResult
+            ?.takeIf { it.kind=="owner_work"&&TaskStore.isSearchAnchorFilePublicationStatus(it.status)&&it.noticeKind==null }
+        val result=selected()?:error("这条原消息尚未核对到普通工作的原交付")
+        val original=TaskStore.SearchAnchorWorkResult(page.conversation,anchor.generation,message,revision,anchor.fingerprint,
+            result.status,result.endedAt,TaskStore.OwnerWorkDeliveryRef(result.taskId,result.runId,result.epoch,result.deliveryId))
+        val ticket=captureWindow();val document=requireNotNull(documentId)
+        val source=controller.conversationSourceRevision;val foreground=controller.displayedPhoneWindowVersion()
+        val owner=controller.nativeTokenBudgetHost();val store=owner.tasks
+        fun workerCurrent()=!closed&&documentId==document&&commandFence.accepts(ticket.bridge)&&
+            controller.displayedPhoneWindowAlive(foreground)&&controller.composerViewEpochForScopedRead==anchor.composerEpoch&&
+            controller.conversationReaderRevision==window&&controller.conversationSourceRevision==source&&owner.tasks===store&&taskViewId==null
+        fun current()=workerCurrent()&&acceptsWindow(ticket)&&section==null&&taskReturnSection==null&&controller.webPrivateOwnerVisible()&&
+            !phoneComposer.intent&&!controller.hasChannelPhoneOrigin&&controller.state.filePath==null&&
+            !controller.state.chatAttachmentPickerOpen&&controller.queuedInputsPage==null&&controller.state.conversationId==page.conversation&&
+            controller.composerDraft?.let { it.key=="conversation:${page.conversation}"&&it.conversationId==page.conversation }==true&&selected()==result
+        fun viewerCurrent()=if(Looper.myLooper()==Looper.getMainLooper())current() else workerCurrent()
+        val messageChanged="原搜索消息或窗口已变化，没有打开其他成果。"
+        check(current()&&!controller.attachmentOutcomes.state.open){messageChanged}
+        val host=owner.attachmentOutcomes?:error("原文件宿主尚未就绪")
+        if(open){
+            val fileId=requiredString(args,"fileId");val sha=requiredString(args,"sha256")
+            val offer=searchAnchorFileOffer?:error("请先核对这轮的原文件清单")
+            check(offer.handle==requiredString(args,"offer")&&offer.original==original&&offer.window==window&&
+                offer.request==request&&offer.source==source) { "这轮文件清单已变化，请从原搜索消息重新核对。" }
+            val exact=offer.files.singleOrNull{it.id()==fileId&&it.sha256()==sha}
+                ?:error("这份固定文件不在原清单中")
+            val row=exact.header()
+            val file=UiChatAttachment(fileId,sha,row.getString("name"),row.getString("mimeType"),row.getLong("size"))
+            val opened=attachmentPages.openSearchAnchorFile(file,window,ticket,::viewerCurrent){
+                host.openSearchAnchorFile(original,exact,it)
+            }
+            complete(id,opened,null,retainValue=false);publishState();return
+        }
+
+        val sequence=++searchAnchorFileRequest
+        searchAnchorFileOffer=null
+        controller.runTeamPhoneWork {
+            val listed=runCatching {
+                check(workerCurrent()) { messageChanged }
+                val read=RunControl()
+                read.setAuthorityCheck { check(workerCurrent()) { messageChanged } }
+                host.searchAnchorFiles(original,read)
+            }
+            main.post {
+                if(!current()||sequence!=searchAnchorFileRequest||controller.attachmentOutcomes.state.open){
+                    complete(id,null,messageChanged,retainValue=false);return@post
+                }
+                listed.fold({ actual ->
+                    val rows=JSONArray(actual.files().map { it.header() })
+                    val offer=SearchAnchorFileOffer(UUID.randomUUID().toString(),original,window,request,source,actual.files())
+                    searchAnchorFileOffer=offer.takeIf { rows.length()>0 }
+                    complete(id,JSONObject().put("window",window).put("requestId",request).put("messageId",message).put("revision",revision)
+                        .put("taskId",result.taskId).put("runId",result.runId).put("epoch",result.epoch).put("deliveryId",result.deliveryId)
+                        .put("publicationStatus",result.status).put("endedAt",result.endedAt)
+                        .put("offer",searchAnchorFileOffer?.handle).put("files",rows).put("limited",actual.limited()).put("readOnly",true),
+                        null,retainValue=false)
+                },{ complete(id,null,"暂不能核对这轮的原文件。没有打开其他成果。",retainValue=false) })
+            }
         }
     }
 
