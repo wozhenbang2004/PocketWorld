@@ -1325,7 +1325,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' :
-              returnsToComparison ? '已保存，返回原比较' : '已保存，回到项目工作区'}
+              returnsToCheckpoint ? (fromCheckpointComparison ? '已保存，返回原比较' : '已保存，返回原副本的文件') : '已保存，回到项目工作区'}
           </Button></> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
