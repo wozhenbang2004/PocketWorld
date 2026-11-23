@@ -41,6 +41,10 @@ public final class ProjectFileDraftStore {
         catch (Exception damaged) { throw new IOException("原文件草稿读取失败，已保留缓存；未用空白或当前文件替代：" + damaged.getMessage(), damaged); }
         retained.put(key, draft); persisted.put(key, draft.revision); return draft;
     }
+    /** Exact foreground editor observation without restoring a draft or reading its body from disk. */
+    public synchronized boolean holdsExact(ProjectFileDraft draft) {
+        return draft!=null&&retained.get(key(draft.projectId,draft.checkoutId,draft.path))==draft;
+    }
 
     /** Immediate in-memory retention; coalesced private-cache IO never performs a workspace save. */
     public synchronized void retain(ProjectFileDraft draft) {
@@ -80,6 +84,17 @@ public final class ProjectFileDraftStore {
     }
     public synchronized String persistenceError(ProjectFileDraft draft) { return errors.get(key(draft.projectId, draft.checkoutId, draft.path)); }
     public synchronized boolean durable(ProjectFileDraft draft) { return persisted.getOrDefault(key(draft.projectId, draft.checkoutId, draft.path), -1L) >= draft.revision; }
+
+    /** Body-free exact checkout check after its ordinary listing already checked disk drafts. */
+    public synchronized boolean checkpointDraftsKnownClean(String project,String checkout,List<String> originallyDirty) {
+        for(ProjectFileDraft draft:retained.values())
+            if(project.equals(draft.projectId)&&checkout.equals(draft.checkoutId)&&draft.dirty())return false;
+        for(String path:originallyDirty){
+            ProjectFileDraft actual=retained.get(key(project,checkout,path));
+            if(actual==null||actual.creating||!actual.hasBaseline()||actual.conflict())return false;
+        }
+        return true;
+    }
 
     /** Bounded recovery discovery. Run on IO, not during Compose rendering. */
     public synchronized List<String> dirtyPaths(String project, String checkout) throws IOException {

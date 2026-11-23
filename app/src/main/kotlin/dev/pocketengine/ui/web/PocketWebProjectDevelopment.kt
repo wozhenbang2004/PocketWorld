@@ -234,6 +234,7 @@ internal class PocketWebProjectDevelopment(
     /** No file request is constructed until the original owner editor explicitly opens this page. */
     fun savedStaticPage(args: JSONObject, ownerEditorVisible: () -> Boolean): PocketWebCheckoutFiles.SavedStaticPage {
         val original = selected(args)
+        files.retireSourceCheckpointPin()
         check(!busy && review == null && directReview == null && dependencyReview == null && dependencyCopyReview == null) {
             "请先完成原项目的其他审阅"
         }
@@ -242,6 +243,57 @@ internal class PocketWebProjectDevelopment(
                 review == null && directReview == null && dependencyReview == null && dependencyCopyReview == null &&
                 shownCheckout(original, checkout, allowSole = true)
         }
+    }
+    fun sourceCheckpointFiles(args: JSONObject, shellFast: () -> Boolean, shellMain: () -> Boolean): SourceCheckpointFilesPin {
+        val original = selected(args)
+        return files.sourceCheckpointPin(args,
+            { page === original && generation == original.generation && shellFast() }) { checkout ->
+            current(original) && shellMain() && restoreFailure == null && !busy && review == null && directReview == null &&
+                dependencyReview == null && dependencyCopyReview == null && shownCheckout(original, checkout, allowSole = true)
+        }
+    }
+    /** Dormant opt-in only. Hold the original admitted A, not the live checkout
+     * selector: a successful sibling registration can make sole A cease to be sole. */
+    fun sourceCheckpointFilesHandoff(viewHandle: String, filesHandle: String, source: SourceCheckpointFilesPin,
+            catalog: dev.pocketengine.features.local.OwnerSourceCheckpoints.Catalog,
+            before: dev.pocketengine.features.local.OwnerSourceCheckpoints.Version,
+            selected: dev.pocketengine.features.local.OwnerSourceCheckpoints.Version,
+            published: dev.pocketengine.features.local.OwnerSourceCheckpointContinuation.Observation,
+            shellFast: () -> Boolean, shellMain: () -> Boolean): PocketWebCheckpointFilesHandoff {
+        check(Looper.myLooper() == main.looper)
+        val original = page?.takeIf { it.handle == viewHandle && it.project == source.project && current(it) }
+            ?: error("原项目页面已变化")
+        val checkout = source.checkout
+        fun uncluttered() = restoreFailure == null && !busy && review == null && directReview == null &&
+            dependencyReview == null && dependencyCopyReview == null
+        val seal = synchronized(drafts) {
+            check(uncluttered() && shownCheckout(original, checkout, allowSole = true)) { "原项目副本选择已变化" }
+            val saved = draft(original.project)
+            check(ProjectConventionDraft.bind(saved).seal == original.shownSeal) { "原项目草稿已变化" }
+            ProjectSources.digest(saved)
+        }
+        fun fast() = page === original && generation == original.generation && shellFast() &&
+            synchronized(drafts) {
+                val saved = draft(original.project)
+                val selected = saved.optString("checkoutId")
+                (selected.isEmpty() || selected == checkout) &&
+                    saved.optJSONObject("submission")?.optString("status") !in setOf("pending", "unknown", "unconfirmed") &&
+                    ProjectSources.digest(saved) == seal
+            }
+        fun foreground() = fast() && current(original) && shellMain() && uncluttered()
+        check(foreground() && source.currentOnMain()) { "请回到原文件窗口" }
+        val leave = files.checkpointFilesDeparture(filesHandle, checkout, false, ::fast, ::foreground)
+            ?: error("没有核对到原副本文件窗口")
+        return PocketWebCheckpointFilesHandoff(source, leave, catalog, before, selected, published, ::fast, ::foreground,
+            captureSibling = { handle, sibling -> files.checkpointFilesDeparture(handle, sibling, true, ::fast, ::foreground) },
+            captureReturned = { arrival ->
+                check(arrival.projectId == original.project && arrival.checkoutId == checkout && arrival.current() && foreground())
+                // Only this returned native A may use its prior admission. Do not
+                // turn the new two-copy list into a different default selection.
+                files.sourceCheckpointPin(JSONObject().put("filesHandle", arrival.filesHandle), ::fast) {
+                    it == checkout && foreground()
+                }
+            })
     }
     private fun observeRetainedLink(original:Page,checkout:String,allowSole:Boolean):Boolean {
         fun eligible()=restoreFailure==null&&current(original)&&controller.state.filePath==null&&shownCheckout(original,checkout,allowSole)
@@ -343,6 +395,7 @@ internal class PocketWebProjectDevelopment(
             working(original, done) { metadata(original) }; return
         }
         val original = selected(args)
+        files.retireSourceCheckpointPin()
         if(action in LOCK_COMMANDS){
             val expected=setOf("viewHandle","checkoutId","visit")+(if(action==LOCK_PICK)setOf("sourceDigest")else emptySet())
             check(args.keys().asSequence().toSet()==expected&&!busy)

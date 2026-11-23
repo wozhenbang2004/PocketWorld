@@ -9,6 +9,7 @@ import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import { ownerPythonRepairObservation, type OwnerPythonRepairObservation } from './setup-contract';
 import type {DirectNodeDependencyPin} from './project-execution';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
+import { hasCheckpointContinue, type CheckpointFilesArrival } from './project-source-checkpoint-continue-files';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import type { ProjectViteResultTarget } from './FirstNodeWebOutput';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
@@ -424,7 +425,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const activeRetainedVisit=useRef<RetainedOriginalVisit|null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
-    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true;staticFilesVisit?:ProjectPhoneFolderVisit}|null>(null);
+    pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true;staticFilesVisit?:ProjectPhoneFolderVisit;
+    checkpointArrival?:CheckpointFilesArrival}|null>(null);
+  const currentFileWindow = useRef(fileWindow); currentFileWindow.current = fileWindow;
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   // A UI correlation so a new mount cannot adopt a system picker choice. This never grants a file read or write.
   const [lockVisit,setLockVisit]=useState<string|null>(null);
@@ -864,9 +867,46 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     // The saved file can identify a suggested selection, never make one on return.
     setImportEditChoice(sameSave&&original?.checkoutId===saved.checkoutId&&view?.viewHandle===handle.current&&original.window===ownerWindow()?
       {original,viewHandle:handle.current}:null);
-    setFileWindow(null); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null);
+    currentFileWindow.current = null; setFileWindow(null); setHostEditor(null); setHostFiles(null); sourceAttempt.current = ''; setSource(null);
     fileWindow?.staticFilesVisit?.finish();
   };
+  function checkpointFilesHandoff() {
+    if (!fileWindow || !view || view.projectId !== projectId || hostEditor || fileWindow.staticFilesVisit || !hasCheckpointContinue()) return;
+    const leaving = fileWindow, sequence = generation.current, visit = ownerWindow(), viewHandle = view.viewHandle;
+    const { requestedProjectRevision, requestedTaskRevision, requestedConnectionRevision } = bridge.getState().state;
+    const current = () => {
+      const state = bridge.getState().state;
+      return alive.current && latest.current.active && !entered.current && !document.hidden &&
+        generation.current === sequence && ownerWindow() === visit && handle.current === viewHandle && currentFileWindow.current === leaving &&
+        state.projectId === projectId && state.filePath == null && state.requestedProjectRevision === requestedProjectRevision &&
+        state.requestedTaskRevision === requestedTaskRevision && state.requestedConnectionRevision === requestedConnectionRevision;
+    };
+    return {
+      adopt(arrival: CheckpointFilesArrival, before: () => void) {
+        if (!current() || arrival.projectId !== projectId || arrival.viewHandle !== viewHandle || arrival.checkoutId === leaving.checkoutId) return false;
+        const outgoing = leaving.checkpointArrival;
+        if (arrival.side === 'sibling' ? outgoing?.side === 'sibling' || arrival.original.scope.checkoutId !== leaving.checkoutId :
+            outgoing?.side !== 'sibling' || outgoing.filesHandle !== arrival.previousFilesHandle ||
+            outgoing.transferHandle !== arrival.transferHandle || outgoing.original.scope.checkoutId !== arrival.checkoutId) return false;
+        const next = { checkoutId: arrival.checkoutId, checkpointArrival: arrival };
+        before();
+        currentFileWindow.current = next; setFileWindow(next); // Do not reselect or retain a different project draft.
+        return true;
+      },
+      async closeProject(before: () => void) {
+        if (!current() || !latest.current.can('projects.development.close')) return false;
+        // A lost swap ACK reveals neither child handle. Close only this exact
+        // original parent, which retires whichever private child it still holds.
+        const result = await bridge.command('projects.development.close', { viewHandle });
+        if (!current() || result?.viewClosed !== true || result.taskStopped !== false) return false;
+        before();
+        currentFileWindow.current = null; handle.current = ''; readAttempt.current = visit; sourceAttempt.current = '';
+        setFileWindow(null); setView(null); setSource(null);
+        setError('已返回原项目，没有重复创建或改开其他副本。可重新读取项目开发条件。');
+        return true;
+      },
+    };
+  }
   useEffect(()=>{
     if(!importedEditor||!active||!view||busy||entered.current||review||fileCheckout||buildReturn||handle.current!==view.viewHandle)return;
     onImportedEditorHandled?.(importedEditor);
@@ -1841,13 +1881,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={fileWindow.reopenedFiles?runReopenedFiles:run} hostFile={hostEditor || undefined}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
       pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit} onClose={closeFiles}
-      onPreparePythonTools={pythonToolSetup?prepareSavedPythonTools:undefined}
+      checkpointArrival={fileWindow.checkpointArrival} checkpointHandoff={checkpointFilesHandoff()}
+      onPreparePythonTools={fileWindow.checkpointArrival?.side!=='sibling'&&pythonToolSetup?prepareSavedPythonTools:undefined}
       preparePythonToolsLabel={pythonRepair?'查看手机工具修复':undefined}
-      onOpenPythonWork={!hostEditor&&can('tasks.open')?work=>{
+      onOpenPythonWork={fileWindow.checkpointArrival?.side!=='sibling'&&!hostEditor&&can('tasks.open')?work=>{
         if (work.projectId!==projectId || work.checkoutId!==fileCheckout || !active) return;
         onTaskRegistered();onOpenTask(work.taskId,work.checkoutId,{runId:work.runId,epoch:work.epoch});
       }:undefined}
-      onPrepareBuild={canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined}
+      onPrepareBuild={fileWindow.checkpointArrival?.side!=='sibling'&&canPrepareSavedBuild?prepareSavedBuild:undefined} prepareBuildAfterPath={missingRequiredLock||undefined}
       prepareBuildLabel={showViteSaveLabel?'从这次保存核对网页构建':directImportedSave||dependencyForSave?'核对已保存源码':undefined} registerBack={registerFilesBack} />}
     {originalDifference&&<SettingsDialog isOpen title="本轮原改稿" closeLabel="返回当前工作副本" onClose={closeRetainedOriginal}>
       <div className="pw-project-draft">

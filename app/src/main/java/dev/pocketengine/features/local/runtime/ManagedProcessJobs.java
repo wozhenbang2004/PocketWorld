@@ -314,18 +314,29 @@ public final class ManagedProcessJobs implements AutoCloseable {
     private synchronized boolean webCheckoutUncontended(Job job,long sequence,boolean before)throws Exception{
         String checkout=job.invocation.executionRef().checkoutId();
         if(live.get(job.id)!=job||job.webObservationContended||currentCheckoutSequence(checkout)!=sequence)return false;
-        if(before){
-            File[] directories=root.listFiles();if(directories==null||directories.length>2000)return false;
-            long budget=8L*1024*1024;
-            for(File directory:directories){
-                if(job.id.equals(directory.getName()))continue;
-                File record=new File(directory,"receipt.json");if(!record.isFile())continue;
-                if((budget-=record.length())<0)return false;
-                JSONObject prior=RuntimeFiles.read(record);
-                if(checkout.equals(prior.opt("checkoutId"))&&!Boolean.TRUE.equals(prior.opt("resourcesReleased")))return false;
-            }
+        return !before||checkoutReceiptsReleased(checkout,job.id);
+    }
+    /** Same bounded original receipt observation, not a checkout, log, or process read. */
+    private boolean checkoutReceiptsReleased(String checkout,String except)throws Exception{
+        File[] directories=root.listFiles();if(directories==null||directories.length>2000)return false;
+        long budget=8L*1024*1024;
+        for(File directory:directories){
+            if(directory.getName().equals(except))continue;
+            File record=new File(directory,"receipt.json");if(!record.isFile())continue;
+            if((budget-=record.length())<0)return false;
+            JSONObject prior=RuntimeFiles.read(record);
+            if(checkout.equals(prior.opt("checkoutId"))&&!Boolean.TRUE.equals(prior.opt("resourcesReleased")))return false;
         }
         return true;
+    }
+    /** Quiescent admitted owner capture only; never call the writer's contention witness. */
+    synchronized void requireCheckoutIdleForCheckpoint(String checkout)throws Exception{
+        if(closing)throw new IllegalStateException("原工作副本运行状态不可核对");
+        for(Job job:live.values())if(checkout.equals(job.invocation.executionRef().checkoutId()))
+            throw new IllegalStateException("原副本仍在运行，先等待或停止原运行");
+        for(Job job:unresolvedLeases.values())if(checkout.equals(job.invocation.executionRef().checkoutId()))
+            throw new IllegalStateException("原副本运行结果待核对，未采集源码");
+        if(!checkoutReceiptsReleased(checkout,null))throw new IllegalStateException("原副本运行尚未确认结束，未采集源码");
     }
     private void execute(Job job,List<String> command,Map<String,String> environment,File directory,long timeoutMillis) {
         String finalStatus="unknown";boolean groupAbsent=false;java.util.List<JSONObject> pendingInputs=new ArrayList<>();

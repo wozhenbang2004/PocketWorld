@@ -64,6 +64,7 @@ public final class LocalModule implements EngineModule {
     private final Map<String,dev.pocketengine.features.local.preview.ProjectPreviewBundle.Verified> previews=new LinkedHashMap<>();
     private volatile boolean closed;
     private final Object projectPackageStaging=new Object();
+    private final OwnerSourceCheckpoints ownerSourceCheckpoints;
     private static final java.util.Set<String> PHONE_SOURCE_KINDS=java.util.Set.of(
         "saf_tree","external_zip","host_saved_snapshot","task_source_package",ProjectSourceImport.BUILTIN_VITE_STARTER);
     private final dev.pocketengine.features.local.project.ProjectSourcePosition ownerSourcePosition;
@@ -77,7 +78,9 @@ public final class LocalModule implements EngineModule {
     /** Native composition injects an approved managed environment; raw feature JSON cannot install one. */
     public LocalModule(FeatureContext context,EngineModule projects,ProjectRuntime nativeRuntime)throws Exception {
         this.context=context;this.projects=projects;root=new File(context.android.getFilesDir().getCanonicalFile(),"local-development");
-        ownerSourcePosition=new dev.pocketengine.features.local.project.ProjectSourcePosition(new File(context.android.getNoBackupFilesDir().getCanonicalFile(),"owner-development"),LocalModule::verifiedPackageImportPlan);
+        File noBackup=context.android.getNoBackupFilesDir().getCanonicalFile();
+        ownerSourcePosition=new dev.pocketengine.features.local.project.ProjectSourcePosition(new File(noBackup,"owner-development"),LocalModule::verifiedPackageImportPlan);
+        ownerSourceCheckpoints=new OwnerSourceCheckpoints(noBackup,()->!closed);
         commands=new NativeCommandExecutor(new File(root,"command-receipts"),Arrays.asList(new File("/system/bin"),new File("/system/xbin")),job->context.emit(id(),json("kind","job","job",job)));
         termux=new TermuxBridge(context);
         projectRuntime=java.util.Objects.requireNonNull(nativeRuntime);String selected=projectRuntime.describe().getString("runtimeId");runtimes.put(selected,projectRuntime);runtimes.put("termux",new TermuxProjectRuntime(termux));for(String key:runtimes.keySet())runtimeGenerations.put(key,UUID.randomUUID().toString());
@@ -311,7 +314,7 @@ public final class LocalModule implements EngineModule {
     public synchronized JSONObject openProjectForOwner(String projectId)throws Exception {
         requireAvailableDraftProjectForOwner(projectId);
         projects.handle("export",new JSONObject().put("projectId",projectId));JSONObject latest=null;File[] entries=new File(root,"checkouts").listFiles();
-        if(entries!=null)for(File entry:entries){File metadata=new File(entry,"checkout.json");if(!metadata.isFile())continue;JSONObject value=JsonFiles.read(metadata);if(!value.has("isolatedGit")&&projectId.equals(value.optString("projectId"))&&(latest==null||value.optLong("createdAt")>latest.optLong("createdAt")))latest=value;}
+        if(entries!=null)for(File entry:entries){File metadata=new File(entry,"checkout.json");if(!metadata.isFile())continue;JSONObject value=JsonFiles.read(metadata);if(!value.has("isolatedGit")&&!value.has(OwnerSourceCheckpointContinuation.FIELD)&&projectId.equals(value.optString("projectId"))&&(latest==null||value.optLong("createdAt")>latest.optLong("createdAt")))latest=value;}
         if(latest==null)return prepare(projectId);
         if(latest.has(dev.pocketengine.features.local.project.OwnerDraftWorkCopy.FIELD))dev.pocketengine.features.local.project.OwnerDraftCopyShelf.claim(dev.pocketengine.features.local.project.OwnerDraftCopyShelf.location(root,latest.getString("id"),false));
         return new JSONObject(latest.toString());
@@ -504,6 +507,159 @@ public final class LocalModule implements EngineModule {
     }
     /** Same original codec, native selected checkout and stopped/drained resource boundary. */
     public synchronized JSONObject projectPackageSelectionForHost(JSONObject input)throws Exception {if(closed)throw new IllegalStateException("原项目模块已关闭");return projectPackagePlan(new JSONObject(input.toString()));}
+    /** Dormant native owner boundary only; no model/feature command or release flag. The exact
+     * original checkout registry is the same positive admission used by the handset editor. */
+    private synchronized OwnerSourceCheckpoints.CheckoutProof requireCheckpointCheckout(OwnerSourceCheckpoints.Window window)throws Exception{
+        if(closed||window==null)throw new SecurityException("原私人项目宿主不可用");
+        window.requireCurrent();
+        String project=window.projectId(),id=window.checkoutId();
+        packageIdentity(project);packageIdentity(id);
+        File home=OwnerDraftCopyShelf.location(root.getAbsoluteFile(),id,false),files=new File(home,"files"),
+                registration=new File(home,"checkout.json");
+        var attrs=Files.readAttributes(files.toPath(),java.nio.file.attribute.BasicFileAttributes.class,java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        if(!attrs.isDirectory()||attrs.fileKey()==null||!files.equals(files.getCanonicalFile())||
+                !Files.isRegularFile(registration.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)||registration.length()>2L*1024*1024)
+            throw new SecurityException("原私人工作副本登记或目录无法核对");
+        JSONObject row=checkout(id);
+        JSONObject imported=row.optJSONObject("sourceImport");
+        if(!ordinaryDirectNodeCheckout(row)||(!originalPreparedOwnerCopy(row,project,id)&&
+                (imported==null||!java.util.Set.of("saf_tree","external_zip",ProjectSourceImport.BUILTIN_VITE_STARTER)
+                        .contains(imported.optString("sourceKind")))))
+            throw new SecurityException("请在原手机普通项目副本中核对已保存源码");
+        EditorSaveOrigin origin=editorSaveOrigin(row,project,id);
+        if(origin!=EditorSaveOrigin.PREPARED&&origin!=EditorSaveOrigin.BUILTIN_VITE&&!originalPhoneEditorImport(row,origin))
+            throw new SecurityException("请在原手机普通项目副本中核对已保存源码");
+        window.requireCurrent();
+        return new OwnerSourceCheckpoints.CheckoutProof(files,attrs.fileKey(),row.getString("name"),ProjectSources.digest(row));
+    }
+    private void requireQuietCheckpointCapture(String id)throws Exception{
+        requireIdle(id);
+        for(ProjectRuntime selected:runtimes.values())
+            if(selected instanceof ManagedProjectRuntime runtime)runtime.requireCheckoutIdleForCheckpoint(id);
+    }
+    /** Only after the owner explicitly asks to review saved source. Same filtered codec twice
+     * under the Local monitor; no wider export, unrelated source/hash read, or running-source claim. */
+    public synchronized OwnerSourceCheckpoints.Review reviewSourceCheckpointForOwner(OwnerSourceCheckpoints.SaveWindow window)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        var source=requireCheckpointCheckout(window);
+        String project=window.projectId(),id=window.checkoutId();
+        ProjectPackageArchive.CopyCurrent current=()->{
+            if(closed||!project.equals(window.projectId())||!id.equals(window.checkoutId()))
+                throw new SecurityException("已离开原手机项目副本");
+            window.requireCurrent();
+        };
+        requireQuietCheckpointCapture(id);current.check();
+        var frozen=ProjectPackageArchive.captureOwnerCheckpoint(source.files(),project,id,source.name(),current);
+        var checked=ProjectPackageArchive.captureOwnerCheckpoint(source.files(),project,id,source.name(),current);
+        requireQuietCheckpointCapture(id);
+        if(!source.equals(requireCheckpointCheckout(window))||!frozen.identity.equals(checked.identity))
+            throw new SecurityException("采集期间原保存范围变化，没有记录不完整的源码");
+        current.check();return ownerSourceCheckpoints.review(window,source,frozen);
+    }
+    /** Affirmative Save keeps the exact bytes shown by the review, never a later recapture. */
+    public OwnerSourceCheckpoints.SaveResult saveSourceCheckpointForOwner(OwnerSourceCheckpoints.SaveWindow window,OwnerSourceCheckpoints.Review review,String manifestIdentity)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        return ownerSourceCheckpoints.save(window,requireCheckpointCheckout(window),review,manifestIdentity);
+    }
+    public OwnerSourceCheckpoints.Catalog sourceCheckpointCatalogForOwner(OwnerSourceCheckpoints.Window window)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        requireCheckpointCheckout(window);return ownerSourceCheckpoints.catalog(window);
+    }
+    /** Enter the ordinary Files visit by its exact registered copy; no source/archive contents. */
+    public void admitSourceCheckpointVisitForOwner(OwnerSourceCheckpoints.Window window)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        requireCheckpointCheckout(window);
+    }
+    public OwnerSourceCheckpoints.PendingReview reviewSourceCheckpointPendingForOwner(OwnerSourceCheckpoints.PendingWindow window)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        requireCheckpointCheckout(window);return ownerSourceCheckpoints.reviewPendingAbandonment(window);
+    }
+    public OwnerSourceCheckpoints.PendingResult clearSourceCheckpointPendingForOwner(OwnerSourceCheckpoints.PendingWindow window,
+            OwnerSourceCheckpoints.PendingReview review)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        requireCheckpointCheckout(window);return ownerSourceCheckpoints.abandonPending(window,review);
+    }
+    /** Verify one already catalogued retained receipt, without using a source or file-body reader. */
+    public OwnerSourceCheckpoints.Version readSourceCheckpointReceiptForOwner(OwnerSourceCheckpoints.Catalog shown,
+            OwnerSourceCheckpoints.Version version)throws Exception{
+        return ownerSourceCheckpoints.readReceipt(shown,version);
+    }
+    /** This native catalog was admitted against the exact checkout during its visit.
+     * Compare only consumes that live visit and its selected retained archives. */
+    public OwnerSourceCheckpoints.Comparison compareSourceCheckpointsForOwner(OwnerSourceCheckpoints.Catalog shown,
+            OwnerSourceCheckpoints.Version before,OwnerSourceCheckpoints.Version after)throws Exception{
+        return ownerSourceCheckpoints.compare(shown,before,after);
+    }
+    public OwnerSourceCheckpoints.Opened openSourceCheckpointForOwner(OwnerSourceCheckpoints.Window window,OwnerSourceCheckpoints.Version version)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        requireCheckpointCheckout(window);return ownerSourceCheckpoints.open(window,version);
+    }
+    /** Dormant exact native continuation only; no feature/bridge dispatch or active draft selection. */
+    public synchronized OwnerSourceCheckpointContinuation.Offer reviewSourceCheckpointContinuationForOwner(
+            OwnerSourceCheckpointContinuation.Window window,OwnerSourceCheckpoints.Version selected)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        OwnerSourceCheckpointContinuation.requireSelected(window,selected);
+        var origin=requireCheckpointCheckout(window);
+        if(!ownerSourceCheckpoints.catalog(window).versions().contains(selected))
+            throw new SecurityException("当前原副本没有这份确切的源码快照");
+        return OwnerSourceCheckpointContinuation.review(this,root,window,selected,origin);
+    }
+    public synchronized OwnerSourceCheckpointContinuation.Observation continueSourceCheckpointForOwner(
+            OwnerSourceCheckpointContinuation.Window window,OwnerSourceCheckpointContinuation.Review review)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        if(review==null)throw new SecurityException("需在原核对窗口明确确认创建独立副本");
+        ProjectPackageArchive.CopyCurrent origin=()->{
+            if(!review.origin().equals(requireCheckpointCheckout(window)))
+                throw new SecurityException("原项目副本登记已变化，不创建其他副本");
+        };
+        return review.publish(this,root,window,selected->ownerSourceCheckpoints.open(selected,review.selected()),origin,()->{
+            if(closed)throw new SecurityException("原私人项目宿主已关闭");
+        });
+    }
+    public synchronized OwnerSourceCheckpointContinuation.Observation observeSourceCheckpointContinuationForOwner(
+            OwnerSourceCheckpointContinuation.SelectionWindow window,OwnerSourceCheckpoints.Version selected)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        OwnerSourceCheckpointContinuation.requireSelected(window,selected);
+        requireCheckpointCheckout(window);
+        return OwnerSourceCheckpointContinuation.observe(root,window,selected);
+    }
+    /** Opaque exact native registration; it contains no review or mutable source. */
+    public static final class SourceCheckpointContinuationRegistration {
+        private final LocalModule local;
+        private final String project,checkout;
+        private final OwnerSourceCheckpoints.CheckoutProof original;
+        private final OwnerSourceCheckpoints.Version selected;
+        private final OwnerSourceCheckpointContinuation.Target target;
+        private SourceCheckpointContinuationRegistration(LocalModule local,OwnerSourceCheckpoints.Version version,
+                OwnerSourceCheckpointContinuation.Target target,OwnerSourceCheckpoints.CheckoutProof original){
+            this.local=local;this.project=version.projectId();this.checkout=version.checkoutId();this.original=original;
+            this.selected=version;this.target=target;
+        }
+        public void requireOriginal(OwnerSourceCheckpoints.Window window)throws Exception{
+            OwnerSourceCheckpoints.requireWorker();
+            if(window==null||!project.equals(window.projectId())||!checkout.equals(window.checkoutId())||
+                    !original.equals(local.requireCheckpointCheckout(window)))
+                throw new SecurityException("未核对到同一份原私人副本登记");
+        }
+        public void requireStillPublished(OwnerSourceCheckpointContinuation.SelectionWindow window)throws Exception{
+            requireOriginal(window);
+            var checked=local.readPublishedSourceCheckpointContinuationForOwner(window,selected,target);
+            if(!original.equals(checked.original))throw new SecurityException("原私人副本登记已变化");
+        }
+    }
+    /** Dormant explicit Open Files preflight. Reads only these two registrations. */
+    public synchronized SourceCheckpointContinuationRegistration readPublishedSourceCheckpointContinuationForOwner(
+            OwnerSourceCheckpointContinuation.SelectionWindow window,OwnerSourceCheckpoints.Version selected,
+            OwnerSourceCheckpointContinuation.Target expected)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        OwnerSourceCheckpointContinuation.requireSelected(window,selected);
+        var origin=requireCheckpointCheckout(window);
+        var result=OwnerSourceCheckpointContinuation.observe(root,window,selected);
+        if(result.state()!=OwnerSourceCheckpointContinuation.State.PUBLISHED||!result.target().equals(expected)||
+                !origin.equals(requireCheckpointCheckout(window)))
+            throw new SecurityException("未核对到所选版已登记的原新副本");
+        return new SourceCheckpointContinuationRegistration(this,selected,result.target(),origin);
+    }
     private JSONObject freezeProjectPackage(JSONObject input)throws Exception {
         if(!input.optString("expectedManifestIdentity").matches("[a-f0-9]{64}")||!input.optString("expectedSourceDigest").matches("[a-f0-9]{64}"))throw new IllegalArgumentException("请先核对原项目包清单与实际源码");
         var frozen=capturePackage(input);if(!frozen.identity.equals(input.getString("expectedManifestIdentity")))throw new SecurityException("项目包所选字节或范围已变化，请重新读取清单后决定");

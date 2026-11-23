@@ -17,11 +17,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+/** In-process identity of the ordinary Files window, not a path or renderer-issued grant. */
+internal class SourceCheckpointFilesPin(
+    val project: String, val checkout: String, val current: () -> Boolean,
+    val currentOnMain: () -> Boolean, val retire: () -> Unit,
+)
+
 /** Native owner adapter for the existing private-file draft/cache and SHA-CAS
  * writer. Formal versions use a separate, single-use native import review;
  * neither path authorizes live source edits or code execution. */
 internal class PocketWebCheckoutFiles(private val controller: PocketWorldController) {
-    private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null, @Volatile var initialPhoneSha: String? = null) {
+    private class Page(val handle: String, val project: String, val checkout: String, val parentCurrent: () -> Boolean, val sourcePath: String? = null, @Volatile var initialPhoneSha: String? = null,
+                       val checkpointSibling: Boolean = false) {
         @Volatile var matches: CheckoutPathMatches? = null
         @Volatile var matchesUntil: Long = 0
         @Volatile var directory: CheckoutPathMatches.DirectoryPage? = null
@@ -30,6 +37,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         @Volatile var savedEdit: SavedEdit? = null
         @Volatile var savedStaticPageEligible = false
         @Volatile var ownerPythonPackage = false
+        var ordinaryListShown = false
+        @Volatile var checkpointPin: Any? = null
+        @Volatile var checkpointListedDrafts: List<String>? = null
         @Volatile var savedStaticRoot: SavedStaticRoot? = null
         var priorSavedFile: ListedSave? = null // Main-thread selection from this exact list response.
         val git = PocketWebCheckoutGit(project, checkout)
@@ -60,7 +70,7 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     private val main = Handler(Looper.getMainLooper())
     private val store = controller.projectWorkbench.fileDrafts
     @Volatile private var page: Page? = null
-    private var busy = false
+    @Volatile private var busy = false
     companion object {
         private const val PYTHON_REVIEW = "projects.development.files.reviewPython"
         private const val PYTHON_CONFIRM = "projects.development.files.confirmPython"
@@ -85,6 +95,61 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
     }
     private fun selected(args: JSONObject): Page {
         val original = page; check(original != null && current(original) && original.handle == text(args, "filesHandle")) { "原私人副本文件窗口已关闭，请重新打开" }; return original
+    }
+    fun retireSourceCheckpointPin() { page?.checkpointPin = null }
+    /** Bind the actual Files ACK and optional clean still-held editor. No new file read. */
+    fun sourceCheckpointPin(args: JSONObject, parentFast: () -> Boolean, parentMain: (String) -> Boolean): SourceCheckpointFilesPin {
+        check(Looper.myLooper() == main.looper)
+        val original = selected(args)
+        val file = original.opened
+        val draft = file?.draft
+        val sequence = file?.sequence
+        fun clean() = draft == null || file != null && file.draft === draft && file.sequence == sequence &&
+            !file.saveUnknown && file.formal == null && !draft.creating && !draft.dirty() && !draft.conflict()
+        fun admitted() = original.sourcePath == null && original.ordinaryListShown && !busy &&
+            original.adoption == null && original.python == null && current(original) && parentMain(original.checkout) &&
+            clean() && (file == null || store.holdsExact(draft))
+        check(admitted()) { "请在原私人副本的文件清单或干净编辑器中保留已保存源码" }
+        val pin = Any()
+        original.checkpointPin = pin
+        fun same() = page === original && original.checkpointPin === pin && original.opened === file &&
+            parentFast() && clean()
+        return SourceCheckpointFilesPin(original.project, original.checkout, ::same,
+            { same() && admitted() }, { if (original.checkpointPin === pin) original.checkpointPin = null })
+    }
+    /** Unmounted checkpoint handoff only. Look at the actual departing Page, never a
+     * generic close ACK; do not clear it until the replacement's ordinary listing exists. */
+    fun checkpointFilesDeparture(handle: String, checkout: String, sibling: Boolean,
+            parentFast: () -> Boolean, parentMain: () -> Boolean): CheckpointFilesDeparture? {
+        check(Looper.myLooper() == main.looper)
+        val original = page?.takeIf { it.handle == handle && it.checkout == checkout &&
+            it.checkpointSibling == sibling && it.sourcePath == null && it.ordinaryListShown && current(it) } ?: return null
+        if (!parentMain()) return null
+        val file = original.opened
+        val draft = file?.draft
+        val sequence = file?.sequence
+        fun same() = page === original && parentFast() && current(original)
+        fun ready() = same() && !busy && original.opened === file &&
+            (file == null || draft != null && file.draft === draft && file.sequence == sequence &&
+                !file.saveUnknown && file.formal == null && !draft.creating && !draft.dirty() &&
+                !draft.conflict() && store.holdsExact(draft)) &&
+            (!sibling || original.checkpointListedDrafts?.let { store.checkpointDraftsKnownClean(original.project, original.checkout, it) } == true)
+        fun readyMain() = ready() && parentMain() && original.adoption == null && original.python == null
+        return CheckpointFilesDeparture(::ready, ::readyMain) { target, toSibling, still ->
+            check(Looper.myLooper() != main.looper && ready() && still() && target != original.checkout &&
+                toSibling != sibling) { "原私人副本窗口已变化" }
+            val next = Page(UUID.randomUUID().toString(), original.project, target, original.parentCurrent, checkpointSibling = toSibling)
+            val listing = listing(next, "", "")
+            check(ready() && still() && listing.opt("projectId") == next.project && listing.opt("checkoutId") == next.checkout &&
+                listing.opt("filesHandle") == next.handle && listing.opt("readOnly") == true) { "未核对到所选私人副本的文件清单" }
+            PreparedCheckpointFilesLeg {
+                check(Looper.myLooper() == main.looper && readyMain() && still()) { "原私人副本留在原处，未接入其他文件窗口" }
+                clear()
+                page = next
+                val reply = PocketWebState.publicValue(presentListing(next, listing)) as JSONObject
+                CheckpointFilesArrival(next.project, next.checkout, original.handle, next.handle, reply.toString()) { current(next) }
+            }
+        }
     }
     /** The existing foreground save receipt can only be used for this ordinary editor and open file. */
     fun savedEditForBuild(project: String, checkout: String, filesHandle: String, saveId: String): SavedEdit {
@@ -336,7 +401,12 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             if(!nested&&row.opt("change")!="deleted"&&path.contains('/'))nested=true
         }
         var cacheError = ""
-        try { for (path in store.dirtyPaths(original.project, original.checkout)) all.getOrPut(path) { JSONObject().put("path", path).put("change", "draft_only") }.put("hasDraft", true) }
+        if (original.checkpointSibling) original.checkpointListedDrafts = null
+        try {
+            val retained = store.dirtyPaths(original.project, original.checkout)
+            for (path in retained) all.getOrPut(path) { JSONObject().put("path", path).put("change", "draft_only") }.put("hasDraft", true)
+            if (original.checkpointSibling) original.checkpointListedDrafts = retained.toList()
+        }
         catch (failure: Exception) { cacheError = failure.message ?: "部分保留草稿暂无法读取，未删除" }
         val selected = all.entries.filter { it.key > after }.take(41)
         val result = JSONObject().put("filesHandle", original.handle).put("projectId", original.project).put("checkoutId", original.checkout)
@@ -357,6 +427,9 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
         return result
     }
     private fun presentListing(original: Page, value: JSONObject): JSONObject {
+        if (original.sourcePath == null && value.opt("readOnly") == true && value.opt("filesHandle") == original.handle &&
+            value.opt("projectId") == original.project && value.opt("checkoutId") == original.checkout)
+            original.ordinaryListShown = true
         original.priorSavedFile = null
         val position = value.optJSONObject("priorSavedFile")
         val path = position?.opt("path") as? String

@@ -53,9 +53,20 @@ public final class ProjectPackageArchive {
     }
     /** Optional source-only subset, still the original codec/catalog and private-file policy. */
     public static Frozen capture(File activeRoot, JSONObject original, String mode, String entryPath, boolean includeGeneratedRoots, JSONArray includePaths) throws Exception {
+        return capture(activeRoot,original,mode,entryPath,includeGeneratedRoots,includePaths,false,null);
+    }
+    /** Uses only package-included files to derive the checkpoint source digest. The
+     * wider working-tree export is not consulted, even to read a hash. */
+    public static Frozen captureOwnerCheckpoint(File root,String project,String checkout,String name,CopyCurrent current)throws Exception {
+        java.util.Objects.requireNonNull(current);
+        JSONObject original=new JSONObject().put("projectId",project).put("checkoutId",checkout).put("name",name);
+        return capture(root,original,"source_project","",false,null,true,current);
+    }
+    private static Frozen capture(File activeRoot, JSONObject original, String mode, String entryPath, boolean includeGeneratedRoots, JSONArray includePaths,boolean checkpoint,CopyCurrent current) throws Exception {
+        checkCurrent(current);
         if (!Set.of("source_project", "web_output").contains(mode)) throw new IllegalArgumentException("请选择源项目包或固定网页成果");
         for (String key : new String[]{"projectId", "checkoutId"}) ProjectBuildPlan.identity(original.getString(key));
-        if (!original.getString("sourceDigest").matches("[a-f0-9]{64}")) throw new IllegalArgumentException("缺少实际源码摘要");
+        if (!checkpoint&&!original.getString("sourceDigest").matches("[a-f0-9]{64}")) throw new IllegalArgumentException("缺少实际源码摘要");
         File root = activeRoot.getAbsoluteFile();
         if (Files.isSymbolicLink(root.toPath()) || !root.isDirectory() || !root.equals(root.getCanonicalFile())) throw new SecurityException("项目根目录不可用或含链接");
         boolean web = mode.equals("web_output");
@@ -81,6 +92,7 @@ public final class ProjectPackageArchive {
                 if(Thread.currentThread().isInterrupted()||++visited[0]>10000)throw new java.io.IOException("项目包采集取消或目录条目超过10000，未生成部分成果");
                 if (!relative.isEmpty()) {
                     try {
+                        checkCurrent(current);
                         packagePath(relative);
                         if(!root.toPath().resolve(relative).equals(path))throw new SecurityException("目录名不是可往返UTF-8路径，未另名保存");
                         String reason = excluded(relative, true, web || includeGeneratedRoots);
@@ -97,6 +109,7 @@ public final class ProjectPackageArchive {
                 String relative = relative(path);
                 if(Thread.currentThread().isInterrupted()||++visited[0]>10000)throw new java.io.IOException("项目包采集取消或目录条目超过10000，未生成部分成果");
                 try {
+                    checkCurrent(current);
                     packagePath(relative);
                     if(!root.toPath().resolve(relative).equals(path))throw new SecurityException("文件名不是可往返UTF-8路径，未另名保存");
                     String reason = excluded(relative, false, web || includeGeneratedRoots);
@@ -107,7 +120,7 @@ public final class ProjectPackageArchive {
                     if (attrs.size() > MAX_FILE_BYTES || files.size() >= MAX_FILES) throw new IllegalArgumentException("项目包超过2000文件/单文件2MiB；未保存部分成果");
                     NativeCommandExecutor.within(root, relative);
                     byte[] bytes;
-                    try (InputStream input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) { bytes = bounded(input, MAX_FILE_BYTES); }
+                    try (InputStream input = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) { bytes = bounded(input, MAX_FILE_BYTES,current); }
                     BasicFileAttributes after = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
                     if (after.isSymbolicLink() || !after.isRegularFile() || after.size() != bytes.length || !java.util.Objects.equals(attrs.fileKey(), after.fileKey()) || !attrs.lastModifiedTime().equals(after.lastModifiedTime())) throw new SecurityException("采集期间文件变化：" + relative);
                     total[0] += bytes.length; if (total[0] > MAX_TOTAL_BYTES) throw new IllegalArgumentException("项目包展开超过16MiB；未保存部分成果");
@@ -117,10 +130,13 @@ public final class ProjectPackageArchive {
             }
         });
         if (files.isEmpty() || !selectedEntry.isEmpty() && !files.containsKey(selectedEntry)) throw new IllegalArgumentException("所选范围没有可保存文件或指定入口被排除");
+        checkCurrent(current);
+        JSONArray entries=manifest(files,executable);
+        String digest=checkpoint?ProjectSources.manifestDigest(entries):original.getString("sourceDigest");
         JSONObject scope = new JSONObject().put("format", FORMAT).put("mode", mode)
             .put("project", new JSONObject().put("id", original.getString("projectId")).put("name", original.optString("name", "项目")))
-            .put("source", new JSONObject().put("projectId", original.getString("projectId")).put("checkoutId", original.getString("checkoutId")).put("sourceDigest", original.getString("sourceDigest")))
-            .put("entryPath", selectedEntry).put("previewRoot", outputRoot).put("directories",new JSONArray(directories)).put("files", manifest(files, executable)).put("bytes", total[0])
+            .put("source", new JSONObject().put("projectId", original.getString("projectId")).put("checkoutId", original.getString("checkoutId")).put("sourceDigest", digest))
+            .put("entryPath", selectedEntry).put("previewRoot", outputRoot).put("directories",new JSONArray(directories)).put("files", entries).put("bytes", total[0])
             .put("omitted", orderedOmissions(omitted)).put("includesHistory", false).put("includesToolEnvironment", false).put("atomicSourceFence", false)
             .put("policy", new JSONObject().put("version", 1).put("generatedRootsIncluded", web || includeGeneratedRoots).put("privateFilesExcluded", true));
         if (scope.toString().getBytes(StandardCharsets.UTF_8).length > MAX_MANIFEST_BYTES) throw new IllegalArgumentException("项目包清单超过1MiB，未生成不能重导入的包");
@@ -128,6 +144,7 @@ public final class ProjectPackageArchive {
     }
 
     @FunctionalInterface public interface CopyCurrent {void check()throws Exception;}
+    private static void checkCurrent(CopyCurrent current)throws Exception{if(current!=null)current.check();}
     /** Same private package materializer used by regular import and draft promotion; accepts a new, empty directory only. */
     public static JSONArray materializeWorkspace(Frozen frozen,File files,CopyCurrent current)throws Exception{
         current.check();if(!files.mkdir())throw new IllegalStateException("无法建立新的项目文件目录");
@@ -200,26 +217,15 @@ public final class ProjectPackageArchive {
     }
     /** Caller owns this private staged file; compressed bytes and all expanded content are bounded. */
     public static Frozen read(File archive) throws Exception {
-        if (Files.isSymbolicLink(archive.toPath()) || !archive.isFile() || archive.length() > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("项目包不是有界普通ZIP文件");
-        preflightDirectory(archive); // Count/metadata limits apply before a library allocates entry objects.
-        try (org.apache.commons.compress.archivers.zip.ZipFile zip = new org.apache.commons.compress.archivers.zip.ZipFile(archive, StandardCharsets.UTF_8.name())) {
-            Map<String, ZipArchiveEntry> entries = new TreeMap<>();
-            var iterator = zip.getEntries();
-            while (iterator.hasMoreElements()) {
-                ZipArchiveEntry entry = iterator.nextElement(); String name = entry.getName();
-                if (entry.isDirectory() || entry.isUnixSymlink() || entry.getGeneralPurposeBit().usesEncryption() || !zip.canReadEntryData(entry) || entries.size() > MAX_FILES) throw new SecurityException("项目包含目录/链接/加密/不支持项目或条目超限");
-                int mode = entry.getUnixMode(); if ((mode & 07000) != 0 || (mode & 0170000) != 0 && (mode & 0170000) != 0100000) throw new SecurityException("项目包含特殊Unix文件类型或权限");
-                if (!name.equals("manifest.json")) {
-                    if (!name.startsWith("project/")) throw new SecurityException("项目包包含未声明命名空间");
-                    packagePath(name.substring(8));
-                }
-                if (entries.put(name, entry) != null) throw new SecurityException("项目包含重复路径");
-            }
-            ZipArchiveEntry manifestEntry = entries.remove("manifest.json"); if (manifestEntry == null) throw new IllegalArgumentException("不是PocketWorld可重导入项目包：缺少manifest");
-            JSONObject manifest;
-            try (InputStream input = zip.getInputStream(manifestEntry)) { byte[] bytes=bounded(input, MAX_MANIFEST_BYTES);java.util.zip.CRC32 crc=new java.util.zip.CRC32();crc.update(bytes);if(manifestEntry.getCrc()<0||manifestEntry.getCrc()!=crc.getValue())throw new SecurityException("项目包清单ZIP校验不一致");manifest = new JSONObject(strictText(bytes)); }
-            validateHeader(manifest);
-            JSONArray declared = manifest.getJSONArray("files"); if (declared.length() < 1 || declared.length() > MAX_FILES || entries.size() != declared.length()) throw new SecurityException("项目包清单与真实条目数不同");
+        return read(archive,null);
+    }
+    /** Same bounded parser with the native owner's currentness checked during body reads. */
+    public static Frozen read(File archive,CopyCurrent current) throws Exception {
+        try (var zip=openCheckedZip(archive,current)) {
+            ArchiveIndex index=readIndex(zip,current);
+            JSONObject manifest=index.manifest();
+            JSONArray declared=manifest.getJSONArray("files");
+            Map<String,ZipArchiveEntry> entries=index.entries();
             Map<String, byte[]> files = new TreeMap<>(); long total = 0;
             for (int i = 0; i < declared.length(); i++) {
                 JSONObject file = declared.getJSONObject(i); String path = packagePath(file.getString("path"));
@@ -228,7 +234,7 @@ public final class ProjectPackageArchive {
                 ZipArchiveEntry entry = entries.remove("project/" + path);
                 long declaredBytes=integer(file,"bytes");
                 if (entry == null || declaredBytes < 0 || declaredBytes > MAX_FILE_BYTES) throw new SecurityException("项目包清单路径或大小无效");
-                byte[] bytes; try (InputStream input = zip.getInputStream(entry)) { bytes = bounded(input, MAX_FILE_BYTES); }
+                byte[] bytes; try (InputStream input = zip.getInputStream(entry)) { bytes = bounded(input, MAX_FILE_BYTES,current); }
                 java.util.zip.CRC32 crc=new java.util.zip.CRC32();crc.update(bytes);if(entry.getCrc()<0||entry.getCrc()!=crc.getValue())throw new SecurityException("项目包ZIP校验不一致");
                 total += bytes.length;
                 if (total > MAX_TOTAL_BYTES || file.getLong("bytes") != bytes.length || !ProjectSources.sha256(bytes).equals(file.getString("sha256")) || files.put(path, bytes) != null) throw new SecurityException("项目包文件字节/摘要/重复路径校验失败");
@@ -242,8 +248,47 @@ public final class ProjectPackageArchive {
             for (String path : files.keySet()) for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) if (files.containsKey(path.substring(0, slash))) throw new SecurityException("项目包文件与目录冲突");
             JSONArray dirs=manifest.getJSONArray("directories");for(int i=0;i<dirs.length();i++){String path=dirs.getString(i);if(files.containsKey(path))throw new SecurityException("项目包文件与空目录冲突");for(int slash=path.indexOf('/');slash>=0;slash=path.indexOf('/',slash+1))if(files.containsKey(path.substring(0,slash)))throw new SecurityException("项目包目录祖先是文件");}
             String entry = manifest.optString("entryPath"); if (!entry.isEmpty() && !files.containsKey(packagePath(entry))) throw new SecurityException("项目包入口不在真实文件清单中");
-            return new Frozen(manifest, files);
+            checkCurrent(current);return new Frozen(manifest, files);
         }
+    }
+
+    /** Manifest metadata only. This does not verify member bytes or issue a Frozen package.
+     * The checkpoint owner store binds this index to the exact already fully verified persisted ZIP. */
+    public static JSONObject readManifestIndex(File archive,CopyCurrent current)throws Exception{
+        java.util.Objects.requireNonNull(current);
+        try(var zip=openCheckedZip(archive,current)){
+            JSONObject result=readIndex(zip,current).manifest();
+            checkCurrent(current);return result;
+        }
+    }
+
+    private static org.apache.commons.compress.archivers.zip.ZipFile openCheckedZip(File archive,CopyCurrent current)throws Exception{
+        checkCurrent(current);
+        if (Files.isSymbolicLink(archive.toPath()) || !archive.isFile() || archive.length() > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("项目包不是有界普通ZIP文件");
+        preflightDirectory(archive); // Count/metadata limits apply before a library allocates entry objects.
+        return new org.apache.commons.compress.archivers.zip.ZipFile(archive, StandardCharsets.UTF_8.name());
+    }
+    private record ArchiveIndex(JSONObject manifest,Map<String,ZipArchiveEntry> entries) {}
+    private static ArchiveIndex readIndex(org.apache.commons.compress.archivers.zip.ZipFile zip,CopyCurrent current)throws Exception{
+        Map<String, ZipArchiveEntry> entries = new TreeMap<>();
+        var iterator = zip.getEntries();
+        while (iterator.hasMoreElements()) {
+            checkCurrent(current);
+            ZipArchiveEntry entry = iterator.nextElement(); String name = entry.getName();
+            if (entry.isDirectory() || entry.isUnixSymlink() || entry.getGeneralPurposeBit().usesEncryption() || !zip.canReadEntryData(entry) || entries.size() > MAX_FILES) throw new SecurityException("项目包含目录/链接/加密/不支持项目或条目超限");
+            int mode = entry.getUnixMode(); if ((mode & 07000) != 0 || (mode & 0170000) != 0 && (mode & 0170000) != 0100000) throw new SecurityException("项目包含特殊Unix文件类型或权限");
+            if (!name.equals("manifest.json")) {
+                if (!name.startsWith("project/")) throw new SecurityException("项目包包含未声明命名空间");
+                packagePath(name.substring(8));
+            }
+            if (entries.put(name, entry) != null) throw new SecurityException("项目包含重复路径");
+        }
+        ZipArchiveEntry manifestEntry = entries.remove("manifest.json"); if (manifestEntry == null) throw new IllegalArgumentException("不是PocketWorld可重导入项目包：缺少manifest");
+        JSONObject manifest;
+        try (InputStream input = zip.getInputStream(manifestEntry)) { byte[] bytes=bounded(input, MAX_MANIFEST_BYTES,current);java.util.zip.CRC32 crc=new java.util.zip.CRC32();crc.update(bytes);if(manifestEntry.getCrc()<0||manifestEntry.getCrc()!=crc.getValue())throw new SecurityException("项目包清单ZIP校验不一致");manifest = new JSONObject(strictText(bytes)); }
+        validateHeader(manifest);
+        JSONArray declared = manifest.getJSONArray("files"); if (declared.length() < 1 || declared.length() > MAX_FILES || entries.size() != declared.length()) throw new SecurityException("项目包清单与真实条目数不同");
+        return new ArchiveIndex(manifest,entries);
     }
 
     /** This bounded v1 never needs ZIP64/multi-disk. Validate the directory before constructing ZipFile. */
@@ -322,9 +367,9 @@ public final class ProjectPackageArchive {
     private static String strictText(byte[] bytes) throws Exception {
         String text = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString(); if (text.indexOf('\0') >= 0) throw new IllegalArgumentException("不是无NUL UTF-8文本"); return text;
     }
-    private static byte[] bounded(InputStream input, int limit) throws Exception {
+    private static byte[] bounded(InputStream input,int limit,CopyCurrent current)throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream(); byte[] buffer = new byte[8192];
-        for (;;) { if(Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("项目包读取已取消");int count = input.read(buffer, 0, Math.min(buffer.length, limit + 1 - output.size())); if (count < 0) break; output.write(buffer, 0, count); if (output.size() > limit) throw new IllegalArgumentException("项目包内容超过声明界限"); }
+        for (;;) { if(Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("项目包读取已取消");checkCurrent(current);int count = input.read(buffer, 0, Math.min(buffer.length, limit + 1 - output.size())); if (count < 0) break; output.write(buffer, 0, count); if (output.size() > limit) throw new IllegalArgumentException("项目包内容超过声明界限"); }
         return output.toByteArray();
     }
     private static void put(ZipOutputStream zip, String name, byte[] bytes) throws Exception { ZipEntry entry = new ZipEntry(name); entry.setTime(0); zip.putNextEntry(entry); zip.write(bytes); zip.closeEntry(); }

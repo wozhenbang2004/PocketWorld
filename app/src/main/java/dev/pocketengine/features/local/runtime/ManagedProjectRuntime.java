@@ -159,6 +159,7 @@ public final class ManagedProjectRuntime implements ProjectRuntime,AutoCloseable
     public void requireLivePreview(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original)throws Exception {requireProvider(reference);jobs.requireLivePreview(reference,original);}
     public void requirePtyServiceLive(RuntimeExecutionRef reference,dev.pocketengine.core.RunControl original)throws Exception {requireProvider(reference);jobs.requirePtyServiceLive(reference,original);}
     public void requireCheckoutWritable(String checkout)throws Exception {jobs.requireCheckoutWritable(checkout);}
+    public void requireCheckoutIdleForCheckpoint(String checkout)throws Exception {jobs.requireCheckoutIdleForCheckpoint(checkout);}
     /** Body-free original native job order; not a source version or execution grant. */
     public long currentCheckoutSequence(String checkout)throws Exception{return jobs.currentCheckoutSequence(checkout);}
     @Override public JSONObject describe() throws Exception {

@@ -444,6 +444,16 @@ internal class PocketWebBridge(
     private val keptStaticPages=lazy {
         PocketWebKeptStaticPages(controller,{projectPreview},{documentId},::keptStaticProjectVisible,::captureWindow,::acceptsWindow)
     }
+    private val sourceCheckpoints=lazy {
+        PocketWebSourceCheckpoints(controller,{documentId},::captureSourceCheckpointFiles,SOURCE_CHECKPOINT_CONTINUE_ENABLED){publishState()}
+    }
+    private val sourceCheckpointContinue=lazy {
+        PocketWebSourceCheckpointContinue(controller,sourceCheckpoints.value){ source, published ->
+            val owner=captureSourceCheckpointProjectFence()
+            projectDevelopment.sourceCheckpointFilesHandoff(source.viewHandle,source.filesHandle,source.files,
+                source.catalog,source.before,source.selected,published,owner.fast,owner.main)
+        }
+    }
     private val knowledge = PocketWebKnowledge(controller, projectDevelopment::conventionDraft)
     private val butlerPreparations = PocketWebButlerPreparations(controller, { !closed && documentId != null && controller.webPrivateOwnerVisible() }, ::captureWindow, ::acceptsWindow)
     private val localPages = PocketWebLocal(controller) { taskViewId }
@@ -502,7 +512,12 @@ internal class PocketWebBridge(
         )
         // Activate only with the reviewed Web shelf's explicit native close before soft route changes.
         private const val KEPT_STATIC_PAGES_ENABLED=true
+        // The existing Files UI has no retained-source visit or Back binding yet.
+        private const val SOURCE_CHECKPOINTS_ENABLED=true
+        private const val SOURCE_CHECKPOINT_CONTINUE_ENABLED=true
         val commands: Set<String> = (if(KEPT_STATIC_PAGES_ENABLED)PocketWebKeptStaticPages.COMMANDS else emptySet()) +
+            (if(SOURCE_CHECKPOINTS_ENABLED)PocketWebSourceCheckpoints.COMMANDS else emptySet()) +
+            (if(SOURCE_CHECKPOINTS_ENABLED&&SOURCE_CHECKPOINT_CONTINUE_ENABLED)PocketWebSourceCheckpointContinue.COMMANDS else emptySet()) +
             PocketWebOwnerQuestions.coldCommands + PocketWebLocal.PROJECT_OBSERVATION_COMMANDS + PocketWebLocalSourceIntake.COMMANDS + PocketWebFirstNodeWebOutput.COMMANDS  + PocketWebNodeCompilerOutput.COMMANDS + PocketWebPythonOutput.COMMANDS + linkedSetOf(
             "conversation.captureHostGoal", "conversation.openHostGoal", "conversation.readPrivateHostFinal", "conversation.saveFirstHostRequest", "conversation.selectSavedHost",
             "conversation.projectConvention.read", "conversation.projectConvention.stageFeedback",
@@ -556,13 +571,14 @@ internal class PocketWebBridge(
         projectLivePreview = PocketWebProjectLivePreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
         remoteTasks.attachPreview(container)
     }
-    fun foreground(value: Boolean) { if (!value) { retireKeptStaticPages();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { if (!value) { retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
         if (closed) return
         closed = true
         retireKeptStaticPages()
+        retireSourceCheckpoints()
         retireReplyPicker()
         controller.closeOwnerWorkRequestHistory()
         controller.closeOriginalReminderHistory()
@@ -618,6 +634,50 @@ internal class PocketWebBridge(
     }
 
     private fun retireKeptStaticPages(){if(keptStaticPages.isInitialized())keptStaticPages.value.clear()}
+    private fun retireSourceCheckpoints(){
+        if(sourceCheckpointContinue.isInitialized())sourceCheckpointContinue.value.clear()
+        if(sourceCheckpoints.isInitialized())sourceCheckpoints.value.clear()
+    }
+
+    private fun captureSourceCheckpointFiles(args:JSONObject):SourceCheckpointFilesPin {
+        val owner=captureSourceCheckpointProjectFence()
+        return projectDevelopment.sourceCheckpointFiles(args,owner.fast,owner.main)
+    }
+    private data class SourceCheckpointProjectFence(val fast:()->Boolean,val main:()->Boolean)
+    private fun captureSourceCheckpointProjectFence():SourceCheckpointProjectFence {
+        check(SOURCE_CHECKPOINTS_ENABLED)
+        val document = requireNotNull(documentId)
+        val ticket = captureWindow()
+        val owner = controller.displayedPhoneWindowVersion()
+        val selected = controller.state
+        val project = requireNotNull(selected.projectId)
+        val route = controller.projectWorkbench.navigationRevision()
+        val revision = workspaceResumeRevision
+        fun fast():Boolean {
+            val now = controller.state
+            return !closed && documentId==document && commandFence.accepts(ticket.bridge) &&
+                controller.displayedPhoneWindowAlive(owner) && controller.webPrivateOwnerVisible() &&
+                now.projectId==project && now.filePath==null &&
+                selected.requestedProjectRevision==now.requestedProjectRevision &&
+                selected.requestedTaskRevision==now.requestedTaskRevision &&
+                selected.requestedConnectionRevision==now.requestedConnectionRevision &&
+                route==controller.projectWorkbench.navigationRevision()
+        }
+        fun onMain():Boolean {
+            check(Looper.myLooper()==Looper.getMainLooper())
+            val now=controller.state
+            return fast() && acceptsWindow(ticket) && workspaceResumeRevision==revision &&
+                section==null && taskViewId==null && taskReturnSection==null && !phoneComposer.intent &&
+                !controller.hasChannelPhoneOrigin && controller.conversationReader==null && controller.queuedInputsPage==null &&
+                !attachmentPages.hasOpenWorkspace && !controller.attachmentOutcomes.state.open &&
+                controller.webPresentationActivity().hasWindowFocus() && now.projects.count{it.id==project}==1 &&
+                !now.fileLoading && !now.fileSaving && !now.chatAttachmentPickerOpen && !now.attachmentImporting &&
+                localSourceIntake.snapshot()?.isNull("window")!=false && projectGitImport.snapshot()?.optBoolean("open")!=true &&
+                projectPreview?.snapshot()?.optBoolean("visible")!=true && projectLivePreview?.snapshot()?.optBoolean("mounted")!=true
+        }
+        check(onMain()) { "请回到原私人项目文件窗口" }
+        return SourceCheckpointProjectFence(::fast,::onMain)
+    }
 
     private fun ordinaryDetachedHistoryEpoch(conversation:String):Int? {
         if(closed||documentId==null||section!=null||taskViewId!=null||!controller.webPrivateOwnerVisible()||
@@ -676,6 +736,7 @@ internal class PocketWebBridge(
     fun invalidatePresentation(documentReplaced: Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
         retireKeptStaticPages()
+        retireSourceCheckpoints()
         retireReplyPicker()
         savedLocalReturn = null
         openedRetainedDraftCopy = null
@@ -772,6 +833,12 @@ internal class PocketWebBridge(
             if(keptStaticPages.isInitialized())keptStaticPages.value.retireLostOwner()
             if(KEPT_STATIC_PAGES_ENABLED)projection?.getJSONObject("state")?.put("keptStaticPageShelf",
                 keptStaticPages.takeIf{it.isInitialized()}?.value?.snapshot() ?: JSONObject.NULL)
+            if(SOURCE_CHECKPOINTS_ENABLED){
+                if(sourceCheckpoints.isInitialized())sourceCheckpoints.value.retireLostOwner()
+                if(sourceCheckpointContinue.isInitialized())sourceCheckpointContinue.value.retireLostOwner()
+                projection?.getJSONObject("state")?.put("sourceCheckpointVisit",
+                    sourceCheckpoints.takeIf{it.isInitialized()}?.value?.snapshot() ?: JSONObject.NULL)
+            }
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("directVitePackageExport", controller.projectPackages.directViteExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("localSourceIntake", localSourceIntake.snapshot() ?: JSONObject.NULL)
@@ -885,6 +952,22 @@ internal class PocketWebBridge(
                 keptStaticPages.value.dispatch(action,args){result,error->
                     complete(id,result,error,errorCode=if(effect)"outcome_unknown" else "not_accepted",
                         retainValue=false,replayHint="请回同一项目核对原记录；没有重新操作")
+                    publishState()
+                }
+                return
+            }
+            if (SOURCE_CHECKPOINTS_ENABLED && action in PocketWebSourceCheckpoints.COMMANDS) {
+                sourceCheckpoints.value.dispatch(action,args){result,error->
+                    complete(id,result,error,errorCode=if(action==PocketWebSourceCheckpoints.SAVE)"outcome_unknown" else "not_accepted",
+                        retainValue=false,replayHint="只从原副本查看版本，不重放保存")
+                    publishState()
+                }
+                return
+            }
+            if (SOURCE_CHECKPOINTS_ENABLED && SOURCE_CHECKPOINT_CONTINUE_ENABLED && action in PocketWebSourceCheckpointContinue.COMMANDS) {
+                sourceCheckpointContinue.value.dispatch(action,args){result,error->
+                    complete(id,result,error,errorCode=if(PocketWebSourceCheckpointContinue.mayChangeOriginalWindow(action))
+                        "outcome_unknown" else "not_accepted",retainValue=false,replayHint="请只核对本次原登记，不重放创建")
                     publishState()
                 }
                 return

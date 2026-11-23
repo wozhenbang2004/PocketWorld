@@ -9,6 +9,9 @@ import {checkoutDirectoryPage,ProjectCheckoutDirectory,type DirectoryFile,type D
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { canOpenSavedStaticPreview, ProjectSavedStaticPreview, type SavedStaticEditor } from './ProjectSavedStaticPreview';
 import { bridge } from './bridge';
+import { ProjectSourceCheckpointScreen, ReturnedSourceCheckpointComparison } from './ProjectSourceCheckpointScreen';
+import { useSourceCheckpointFiles, type CheckpointFilesOrigin } from './project-source-checkpoint-files';
+import { hasCheckpointContinue, returnCheckpointFiles, type CheckpointFilesArrival } from './project-source-checkpoint-continue-files';
 import { originalPythonRun, ownerPythonFiles, pythonPackageDirectory, pythonReview, savedPythonPath, type OriginalPythonRun, type PythonReview } from './owner-python-run';
 import { SavedMarkdownBody } from './library/MarkdownBody';
 import type { SourceMember } from './project-preview';
@@ -40,6 +43,11 @@ type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
   pythonSetupResume?: CheckoutSavedPosition; originalDirectoryOpening?: OriginalDirectoryOpening;
+  checkpointArrival?: CheckpointFilesArrival;
+  checkpointHandoff?: Readonly<{
+    adopt: (arrival: CheckpointFilesArrival, before: () => void) => boolean;
+    closeProject: (before: () => void) => Promise<boolean>;
+  }>;
   onClose: (saved?: CheckoutSavedPosition) => void;
   onOpenPythonWork?: (work: OriginalPythonRun) => void;
   onPreparePythonTools?: (source: CheckoutPythonToolsDeparture) => Promise<void>;
@@ -89,7 +97,13 @@ function observedSave(submitted: Data, response: Data): SavedEdit | null {
 const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening }: Props) {
+type CheckpointMoving = 'returning' | 'unknown' | 'leaving' | 'close_unknown';
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening, checkpointArrival, checkpointHandoff }: Props) {
+  const checkpoints = useSourceCheckpointFiles();
+  const [checkpointMove, setCheckpointMove] = useState<CheckpointMoving>();
+  const moving = useRef<CheckpointMoving | undefined>(undefined), departed = useRef(false), arrivalUsed = useRef(false);
+  const checkpointTrigger = useRef<HTMLButtonElement>(null);
+  const setMoving = (value: CheckpointMoving | undefined) => { moving.current = value; setCheckpointMove(value); };
   const resume = !sourceMember && !hostFile && resumeSaved?.projectId===projectId && resumeSaved.checkoutId===checkoutId &&
     fileHash(resumeSaved.savedHash) ? resumeSaved : undefined;
   const entry = !sourceMember && !hostFile && !resume && firstEntry?.projectId===projectId && firstEntry.checkoutId===checkoutId ? firstEntry : undefined;
@@ -155,6 +169,58 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     (!buildResume||openedBuildResume.current===buildResume&&recentSave?.path===buildResume.path);
   const keyFor = (path: string) => `${projectId}|${checkoutId}|${path}`;
   const live = (sequence: number) => alive.current && generation.current === sequence && originalWindow.current === windowKey() && !document.hidden;
+  const unflushedCheckpointText = () => {
+    const area = editorInput.current, prefix = keyFor('');
+    return blockedEdit.current || !!(area?.isConnected && area.value !== textareaText(currentText.current)) ||
+      [...interfaceDrafts.keys()].some(key => key.startsWith(prefix));
+  };
+  // The native window also checks saved/dirty state. Reject a transfer locally
+  // if the browser holds any text native has not acknowledged, including IME.
+  const cleanCheckpointDeparture = (files: string, original: Data | null) => {
+    return live(generation.current) && handle.current === files && currentFile.current === original && !entered.current && !edits.current &&
+      !unflushedCheckpointText() && !activeAdoption.current && !activeMarkdown.current && !activeStaticPreview.current && !pythonReviewNow.current &&
+      (!original || original.filesHandle === files && original.projectId === projectId && original.checkoutId === checkoutId &&
+        original.dirty === false && original.conflict === false && original.saveUnknown === false && !original.draftError && !original.formalFile &&
+        original.latest?.deleted === false && original.text === original.latest.content && currentText.current === original.text);
+  };
+  function adoptCheckpointFiles(arrival: CheckpointFilesArrival, before: () => void = () => {}) {
+    if (!checkpointHandoff || !live(generation.current) || !hasCheckpointContinue() ||
+        arrival.viewHandle !== viewHandle || arrival.projectId !== projectId || arrival.previousFilesHandle !== handle.current) return false;
+    return checkpointHandoff.adopt(arrival, () => {
+      departed.current = true; handle.current = '';
+      before(); // The actual old native Files page already retired in the acknowledged swap.
+    });
+  }
+  function leaveUnconfirmedTransfer() {
+    if (!checkpointHandoff || (moving.current !== 'unknown' && moving.current !== 'close_unknown') || !live(generation.current)) return;
+    const sequence = generation.current;
+    setMoving('leaving');
+    void checkpointHandoff.closeProject(() => { departed.current = true; handle.current = ''; }).then(closed => {
+      if (!closed && live(sequence)) setMoving('close_unknown');
+    }, () => { if (live(sequence)) setMoving('close_unknown'); });
+  }
+  function closeTerminal(saved?: CheckoutSavedPosition) {
+    const sibling = checkpointArrival?.side === 'sibling' ? checkpointArrival : undefined;
+    if (moving.current) return;
+    const original = currentFile.current, files = handle.current;
+    if (sibling && unflushedCheckpointText()) {
+      setError('编辑文字还未确认保留。请先完成编辑或核对草稿，再返回。');
+      return;
+    }
+    if (!checkpointHandoff || !sibling || sibling.filesHandle !== files || !hasCheckpointContinue() ||
+        !cleanCheckpointDeparture(files, original)) {
+      latest.current.onClose(saved); return;
+    }
+    const sequence = generation.current;
+    setMoving('returning');
+    void returnCheckpointFiles(sibling).then(arrival => {
+      if (!live(sequence) || moving.current !== 'returning' || handle.current !== files) return;
+      if (!arrival) { setMoving(undefined); latest.current.onClose(saved); return; }
+      if (!cleanCheckpointDeparture(files, original) || !adoptCheckpointFiles(arrival)) throw Error();
+    }).catch(() => {
+      if (live(sequence) && moving.current === 'returning' && handle.current === files) setMoving('unknown');
+    });
+  }
   const knownMarkdown = !sourceMember && !hostFile && !adoption && !choice && orphan===null && !blockedEdit.current ?
     savedMarkdownFile(file,text,projectId,checkoutId,handle.current) : null;
   const readingMarkdown = markdownVisit && sameMarkdown(markdownVisit,knownMarkdown) ? knownMarkdown : null;
@@ -230,7 +296,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const invoke = async (action: string, args: Data = {}, accept?: (value: Data) => void, opening?: OriginalDirectoryOpening, adoptedSourceCurrent?:()=>boolean) => {
     const inScope=()=> (!opening||opening.current())&&(!adoptedSourceCurrent||adoptedSourceCurrent());
-    if (entered.current || edits.current || activeStaticPreview.current || document.hidden || !inScope()) return;
+    if (checkpoints.occupied() || moving.current || entered.current || edits.current || activeStaticPreview.current || document.hidden || !inScope()) return;
     const heldEditor=['read','readFound','readTextHit'].includes(action)?folderEditorNow.current:null;
     const sequence = generation.current, token = {}; entered.current = token; setBusy(true); setError('');
     if (opening) initialDirectoryRead.current = token;
@@ -349,7 +415,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       });
     },undefined,adoptedSourceCurrent);
   };
+  const presentOrdinaryListing = (value: Data) => {
+    let page: DirectorySelection['page'] = null;
+    try { page = readDirectoryPage(value, ''); } catch { /* Keep the actual ordinary list. */ }
+    const capable = ['list', 'readFound'].every(a => bridge.getState().capabilities.commands.includes(command + a));
+    if (page && capable) { setDirectory({ path: page.directory, page }); setFinder('directory'); }
+    else { setDirectory(null); setFinder('path'); }
+  };
   const openFiles = async (initial = false) => {
+    if (checkpointArrival) return; // A prepared stock listing must never dispatch a second open.
     let checkedEntry = entry;
     const resumeBuild=!attemptedBuildResume.current&&!entered.current&&!edits.current&&live(generation.current)&&
       !sourceMember&&!hostFile&&!resume&&!entry&&
@@ -382,13 +456,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         checkedEntry=undefined;
         setError('入口文件所属版本已变化，只显示同一副本的文件列表。');
       }
-      if(!pin&&!hostFile){
-        let page:DirectorySelection['page']=null;
-        try{page=readDirectoryPage(value,'');}catch{/* Optional directory projection: keep the original list. */}
-        const capable=['list','readFound'].every(a=>bridge.getState().capabilities.commands.includes(command+a));
-        if(page&&capable){setDirectory({path:page.directory,page});setFinder('directory');}
-        else {setDirectory(null);setFinder('path');}
-      }
+      if(!pin&&!hostFile) presentOrdinaryListing(value);
       const {directoryPage:_,...list}=value;
       if(priorTarget){
         const saved=list.priorSavedFile;
@@ -432,7 +500,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   };
   const edit = (value: string) => {
     const original = currentFile.current;
-    if (!original || folderEditorNow.current || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || activeStaticPreview.current || document.hidden) return;
+    if (!original || moving.current || folderEditorNow.current || sourceMember && !reviewed || entered.current || orphan !== null || activeAdoption.current || pythonReviewNow.current || activeStaticPreview.current || document.hidden) return;
     const key = keyFor(original.path);
     if (finder==='changes') return;
     if (value.length > 262144 || new TextEncoder().encode(value).length > 262144) { setError('编辑上限为 256 KiB，已有文字保留。'); return; }
@@ -755,7 +823,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       file.latest?.deleted === false && file.dirty === false && file.conflict === false && file.saveUnknown === false &&
       orphan === null && !blockedEdit.current;
     if (!recentSave || !live(generation.current) || (!fromSavedFile && !fromAnotherFile)) {
-      if (!next) latest.current.onClose();
+      if (!next) closeTerminal();
       return;
     }
     const area = fromSavedFile && folderEditorNow.current?.resumable!==false ? editorContainer.current?.querySelector('textarea') : null;
@@ -763,7 +831,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       start: area.selectionStart, end: area.selectionEnd, scrollTop: area.scrollTop, scrollLeft: area.scrollLeft,
     } : undefined;
     const position = { projectId, checkoutId, path: recentSave.path, savedHash: recentSave.savedHash, caret };
-    if (!next) { latest.current.onClose(position); return; }
+    if (!next) { closeTerminal(position); return; }
     const prepare = latest.current.onPrepareBuild;
     if (!prepare || !canCheckSavedBuild) return;
     // Keep the ordinary editor and its exact receipt alive until the read-only
@@ -830,6 +898,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   },[finder,!!file]);
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
+    if (moving.current) { leaveUnconfirmedTransfer(); return; }
+    if (checkpoints.back()) return;
     if (backFromStaticPreview()) return;
     if (closePythonPackage()) return;
     if (activeMarkdown.current) closeMarkdown();
@@ -840,12 +910,36 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
+      const skip = departed.current || !!moving.current;
+      const checkpointClosed = skip ? undefined : checkpoints.beforeFilesExit(), epoch = bridge.getDocumentEpoch();
       generation.current++; entered.current = null; initialDirectoryRead.current = null; pythonReviewNow.current=undefined; reviewedStaticRoot.current=null; const old = handle.current; handle.current = '';
-      if (old) void latest.current.run(command + 'close', { viewHandle, filesHandle: old }).catch(() => {});
+      if (old && !skip) {
+        const release = () => { void latest.current.run(command + 'close', { viewHandle, filesHandle: old }).catch(() => {}); };
+        if (checkpointClosed) void checkpointClosed.then(closed => { if (closed && bridge.getDocumentEpoch() === epoch) release(); });
+        else release();
+      }
     };
     const hidden = () => { if (document.hidden || originalWindow.current !== windowKey()) { retire(); latest.current.onClose(); } };
     const unsubscribe = bridge.subscribe(hidden); document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', hidden);
-    void openFiles(true);
+    if (!checkpointArrival) void openFiles(true);
+    else if (!arrivalUsed.current) {
+      arrivalUsed.current = true;
+      const arrival = checkpointArrival, sequence = generation.current;
+      if (!hasCheckpointContinue() || arrival.viewHandle !== viewHandle || arrival.projectId !== projectId || arrival.checkoutId !== checkoutId ||
+          arrival.listing.filesHandle !== arrival.filesHandle || !live(sequence)) setMoving('unknown');
+      else {
+        const { directoryPage: _, ...list } = arrival.listing;
+        handle.current = arrival.filesHandle; presentOrdinaryListing(arrival.listing); setListing(list);
+        if (arrival.side === 'original') {
+          if (arrival.resume) {
+            const current = () => live(sequence) && handle.current === arrival.filesHandle && currentFile.current === null &&
+              !entered.current && !edits.current;
+            if (!checkpoints.resumeComparison({ projectId, checkoutId, viewHandle, filesHandle: arrival.filesHandle, current },
+                arrival, () => checkpointTrigger.current)) setMoving('unknown');
+          } else setError('已返回原副本的文件。原来的两版比较暂时无法核对。');
+        }
+      }
+    }
     return () => { alive.current = false; retire(); unsubscribe(); document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', hidden); };
   }, [projectId, checkoutId, viewHandle]);
   useEffect(() => {
@@ -853,12 +947,12 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     return () => registerBack(null);
   }, [registerBack]);
   useEffect(() => {
-    if (finder==='changes' || browsingFolder || markdownVisit || staticPreview || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
+    if (checkpoints.active || finder==='changes' || browsingFolder || markdownVisit || staticPreview || adoption || !file || file.draftDurable || file.draftError || busy || editing || blockedEdit.current || orphan !== null || document.hidden) return;
     const timer = window.setTimeout(() => {
       if (!folderEditorNow.current&&!activeMarkdown.current) void invoke('cache', { fileHandle: file.fileHandle, retry: false }, value => apply(value, false));
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [file, busy, editing, orphan, adoption, markdownVisit, staticPreview, browsingFolder, finder]);
+  }, [file, busy, editing, orphan, adoption, markdownVisit, staticPreview, browsingFolder, finder, checkpoints.active]);
   useEffect(() => {
     setAdoptionExpired(false); if (!adoption) return; adoptionHeading.current?.focus();
     const remaining = Number(adoption.expiresAt) - Date.now();
@@ -917,7 +1011,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
   const savedExcerpt=!anchorable&&sourceHit&&savedSource!==null&&savedSource.slice(sourceHit.start,sourceHit.end)===sourceHit.query?
     savedSource.slice(Math.max(savedSource.lastIndexOf('\n',sourceHit.start-1)+1,sourceHit.start-70),sourceHit.start)+sourceHit.query+
       savedSource.slice(sourceHit.end,sourceHit.end+100).split('\n',1)[0]:null;
-  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : originalDirectoryOpening && !originalDirectoryOpening.chosenSavedFile && !listing ? '返回项目预览' : '返回项目工作区';
+  const checkpointSibling = checkpointArrival?.side === 'sibling';
+  const returnsToComparison = checkpointSibling && hasCheckpointContinue() && cleanCheckpointDeparture(handle.current, currentFile.current);
+  const backLabel = sourceMember ? '返回原工作' : hostFile ? '返回本机项目' : returnsToComparison ? '返回原来的两版比较' :
+    originalDirectoryOpening && !originalDirectoryOpening.chosenSavedFile && !listing ? '返回项目预览' : '返回项目工作区';
   const formalLink = (pin: Data | undefined, evidence: 'import_receipt' | 'equal_content') => {
     if (!file || !pin || pin.evidence !== evidence || pin.projectId !== projectId || pin.checkoutId !== checkoutId || pin.path !== file.path ||
         typeof pin.handle !== 'string' || !pin.handle || !Number.isInteger(pin.version) || pin.version < 1 || !/^[a-f0-9-]{36}$/.test(pin.revisionId) ||
@@ -947,9 +1044,39 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
     </div>
   </section>;
   const changesBackLabel=file?'返回改动列表':'返回选文件';
-  return <SettingsDialog isOpen title={showingStatic?'预览已保存网页':readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : '这份私人副本的文件'}
-    onClose={() => {if(backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
-    closeLabel={showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+  const checkpointOrigin = (): CheckpointFilesOrigin | undefined => {
+    const sequence = generation.current, filesHandle = handle.current, original = currentFile.current;
+    if (checkpointArrival?.side === 'sibling' || moving.current || sourceMember || hostFile || originalDirectoryOpening || finder === 'changes' || finder === 'git' || finding || browsingFolder || localFind ||
+        choice || adoption || pythonRunReview || choosingPackage || markdownVisible || showingStatic || locked || orphan !== null ||
+        listing?.readOnly !== true || listing.filesHandle !== filesHandle || listing.projectId !== projectId || listing.checkoutId !== checkoutId || original !== file) return;
+    const current = () => live(sequence) && handle.current === filesHandle && currentFile.current === original && !entered.current &&
+      !edits.current && !activeStaticPreview.current && !activeMarkdown.current && !activeAdoption.current && !pythonReviewNow.current &&
+      !blockedEdit.current && (!original || original.filesHandle === filesHandle && original.projectId === projectId && original.checkoutId === checkoutId &&
+        original.latest?.deleted === false && original.dirty === false && original.conflict === false && original.saveUnknown === false &&
+        !original.draftError && !original.formalFile && currentText.current === original.text && !interfaceDrafts.has(keyFor(original.path)));
+    return current() ? { projectId, checkoutId, viewHandle, filesHandle, current, handoff: checkpointHandoff ? {
+      clean: () => !moving.current && cleanCheckpointDeparture(filesHandle, original),
+      adopt: adoptCheckpointFiles, uncertain: () => setMoving('unknown'),
+    } : undefined } : undefined;
+  };
+  const checkpointEntry = checkpoints.available && !checkpoints.active ? checkpointOrigin() : undefined;
+  return <SettingsDialog isOpen title={checkpointMove || checkpoints.active?'这份私人副本':showingStatic?'预览已保存网页':readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : checkpointArrival?.side==='sibling'?'新私人副本的文件':'这份私人副本的文件'}
+    onClose={() => {if(checkpointSibling||moving.current){closeCurrent.current();return;}if(checkpoints.back()||backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
+    closeLabel={checkpointMove?'返回原项目':checkpoints.active?'返回原文件或上一级':showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+    {checkpointMove && <section className="pw-form-flow">
+      <p role="status">{checkpointMove === 'returning' ? '正在核对并返回原来的两版比较…' : checkpointMove === 'leaving' ?
+        '正在关闭本次副本窗口…' : checkpointMove === 'close_unknown' ? '尚未确认关闭原窗口。可再关闭同一窗口，不会再次创建。' :
+          '没有确认切换到哪个文件窗口。可关闭窗口返回原项目，不会再次创建或改开其他副本。'}</p>
+      {(checkpointMove === 'unknown' || checkpointMove === 'close_unknown') && <Button variant="secondary" onClick={leaveUnconfirmedTransfer}>返回原项目</Button>}
+    </section>}
+    {!checkpointMove && checkpoints.active && (checkpoints.returnedComparison ?
+      <ReturnedSourceCheckpointComparison comparison={checkpoints.returnedComparison} onExit={() => checkpoints.back()} /> :
+      checkpoints.visit ?
+      <ProjectSourceCheckpointScreen visit={checkpoints.visit} registerBack={checkpoints.registerBack} onExit={() => checkpoints.back()} /> :
+      <section className="pw-form-flow"><h3>源码版本</h3>
+        <p role="status">{checkpoints.notice || (checkpoints.closing ? '正在返回原文件…' : '正在核对这份私人副本…')}</p>
+        <Button variant="secondary" onClick={() => checkpoints.back()}>返回原文件</Button>
+      </section>)}
     {showingStatic&&staticPreview&&<ProjectSavedStaticPreview editor={staticPreview.editor}
       current={()=>activeStaticPreview.current===staticPreview&&sameStaticEditor(staticPreview)}
       onLeave={()=>leaveStaticPreview(staticPreview)} onVerifiedRoot={paths=>rememberStaticRoot(staticPreview,paths)}
@@ -960,10 +1087,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
       <SavedMarkdownBody text={readingMarkdown.content} />
       <Button variant="secondary" onClick={closeMarkdown}>返回编辑</Button>
     </section>}
-    <div hidden={markdownVisible||showingStatic}><div className="pw-checkout-files">
+    <div hidden={markdownVisible||showingStatic||checkpoints.active||!!checkpointMove} inert={checkpoints.active||!!checkpointMove||undefined}><div className="pw-checkout-files">
     {finder!=='changes'&&<><p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small></>}
     {error && <p role="alert">{error}</p>}
+    {checkpoints.refusedFilesHandle === handle.current && <p role="status">这次未能打开源码版本。仍在原文件窗口，没有改动文件。</p>}
+    {(checkpointEntry || checkpoints.active) && <Button ref={checkpointTrigger} size="small" variant="ghost" disabled={checkpoints.active} onClick={event => {
+      const original = checkpointOrigin(); if (original) checkpoints.open(original, event.currentTarget);
+    }}>源码版本</Button>}
     {finder!=='changes'&&hasChangeReview&&<div className="pw-form-actions">
       <Button size="small" variant="secondary" disabled={locked||!canEnterChanges} onClick={enterChanges}>核对已保存的改动</Button>
     </div>}
@@ -1113,7 +1244,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
             <Button ref={packageTrigger} variant="ghost" disabled={locked} onClick={openPythonPackage}>选择 Python 包源码…</Button>}
           {showingSavedFile ? <>
             <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
-            {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' : '已保存，回到项目工作区'}
+            {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' :
+              returnsToComparison ? '已保存，返回原比较' : '已保存，回到项目工作区'}
           </Button></> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
@@ -1173,7 +1305,9 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, o
         </>}
       </section></div>}
     </>}
-    {!(finder==='changes'&&adoption)&&<Button variant="secondary" disabled={busy || editing} onClick={() => {if(!backFromChanges())close();}}>
+    {!(finder==='changes'&&adoption)&&<Button variant="secondary" disabled={busy || editing} onClick={() => {
+      if(checkpointSibling)closeCurrent.current();else if(!backFromChanges())close();
+    }}>
       {finder==='changes'?changesBackLabel:adoption || choice ? '返回文件' : backLabel}
     </Button>}
   </div></div></SettingsDialog>;
