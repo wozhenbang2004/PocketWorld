@@ -13,7 +13,7 @@ type SavedFileFact = { position: number; id: string; sha256: string };
 type FileNotice = SavedFileFact & { scope: string };
 type FileNotices = { scope: string; through: number; pending?: FileNotice };
 type FileCheck = { window: string; notice: FileNotice };
-type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string; checkedFile?: FileNotice };
+type FilePage = { key: string; files: TaskResultFile[]; sources: TaskResultFile[]; limited: boolean; completedFileRun?: boolean; sourceUnavailable?: boolean; hasRequestAttachments?: boolean; error?: string; checkedFile?: FileNotice };
 
 function runningFileWork(taskId: string): TaskHeader | undefined {
   const native = bridge.getState(), view = native.view as { taskId?: string; section?: string | null } | undefined;
@@ -79,11 +79,14 @@ function pdfExcerptLabel(file: TaskResultFile) {
   return `PDF ${start.method === 'ocr' ? 'OCR' : '文字层'}摘录 · 当时从第 ${start.page} 页开始读取`;
 }
 
-export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpen, onBrowse, onOriginalRequest }: {
+export function TaskResultFiles({ taskId, active, supported, readIdentity, completedRunId, completedEpoch, showEmptyBody, onOpen, onBrowse, onOriginalRequest }: {
   taskId: string;
   active: boolean;
   supported: boolean;
   readIdentity: string;
+  completedRunId?: string;
+  completedEpoch?: number;
+  showEmptyBody?: boolean;
   onOpen: (file: TaskResultFile, target: HTMLButtonElement) => void;
   onBrowse: () => void;
   onOriginalRequest?: () => void;
@@ -144,9 +147,15 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
         // Older hosts only returned outputs. Never infer inputs from a message body or filename.
         const sources: unknown = value.sourceFiles === undefined ? [] : value.sourceFiles;
         if (!Array.isArray(sources) || sources.length > 4) throw new Error('来源文件尚未核对，请到原工作文件查看。');
+        // Older hosts can still open their exact files, but cannot attest to an
+        // empty completed run. Never use list order, a filename or the work status as that proof.
+        const proof = value.completedFileRun;
+        const completedFileRun = !!completedRunId && Number.isSafeInteger(completedEpoch) &&
+          proof?.runId === completedRunId && proof.epoch === completedEpoch;
+        if (completedRunId && proof !== undefined && !completedFileRun) throw new Error('工作轮次已变化，请重新读取原工作文件。');
         const files: TaskResultFile[] = value.files.filter(usableResultFile);
         const inputs = sources.filter(usableResultFile);
-        setPage({ key, files, sources: inputs, checkedFile: wanted, sourceUnavailable: value.sourceUnavailable === true || inputs.length !== sources.length,
+        setPage({ key, files, sources: inputs, completedFileRun, checkedFile: wanted, sourceUnavailable: value.sourceUnavailable === true || inputs.length !== sources.length,
           hasRequestAttachments: value.hasRequestAttachments === true,
           limited: value.readLimited || files.length !== value.files.length || value.moreSourceFiles === true });
       }).catch(error => {
@@ -163,7 +172,7 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
       alive = false;
       document.removeEventListener('visibilitychange', visible);
     };
-  }, [active, supported, key, taskId, windowEpoch, readingFile, checkingFile, fileWindow, request.retry]);
+  }, [active, supported, key, taskId, windowEpoch, readingFile, checkingFile, fileWindow, request.retry, completedRunId, completedEpoch]);
 
   if (windowEpoch < 0) return null;
   const outputs = current?.files ?? [], sources = current?.sources ?? [];
@@ -172,8 +181,9 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   const currentOutputs = outputs.filter(file => file.runProvenance === 'current');
   const otherOutputs = outputs.filter(file => file.runProvenance !== 'current');
   const mixedOutputs = currentOutputs.length > 0 && otherOutputs.length > 0;
-  const earlierCount = otherOutputs.filter(file => file.runProvenance === 'earlier').length;
-  const unrecordedCount = otherOutputs.length - earlierCount;
+  const earlier = otherOutputs.filter(file => file.runProvenance === 'earlier');
+  const unrecorded = otherOutputs.filter(file => file.runProvenance !== 'earlier');
+  const finished = current?.completedFileRun === true;
   const hasSources = !!(sources.length || current?.sourceUnavailable || current?.hasRequestAttachments);
   const notice = notices?.scope === noticeScope ? notices.pending : undefined;
   const pendingFile = notice && !hasExactCurrentFile(current?.files, notice) ? notice : undefined;
@@ -185,15 +195,15 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
     }}>{busy ? '正在核对新文件…' : '有新文件，查看'}</Button>
     {current?.checkedFile === pendingFile && <p className="pw-reading-note" role="status">这份原文件暂未在当前清单里核对到。</p>}
   </div> : null;
-  if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error) return fileCue;
+  if (supported && !busy && current && !outputs.length && !hasSources && !current.limited && !current.error)
+    return showEmptyBody && !pendingFile ? <p className="pw-reading-note" role="status">{finished
+      ? '工作已结束，当前没有可读取的结果正文或文件。' : '当前工作记录没有可读取的结果正文。'}</p> : fileCue;
   const fileList = (items: TaskResultFile[], input: boolean) => <div className="pw-outcome-files">{items.map(file => {
       const format = attachmentFileFormat(file.mimeType,file.name).label;
       const savedTransfer = file.sourceRunEvidence === 'original_ssh_file_download' && file.runProvenance === 'current' && file.mimeType === 'application/octet-stream';
       const excerpt = pdfExcerptLabel(file);
-      const provenance = savedTransfer ? '本次传输已保存到手机' : excerpt || fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录';
-      const excerptRun = mixedOutputs && excerpt && !input && file.runProvenance !== 'current'
-        ? file.runProvenance === 'earlier' ? '较早轮次' : '轮次未记录' : '';
-      const metadata = [format, input ? '' : provenance, excerptRun, fileBytes(file.size)].filter(Boolean).join(' · ');
+      const provenance = savedTransfer ? '本次传输已保存到手机' : fileRunProvenance(file.runProvenance, file.sourceRunEvidence) || '生成轮次未记录';
+      const metadata = [format, input ? '' : provenance, input ? '' : excerpt, fileBytes(file.size)].filter(Boolean).join(' · ');
       return <Button key={`${file.id}:${file.sha256}`} variant="secondary" className="pw-outcome-file" leadingIcon={IconFile} trailingIcon={IconChevronRight}
       aria-label={`${input ? '打开来源文件' : '打开原件'}：${file.name}，${metadata}${!input && file.hasSavedSupplement === true ? '，有补充草稿' : ''}`} disabled={!active} onClick={(event: MouseEvent<HTMLButtonElement>) => onOpen(file, event.currentTarget)}>
         <span className="pw-outcome-file-copy"><span dir="auto">{file.name}</span><small>{metadata}{!input && file.hasSavedSupplement === true && ' · 有补充草稿'}</small></span>
@@ -208,20 +218,26 @@ export function TaskResultFiles({ taskId, active, supported, readIdentity, onOpe
   </>;
   return <section className="pw-outcome-deliverables" aria-label={mixedOutputs ? '已保存的文件成果' : undefined}
     aria-labelledby={mixedOutputs ? undefined : heading} aria-busy={busy || undefined}>
-    <div className="pw-reading-section-heading"><h4 id={heading}>{mixedOutputs ? '本轮已保存的文件' : outputs.length ? '已保存的文件成果' : hasSources ? '来源文件' : '工作文件'}</h4></div>
+    <div className="pw-reading-section-heading"><h4 id={heading}>{finished
+      ? currentOutputs.length ? '本轮已保存的文件' : '本轮文件'
+      : mixedOutputs ? '本轮已保存的文件' : outputs.length ? '已保存的文件成果' : hasSources ? '来源文件' : '工作文件'}</h4></div>
     {busy && !fileCue && <p className="pw-reading-note" role="status">正在读取工作文件…</p>}
     {current?.error && <p className="pw-reading-note pw-error" role="alert">{current.error}</p>}
     {currentOutputs.length > 0 && fileList(currentOutputs, false)}
     {fileCue}
-    {otherOutputs.length > 0 && <section className="pw-work-other-files" data-secondary={mixedOutputs || undefined}
+    {finished && !currentOutputs.length && !current?.limited && !pendingFile && <p className="pw-reading-note" role="status">当前清单没有可确认为本轮成果的文件。</p>}
+    {finished && otherOutputs.length > 0 ? <Accordion key={fileWindow} variant="divided" className="pw-reading-disclosures" aria-label="其他已保存文件">
+      {earlier.length > 0 && <AccordionItem id="earlier-files" title={`较早轮次的文件（${earlier.length}）`}>{fileList(earlier, false)}</AccordionItem>}
+      {unrecorded.length > 0 && <AccordionItem id="unrecorded-files" title={`生成轮次未记录的文件（${unrecorded.length}）`}>{fileList(unrecorded, false)}</AccordionItem>}
+    </Accordion> : otherOutputs.length > 0 && <section className="pw-work-other-files" data-secondary={mixedOutputs || undefined}
       aria-labelledby={mixedOutputs ? otherHeading : undefined}>
       {mixedOutputs && <div className="pw-reading-section-heading">
         <h4 id={otherHeading}>其他已保存文件</h4>
-        <span>{[earlierCount > 0 ? `较早轮次 ${earlierCount} 份` : '', unrecordedCount > 0 ? `轮次未记录 ${unrecordedCount} 份` : ''].filter(Boolean).join(' · ')}</span>
+        <span>{[earlier.length > 0 ? `较早轮次 ${earlier.length} 份` : '', unrecorded.length > 0 ? `轮次未记录 ${unrecorded.length} 份` : ''].filter(Boolean).join(' · ')}</span>
       </div>}
       {fileList(otherOutputs, false)}
     </section>}
-    {hasSources && (outputs.length ? <Accordion variant="divided" className="pw-reading-disclosures"
+    {hasSources && (outputs.length || finished ? <Accordion variant="divided" className="pw-reading-disclosures"
       expandedKeys={expandedSources === taskId ? ['source-files'] : []} onExpandedChange={keys => setExpandedSources(keys.has('source-files') ? taskId : '')}>
       <AccordionItem id="source-files" title="来源文件">{sourceContent}</AccordionItem></Accordion> : sourceContent)}
     {current?.limited && <p className="pw-reading-note" role="status">文件清单未列全。</p>}

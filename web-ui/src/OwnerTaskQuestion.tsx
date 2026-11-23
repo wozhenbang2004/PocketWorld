@@ -176,7 +176,7 @@ export function OwnerTaskQuestion({question, text, onTextChange, disabled, canAn
   return <section className="pw-approval-item pw-task-decision pw-task-question" aria-label={readOnly && !saved ? '原问题' : '回答原问题'} aria-busy={pending}>
     <header className="pw-decision-heading">
       <span className="pw-decision-eyebrow">{saved ? '已回答' : readOnly ? '原问题' : '需要你的回答'}</span>
-      <h4 className="pw-question-title">{question.question}</h4>
+      <h4 className="pw-question-title" tabIndex={-1} data-owner-question-key={question.questionKey}>{question.question}</h4>
     </header>
     {saved ? <>
       {savedOption && <p className="pw-decision-meta">你的回答：{savedOption.label}</p>}

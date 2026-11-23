@@ -203,6 +203,7 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
  savedTeamDefaultModel?:WorkIdentity&{state:'unconfigured';modelSelectionRevision:number}};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
+type DirectoryQuestionArrival=WorkIdentity&{reviewWindow?:TaskReviewWindow};
 type TeamReportVisit={parent:TeamReportParent;choice:TeamReportChoice;window:TaskReviewWindow;navigation:number;trigger:HTMLButtonElement|null;fromTeam?:{summarySha256:string;conversationId:string}};
 type TeamReportMode={visit:TeamReportVisit;reading?:TeamReportRead;error?:string;submitted?:boolean;pending?:boolean;done?:boolean};
 type TeamReportArrival={taskId:string;request:number;documentEpoch:number;navigation:number;failed?:true;entered?:true;retiredRequest?:number};
@@ -1172,6 +1173,8 @@ export default function App(){
  const updateProjectView=(patch:Partial<typeof projectView>)=>setProjectViews(previous=>({...previous,[String(state.projectId||'')]:{...(previous[String(state.projectId||'')]||{query:'',view:'files',expanded:[],selected:''}),...patch}}));
  const fileQuery=projectView.query,fileView=projectView.view;const setFileQuery=(query:string)=>updateProjectView({query}),setFileView=(view:'files'|'tree'|'grid')=>updateProjectView({view});
  const taskScroll=useRef<HTMLDivElement>(null),taskReading=useRef(new Map<string,number>());
+ const directoryQuestionArrival=useRef<DirectoryQuestionArrival|null>(null);
+ const cancelDirectoryQuestionFocus=()=>{directoryQuestionArrival.current=null};
  const reviewRequest=useRef(0),openedTaskId=useRef<string|null>(null),secondaryBack=useRef<(()=>boolean)|null>(null);
  const openedTaskResumeRevision=useRef(0);
  const acknowledgedWorkVisit=useRef<AcknowledgedWorkVisit|null>(null);
@@ -2796,11 +2799,12 @@ export default function App(){
  const remoteInboxOpenRevision=Number(state.remoteInbox?.openRevision||0);
  const lastRemoteInboxOpen=useRef(0);
  useEffect(()=>{if(remoteInboxOpenRevision>0&&remoteInboxOpenRevision!==lastRemoteInboxOpen.current){lastRemoteInboxOpen.current=remoteInboxOpenRevision;if(route!=='remoteInbox')void openNotifications();}},[remoteInboxOpenRevision,route,openNotifications]);
- const loadTaskReview=useCallback((id:string,approvalId?:string)=>{
+ const loadTaskReview=useCallback((id:string,approvalId?:string,directoryWait?:DirectoryQuestionArrival)=>{
   const source=chatWorkReturn.current,pin=source?.taskId===id?source.ownerRequest:undefined;
   const originalCurrent=()=>!pin||!!source&&chatWorkReturn.current===source&&source.navigation===navigationWindow.current&&!!currentOriginalRequestWork(source,bridge.getState());
   if(!can('tasks.review')||openedTaskId.current!==id||!originalCurrent())return;invalidateContinuation();const request=++reviewRequest.current;setReviewPending(true);setReviewSubmitted(false);setReviewReceipt('');setQuestionPending(false);
   const window={taskId:id,request,documentEpoch:bridge.getDocumentEpoch(),resumeRevision:Number(obj(bridge.getState().view).resumeRevision||0)};reviewWindow.current=window;
+  if(directoryWait&&directoryQuestionArrival.current===directoryWait)directoryWait.reviewWindow=window;
   if(pin)setReview(null);
   void act('tasks.review',{id,...(approvalId?{approvalId}:{})},id).then(value=>{
    if(!currentReviewWindow(window)||!originalCurrent()||pin&&source&&!ownerRequestWorkMatches(value?.task,source.conversation,pin))return;
@@ -4101,6 +4105,29 @@ export default function App(){
   run('projects.refresh');
  },[route,can,run]);
  useLayoutEffect(()=>{if(!taskOpen)return;const node=taskScroll.current;if(node)node.scrollTop=taskReading.current.get(`${taskId}:${taskLayer}`)??0},[taskOpen,taskId,taskLayer]);
+ // A deliberate directory review opens an overview, but its saved reading position
+ // may be far from the question. Use only this first native review, never a later refresh.
+ useLayoutEffect(()=>{
+  const target=directoryQuestionArrival.current,window=target?.reviewWindow;
+  if(!target||!window)return;
+  if(reviewPending&&reviewWindow.current===window)return;
+  directoryQuestionArrival.current=null;
+  const task=review?.task,raw=task?.raw,question=review?.ownerQuestion;
+  const answerAction=question?.replyAvailability==='cold_save_only'?'tasks.saveColdQuestionChoice':'tasks.answerQuestion';
+  // Native phone reviews verify their source without stamping contextAvailable on a valid task.
+  const unavailable=(source?:Json)=>!source||source.contextAvailable===false||source.contextWithdrawn===true||
+   source.sourceCurrentReadRequired===true||source.taskProjection==='source_unavailable';
+  if(!review||route!=='tasks'||taskLayer!=='overview'||taskMenuOpen||!ownerQuestionInWindow||reviewWindow.current!==window||
+     !currentReviewWindow(window)||taskId!==target.taskId||task?.id!==target.taskId||task.status!=='awaiting_user'||selectedTask?.status!==task.status||
+     !raw||raw.status!==task.status||raw.runId!==target.runId||raw.coordinatorEpoch!==target.epoch||
+     unavailable(raw)||unavailable(selectedTask?.raw)||
+     question?.answered!==false||question.executionAuthorized!==false||typeof question.questionKey!=='string'||!/^[a-f0-9]{64}$/.test(question.questionKey)||
+     !Array.isArray(review.approvals)||review.approvals.length||!Array.isArray(review.unresolvedOperations)||review.unresolvedOperations.length||
+     !can(answerAction)||!review.actions?.some(action=>action.action===answerAction))return;
+  const heading=taskScroll.current?.querySelector<HTMLElement>(`[data-owner-question-key="${question.questionKey}"]`);
+  if(!heading||heading.closest('[hidden],[inert],[aria-hidden="true"]'))return;
+  heading.focus({preventScroll:true});heading.scrollIntoView({block:'start',behavior:'instant'});
+ },[review,reviewPending,ownerQuestionInWindow,selectedTask,route,taskLayer,taskId,taskMenuOpen,currentReviewWindow,can]);
  useEffect(()=>{setFileDisplayOpen(false);setProjectPickerOpen(false)},[state.projectId]);
  useSurfaceEnter(taskScroll,`${taskId}:${taskLayer}`,{selector:'',depth:taskLayer==='overview'?0:1,active:taskOpen&&!selectedTask?.raw?.developmentContext});
  const markMessageArrival=useMessageArrivals(scroll,String(state.conversationId||''),messages.map((message,index)=>message.id||`${message.role}:${message.at}:${index}`),route==='chat',{
@@ -9216,8 +9243,19 @@ export default function App(){
   </div></div>
   {composerRegion}</main>;
  const openDirectoryWork=(id:string,entry:WorkEntry,query:string,run?:{runId:string;epoch:number},report?:ReportTarget)=>{
+  directoryQuestionArrival.current=null;
   const failed=()=>setLocalError('这份工作未能打开，已留在工作列表。');
-  if(!report){openTask(id,entry,false,undefined,query,run,undefined,undefined,failed);return;}
+  if(!report){
+   const row=entry==='review'&&run?taskDirectory.tasks.find(task=>task.id===id):undefined;
+   const wait:DirectoryQuestionArrival|null=row?.status==='awaiting_user'&&run&&row.raw?.runId===run.runId&&
+    row.raw.coordinatorEpoch===run.epoch&&!workCollectionPresentation(row).reconciliation?{taskId:id,...run}:null;
+   directoryQuestionArrival.current=wait;
+   openTask(id,entry,false,undefined,query,run,undefined,undefined,failed,wait?()=>{
+    const visit=acknowledgedWorkVisit.current;
+    loadTaskReview(id,undefined,visit?.taskId===id&&visit===reviewWindow.current?wait:undefined);
+   }:undefined);
+   return;
+  }
   const doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,request=reviewRequest.current+1;
   const original=bridge.getState(),resume=obj(original.view).resumeRevision;
   const sameWindow=()=>bridge.getDocumentEpoch()===doc&&navigationWindow.current===navigation&&obj(bridge.getState().view).resumeRevision===resume;
@@ -9872,7 +9910,8 @@ export default function App(){
    standaloneDocumentAttachmentDraft={standaloneDocumentAttachmentDraft}
    onChooseAttachment={canChooseFileForDraft?startFileAttachmentPicker:undefined} replyAttachmentDraft={existingPrivateAttachmentDraft} readWorkTextVisit={readWorkTextVisit}/>
   {organizationTarget&&<ConversationOrganization key={organizationTarget} conversationId={organizationTarget} onClose={()=>setOrganizationTarget(null)}/>}
-  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(workReportPage)return;if(compactChatQuestion){backFromTask();return}if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport()&&!windowsTextResultBack.current?.())closeTask(true)}else setTaskOpen(true)}} direction={compactChatQuestion?'bottom':'right'} handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga" data-task-layer={taskLayer} data-chat-question={compactChatQuestion||undefined} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
+  <Drawer.Root open={taskOpen} onOpenChange={open=>{if(!open){if(workReportPage)return;if(compactChatQuestion){backFromTask();return}if(taskMenuOpen){setTaskMenuOpen(false);return}if(!deviceScopeBack.current?.()&&!capabilityBack.current?.()&&!livePreviewBack.current?.()&&!receivedTextResultBack.current?.()&&!taskTransientBack.current?.()&&!closeCurrentWorkSupplement()&&!leaveTeamReport()&&!windowsTextResultBack.current?.())closeTask(true)}else setTaskOpen(true)}} direction={compactChatQuestion?'bottom':'right'} handleOnly autoFocus shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay pw-work-object-overlay"/><Drawer.Content className="pw-drawer pw-task-drawer pw-work-object-surface pw-task-manga"
+    onPointerDownCapture={cancelDirectoryQuestionFocus} onKeyDownCapture={cancelDirectoryQuestionFocus} onWheelCapture={cancelDirectoryQuestionFocus} data-task-layer={taskLayer} data-chat-question={compactChatQuestion||undefined} aria-describedby="pw-task-description" onCloseAutoFocus={event=>{
    if(taskOpen)return;
    ownerRequestWindowId.current=null;
    if(phoneWorkReportExit.current?.exited()){chatWorkReturn.current=null;event.preventDefault();return;}

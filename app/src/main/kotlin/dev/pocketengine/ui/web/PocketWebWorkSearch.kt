@@ -196,9 +196,9 @@ internal class PocketWebWorkSearch(
             return task
         }
         val selectedTask = requireVisibleTask()
-        val readExcerptStarts = conversationResult == null && selectedTask.opt("status") == "completed"
+        val originalCompletedWork = conversationResult == null && selectedTask.opt("status") == "completed"
         val readSshTransfer = conversationResult == null && selectedTask.opt("feature") == "ssh" && selectedTask.opt("command") == "downloadFile"
-        val snapshot = if (readExcerptStarts || readSshTransfer) (host.attachmentOutcomes ?: error("附件成果宿主尚未就绪")).workResultFilesSnapshot(taskId, control)
+        val snapshot = if (originalCompletedWork || readSshTransfer) (host.attachmentOutcomes ?: error("附件成果宿主尚未就绪")).workResultFilesSnapshot(taskId, control)
             else host.ownerOutcomeSnapshot(taskId, control)
         check(snapshot.getString("taskId") == taskId) { "原工作成果身份不符" }
         val runFiles = if (conversationResult != null)
@@ -232,10 +232,18 @@ internal class PocketWebWorkSearch(
         val page = JSONObject().put("taskId", taskId).put("files", files)
             .put("readLimited", readLimited || artifacts.size != available.size || available.size > limit)
         val current = requireVisibleTask()
-        if (readExcerptStarts && current.opt("status") == "completed" && snapshot.opt("taskStatus") == "completed" &&
-            !current.optBoolean("contextWithdrawn") && !current.optBoolean("sourceCurrentReadRequired") &&
+        val sameCompletedRun = originalCompletedWork && current.opt("status") == "completed" && snapshot.opt("taskStatus") == "completed" &&
             selectedTask.opt("runId") == current.opt("runId") && snapshot.opt("taskRunId") == current.opt("runId") &&
-            selectedTask.opt("coordinatorEpoch") == current.opt("coordinatorEpoch") && snapshot.opt("coordinatorEpoch") == current.opt("coordinatorEpoch")) {
+            selectedTask.opt("coordinatorEpoch") == current.opt("coordinatorEpoch") && snapshot.opt("coordinatorEpoch") == current.opt("coordinatorEpoch")
+        val run = selectedTask.opt("runId") as? String
+        val epoch = selectedTask.opt("coordinatorEpoch")
+        if (originalCompletedWork && !run.isNullOrBlank() && (epoch is Int || epoch is Long) && (epoch as Number).toLong() >= 0) {
+            check(sameCompletedRun) { "工作已换轮，请重新读取原工作文件。" }
+            if (!selectedTask.optBoolean("contextWithdrawn") && !selectedTask.optBoolean("sourceCurrentReadRequired") &&
+                !current.optBoolean("contextWithdrawn") && !current.optBoolean("sourceCurrentReadRequired"))
+                page.put("completedFileRun", JSONObject().put("runId", run).put("epoch", epoch))
+        }
+        if (sameCompletedRun && !current.optBoolean("contextWithdrawn") && !current.optBoolean("sourceCurrentReadRequired")) {
             for (index in 0 until files.length()) available[index].optJSONObject("pdfExcerptStart")?.let {
                 files.getJSONObject(index).put("pdfExcerptStart", it)
             }

@@ -276,14 +276,20 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
       </Button>
     </div>}
   </section>;
-  const hasExecutionRecord = !!(resultText || outcome.image || remotePhone || phoneStatus || outcome.partial);
+  const hasResultText = !!resultText.trim();
+  const hasExecutionRecord = hasResultText || !!(outcome.image || remotePhone || phoneStatus);
   const phoneOutcome=active&&revealedPhoneOutcome&&revealedPhoneOutcome===originalBackgroundPhoneOutcome(record)&&
     outcome.evidenceRunBound===true&&!!resultText&&resultText===record.raw?.evidence?.modelSummary?revealedPhoneOutcome:undefined;
-  const executionResult = (hasExecutionRecord || showEmptyResult && !settlementTitle) && <div className="pw-outcome-document">
+  // A partial read is neither a result body nor proof that the body is empty.
+  // Only let the original file read settle an otherwise empty complete record.
+  const canShowEmptyBody = showEmptyResult && !hasExecutionRecord && !settlementTitle && !outcome.partial;
+  const filesOwnEmpty = active && canShowEmptyBody && !!resultFiles?.supported;
+  const partialNotice = outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>;
+  const executionResult = (hasExecutionRecord || canShowEmptyBody && !filesOwnEmpty) && <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3 data-original-phone-outcome={phoneOutcome} tabIndex={phoneOutcome?-1:undefined}>{phoneOutcome?'本轮手机回执':hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
       {originalBuildAnswer && <p className="pw-reading-note">构建和网页归档以本机回执为准。</p>}
-      {resultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
-        : !settlementTitle && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
+      {hasResultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
+        : !settlementTitle && !outcome.partial && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
       {outcome.image && <RetainedPhoneImage task={record} src={outcome.image} label={imageLabel} active={active} readIdentity={readIdentity} motionKey={`image:${screenshot?.imageId || 'retained'}`}/>}
       {remotePhone && <figure className="pw-outcome-image" data-motion-key={`phone:${screenshot?.imageId}`}>
         <img src={remotePhone.image} alt={`设备 ${remotePhone.deviceId.slice(-4)} 的${remotePhone.screenMode === 'background' ? '独立屏' : '主屏'}观察快照`} loading="lazy" decoding="async"/>
@@ -297,8 +303,9 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
         phoneStatus === 'saved' ? screenshot?.state === 'expired' || screenshot?.state === 'deleted' || screenshot?.readState === 'unreadable' ? '这份手机画面当前不可显示，具体留存状态见下方。' : '手机观察已保存；重新打开原任务可读取图片。' :
         '本轮还没有可保存的手机观察画面。需要原任务执行带图观察、目标允许全屏捕获，并开启本机截图留存；不会为打开此页面额外抓图。'
       }</p>}
-      {outcome.partial && <MotionFeedback identity={`${owner}:partial`} className="pw-outcome-limit" role="status">部分结果记录尚未载入。</MotionFeedback>}
+      {partialNotice}
     </div>;
+  const executionDetails = executionResult || partialNotice;
   return <section ref={root} className="pw-task-outcome pw-task-reading" aria-label="任务结果依据" data-result-source={outcome.source}>
     {!projectDraftSourceRetired&&record.raw?.actorId==='owner'&&record.raw?.spaceId==='private'&&record.raw?.contextAvailable!==false&&record.raw?.contextWithdrawn!==true&&
       record.raw?.sourceCurrentReadRequired!==true&&record.raw?.taskProjection!=='source_unavailable'&&record.raw?.developmentContext?.draftOnly===true&&typeof record.raw.projectEditDraftId==='string'&&/^[a-f0-9]{64}$/.test(record.raw.projectEditDraftId)&&<ProjectDraftDifference active={active} id={record.id} project={record.raw.developmentContext.projectId}
@@ -350,9 +357,11 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     {active && onContinueBuildCopy && <div className="pw-form-actions">
       <Button variant="secondary" onClick={onContinueBuildCopy}>继续编辑构建所用的副本</Button>
     </div>}
-    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}/>}
+    {resultFiles && active && <TaskResultFiles {...resultFiles} active={active} readIdentity={`${readIdentity}:${owner}:${status || ''}`}
+      completedRunId={status === 'completed' ? record.raw?.runId : undefined} completedEpoch={record.raw?.coordinatorEpoch}
+      showEmptyBody={filesOwnEmpty && !report && !reply && !screenshot && !outcome.retained && !packageRead.eligible && !outcome.projectPackages.length}/>}
     {report && <OwnerWorkReport key={JSON.stringify(report)} target={report} active={active} supported={canReadReport} identity={readIdentity} onCopy={onCopy} />}
-    {executionResult && (!phoneOutcome&&(report || deferExecutionDetails) ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始记录"><AccordionItem id="execution-result" title="查看执行原始记录">{executionResult}</AccordionItem></Accordion> : executionResult)}
+    {executionDetails && (!phoneOutcome&&(report || deferExecutionDetails) ? <Accordion variant="divided" className="pw-reading-disclosures" aria-label="执行原始记录"><AccordionItem id="execution-result" title="查看执行原始记录">{executionDetails}</AccordionItem></Accordion> : executionDetails)}
 
     {/* These files belong to the linked message, not necessarily to the current run. */}
     {files.length > 0 && <section className="pw-outcome-deliverables" aria-label="关联答复中的附件">
