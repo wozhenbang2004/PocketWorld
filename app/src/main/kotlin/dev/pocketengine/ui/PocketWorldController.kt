@@ -4782,6 +4782,23 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             main.post { if (!closed) { done(result); getTask(input.getString("taskId")); refreshCurrentConversationTurn() } }
         }
     }
+    /** One exact active native source, bypassing the generic feature result and receipt caches. */
+    internal fun readOrdinaryFirstFailure(question: dev.pocketengine.features.assistant.AssistantModule.OrdinaryFirstQuestion,
+            fast: () -> Boolean, done: (dev.pocketengine.features.assistant.AssistantModule.OrdinaryFirstFailure?) -> Unit) {
+        if (!webPrivateOwnerVisible() || !fast()) { done(null); return }
+        val store = app.tasks
+        val assistant = app.features.module("assistant") as? dev.pocketengine.features.assistant.AssistantModule
+        if (assistant == null) { done(null); return }
+        try { io.execute {
+            val failure = runCatching {
+                assistant.readOrdinaryFirstFailure(question) { fast() && app.tasks === store }
+            }.getOrNull()
+            main.post {
+                if (!closed) done(failure?.takeIf { fast() && webPrivateOwnerVisible() && app.tasks === store })
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) { done(null) }
+    }
+
     internal fun readOriginalCompletedWorkDelivery(conversation: String, messageId: String, revision: Long,
             selected: dev.pocketengine.store.TaskStore.OwnerWorkDeliveryRef, summaryChars: Int, offset: Int, expectedDigest: String,
             fast: () -> Boolean, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
@@ -5007,7 +5024,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     locallyUnsent[client]=LocalUnsent(input.toString(),original.draftKey,original.draftRevision)
                     if(submittingChatClient==client)submittingChatClient=null
                     state=state.copy(chatSubmitting=false,error="模型偏好尚未固定，本次未发送；原输入仍保留："+message(pinned.exceptionOrNull()!!))
-                } else if(current?.fingerprint==original.fingerprint) feature("assistant","send",input)
+                } else if(current?.fingerprint==original.fingerprint) feature("assistant","send",input,
+                    ordinaryFirst=original.takeIf { it.firstChatPhase==OwnerComposerState.FirstChatPhase.FENCED })
             }
         }
     }
@@ -6369,7 +6387,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (error: Exception) { state = state.copy(modelTesting = false, modelTest = null, modelTestTaskId = null); throw error }
     }
     private fun feature(feature: String, command: String, payload: JSONObject = JSONObject(), originalOwnerCurrent: (() -> Boolean)? = null,
-                        formalSaveFileList: Boolean = false): String {
+                        formalSaveFileList: Boolean = false, ordinaryFirst: OwnerComposerState.Pending? = null): String {
         val id = UUID.randomUUID().toString()
         val key = "$feature.$command"
         val workspaceFileList = key == "workspace.list"
@@ -6385,7 +6403,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(feature=="assistant"&&command=="get")latestChatGet=id
         pending[id] = Pair(key, metadata)
         native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id),
-            originalOwnerCurrent = originalOwnerCurrent, formalSaveFileList = formalSaveFileList)
+            originalOwnerCurrent = originalOwnerCurrent, formalSaveFileList = formalSaveFileList, ordinaryFirst = ordinaryFirst)
         return id
     }
     internal var nativeEvaluationOpen by mutableStateOf(false)
@@ -6808,7 +6826,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
     }
     private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null, completed: ((JSONObject?, String?) -> Unit)? = null,
-                       formalSaveFileList: Boolean = false, originalOwnerCurrent: (() -> Boolean)? = null) {
+                       formalSaveFileList: Boolean = false, originalOwnerCurrent: (() -> Boolean)? = null,
+                       ordinaryFirst: OwnerComposerState.Pending? = null) {
         val viewerEpoch = inspectionEpoch
         val inlinePreview = phoneInlinePreview.takeIf { action == "observeTask" }
         val targetTask = input.optString("taskId")
@@ -6847,7 +6866,11 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
                     else if (projectMemoryRequest != null) startProjectWithReviewedMemory(input, projectMemoryRequest)
                     else if (needsGroupOwner) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在当前原群任务详情重新建立本机审核窗口")) { app.dispatchOwnerAction(action, reviewedInput) }
-                    else if (originalOwnerCurrent != null && action == "featureRequest") {
+                    else if (ordinaryFirst != null) {
+                        check(action == "featureRequest" && input.opt("feature") == "assistant" && input.opt("command") == "send")
+                        app.requestOrdinaryFirstChat(input, ordinaryFirst)
+                        null
+                    } else if (originalOwnerCurrent != null && action == "featureRequest") {
                         app.features.request(input, java.util.function.BooleanSupplier { originalOwnerCurrent() })
                         null
                     } else if (formalSaveFileList) {

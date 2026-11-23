@@ -1,5 +1,6 @@
 package dev.pocketengine.ui.web
 
+import dev.pocketengine.features.assistant.AssistantModule
 import dev.pocketengine.ui.AttachmentMessageInput
 import dev.pocketengine.ui.PocketWorldController
 import dev.pocketengine.ui.UiChatAttachment
@@ -11,7 +12,7 @@ import org.json.JSONObject
 /** Explicit read model for the trusted local Web UI. No host authority is serialized. */
 internal object PocketWebState {
     private val hidden = setOf(
-        "remoteinputdrafts", "hasphonedraftrows",
+        "remoteinputdrafts", "hasphonedraftrows", "ordinaryturnoutcome", "nativeordinaryfirstturnfailure",
         "apikey", "password", "passphrase", "privatekey", "clientsecret", "accesstoken",
         "refreshtoken", "idtoken", "bearer", "bearertoken", "authorization", "secret",
         "token", "invitationtoken", "invitationuri", "loginchallenge", "signedurl", "localphonepauseinput",
@@ -47,6 +48,56 @@ internal object PocketWebState {
             is String, is Number, is Boolean -> value
             else -> JSONObject.NULL
         }
+    }
+
+    /** Select one already-loaded original row, not a title, a search result, or caller-supplied identity. */
+    private fun ordinaryFirstQuestion(row: UiMessage, conversation: String): AssistantModule.OrdinaryFirstQuestion? {
+        val id = row.id ?: return null
+        val locator = row.ownerOriginalLocator ?: return null
+        val submission = row.submission ?: return null
+        val generation = locator.opt("generation") as? String ?: return null
+        val fingerprint = locator.opt("fingerprint") as? String ?: return null
+        val client = submission.opt("clientMessageId") as? String ?: return null
+        val task = submission.opt("taskId") as? String ?: return null
+        val run = submission.opt("runId") as? String ?: return null
+        val epoch = submission.optInt("epoch", -1)
+        val revision = row.sourceRevision
+        if (row.role != "user" || id.isBlank() || generation.isBlank() || client.isBlank() || task.isBlank() || run.isBlank() ||
+            revision < 1 || epoch < 1 || !row.textOnlyHandoffEligible || locator.opt("kind") != "owner_native_original" ||
+            locator.opt("conversationId") != conversation || locator.opt("recordId") != id ||
+            locator.optLong("recordVersion", -1) != revision || submission.opt("conversationId") != conversation ||
+            submission.opt("messageId") != id || submission.opt("status") != "accepted" || submission.opt("resourceType") != "assistant_text" ||
+            submission.opt("queueRole") != "task_goal" || submission.optLong("ownerMessageRevision", -1) != revision ||
+            submission.opt("notAdmitted") == true || submission.opt("reconciliationRequired") == true) return null
+        return AssistantModule.OrdinaryFirstQuestion(conversation, id, revision, generation, fingerprint, client, task, run, epoch)
+    }
+
+    fun currentOrdinaryFirstQuestion(controller: PocketWorldController): AssistantModule.OrdinaryFirstQuestion? {
+        val state = controller.state
+        val conversation = state.conversationId ?: return null
+        if (controller.loadingFirstConversationMessages() || controller.composerDraft?.let {
+                it.conversationId == conversation && it.key == "conversation:$conversation"
+            } != true) return null
+        val row = state.messages.firstOrNull() ?: return null
+        val question = ordinaryFirstQuestion(row, conversation) ?: return null
+        if (state.messages.count { it.id == question.message() } != 1) return null
+        val task = state.tasks.singleOrNull { it.id == question.task() } ?: return null
+        val raw = task.raw
+        return question.takeIf { task.status == "failed" && raw.opt("status") == "failed" && raw.opt("id") == question.task() &&
+            raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" && raw.opt("kind") == "assistant" &&
+            raw.opt("conversationId") == conversation && raw.opt("runId") == question.run() &&
+            raw.optInt("coordinatorEpoch", -1) == question.epoch() }
+    }
+
+    private fun ordinaryFirstTurnOutcome(read: AssistantModule.OrdinaryFirstFailure): JSONObject {
+        val original = read.question()
+        val outcome = JSONObject().put("format", "pocketworld.ordinary-turn-outcome.v1").put("status", "failed")
+            .put("ownerMessageId", original.message()).put("ownerMessageRevision", original.revision())
+            .put("taskId", original.task()).put("runId", original.run()).put("epoch", original.epoch())
+        val code = read.authStatus()
+        if (code == 401 || code == 403)
+            outcome.put("modelFailure", JSONObject().put("purpose", "MAIN").put("kind", "HTTP").put("httpStatus", code))
+        return outcome
     }
 
     fun attachment(file: UiChatAttachment): JSONObject = JSONObject()
@@ -110,6 +161,7 @@ internal object PocketWebState {
 
     fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false },
         editorResumeVisible: (UiTask) -> Boolean = { false },
+        ordinaryFirstTurnPresentation: AssistantModule.OrdinaryFirstFailure? = null,
         originalReplyDocuments: (UiMessage) -> List<ReplyDocument> = { emptyList() }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
@@ -166,6 +218,11 @@ internal object PocketWebState {
             .put("conversationId", state.conversationId ?: JSONObject.NULL)
             .put("messages", JSONArray().also { out -> state.messages.forEach { row ->
                 val visible = message(row)
+                ordinaryFirstTurnPresentation?.takeIf { read ->
+                    val question = read.question()
+                    state.conversationId == question.conversation() && row.id == question.message() &&
+                        ordinaryFirstQuestion(row, question.conversation()) == question
+                }?.let { visible.optJSONObject("submission")?.put("ordinaryTurnOutcome", ordinaryFirstTurnOutcome(it)) }
                 if (row.attachmentFilesSourceRevision == controller.messageAttachmentSourceRevision) {
                     if(row.attachments.any { AttachmentMessageInput.PDF.supports(it.mimeType,it.name) })
                         visible.put("localMessagePdfSourceCurrent", true)

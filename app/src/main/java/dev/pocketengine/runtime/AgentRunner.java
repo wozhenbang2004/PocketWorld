@@ -48,6 +48,12 @@ public final class AgentRunner {
     /** Native host only: a single approved call recovered from the original durable history. */
     public interface ApprovedCall {JSONObject take(JSONArray history,RunControl original)throws Exception;}
     private ApprovedCall approvedCall;
+    /** Local presentation only, never carried into a checkpoint, TaskStore outcome or model request. */
+    public record MainAuthorizationFailure(String taskId,String runId,int epoch,int httpStatus) { }
+    private boolean observeInitialChatFailure;
+    private MainAuthorizationFailure initialChatAuthorizationFailure;
+    public void observeInitialChatFailure(){if(lifecycleBegun)throw new IllegalStateException("原对话已开始");observeInitialChatFailure=true;}
+    public MainAuthorizationFailure initialChatAuthorizationFailure(){return initialChatAuthorizationFailure;}
     public void bindApprovedCall(ApprovedCall call){if(lifecycleBegun||approvedCall!=null)throw new IllegalStateException("审批续接只能在启动前绑定一次");approvedCall=java.util.Objects.requireNonNull(call);}
     private static final int MAX_IMAGES = 2;
     private static final int MAX_IMAGE_CHARS = 8 * 1024 * 1024;
@@ -864,9 +870,14 @@ public final class AgentRunner {
                         try{screens.requireUploads(nativeProvenance,control);}catch(SecurityException withdrawn){throw new ModelGateway.RequestRefreshRequired();}
                     });
                     final JSONArray originalHistory=history;final JSONArray[] retryOwnerInputs={null};final boolean retryAfterContextRepair=!contextRecoveryUsed;final int traceSteps=steps;
+                    final dev.pocketengine.runtime.usage.InferenceReceipt[] terminalMain={null};
                     originalMain=dev.pocketengine.runtime.usage.InferenceCapture.observe(originalMain,new dev.pocketengine.runtime.usage.InferenceCapture.Sink(){
-                        public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){executionTrace.request(receipt.callId,nativeTraceSite[0],originalHistory,traceSteps);}
-                        public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){}
+                        public void started(dev.pocketengine.runtime.usage.InferenceReceipt receipt){
+                            terminalMain[0]=null;executionTrace.request(receipt.callId,nativeTraceSite[0],originalHistory,traceSteps);
+                        }
+                        public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){
+                            if(observeInitialChatFailure)terminalMain[0]=receipt; // the original durable sink has already committed it
+                        }
                     });
                     // Each physical call gets a fresh target/receipt and rechecks the original native
                     // task/epoch/scope. No tool has been admitted from this incomplete response.
@@ -958,10 +969,12 @@ public final class AgentRunner {
                             continue;
                         }
                         long delay=contextRecoveryUsed?-1:modelRecovery.delay(failed,turnRetries,System.currentTimeMillis());
-                        if(delay<0)throw failed;
-                        // restore fences uncertain original operations; current permission and
+                        // Restore fences uncertain original operations; current permission and
                         // physical-call budget are checked again by inferenceTarget before POST.
-                        if(journal==null||!journal.reserveModelRecovery(nativeRequest[0],delay))throw failed;
+                        if(delay<0||journal==null||!journal.reserveModelRecovery(nativeRequest[0],delay)){
+                            rememberInitialChatFailure(terminalMain[0],nativeRequest[0],failed,control);
+                            throw failed;
+                        }
                         journal.restore();
                         emit(taskId,"model_recovery","running","本次推理未完整结束，正在原范围内稍后重新推理；没有重放工具，已发生的模型用量仍计入。",null,
                                 new JSONObject().put("previousCallId",nativeRequest[0]).put("retryNumber",turnRetries+1).put("waitMillis",delay).put("totalWaitLimitMillis",SafeModelRecovery.MAX_TOTAL_WAIT_MILLIS).put("toolReplay",false).put("usageRefunded",false),config,sink);
@@ -2219,6 +2232,24 @@ public final class AgentRunner {
         JSONObject result=new JSONObject(evidence.toString());RunControl.HostRunIdentity run=control.hostRunIdentity();
         result.put("nativeStopReason","step_limit");if(run!=null)result.put("nativeStopRunId",run.runId()).put("nativeStopEpoch",run.epoch());return result;
     }
+    private void rememberInitialChatFailure(dev.pocketengine.runtime.usage.InferenceReceipt receipt,String callId,Exception failed,RunControl control){
+        if(!observeInitialChatFailure||receipt==null||!receipt.callId.equals(callId)||
+                receipt.outcome!=dev.pocketengine.runtime.usage.InferenceReceipt.Outcome.FAILED||
+                !(failed instanceof ModelGateway.GatewayException gateway))return;
+        var at=receipt.context;var original=gateway.observation();
+        if(at.purpose!=dev.pocketengine.runtime.usage.InferenceReceipt.Purpose.MAIN||
+                at.bindingKind!=dev.pocketengine.runtime.usage.InferenceReceipt.BindingKind.HOST_RUN||!at.memberId.isEmpty()||
+                !control.matchesHostRun(at.taskId,at.runId,at.epoch)||original==null||
+                original.kind!=dev.pocketengine.runtime.usage.InferenceFailure.Kind.HTTP||
+                original.httpStatus!=401&&original.httpStatus!=403)return;
+        try {
+            var committed=dev.pocketengine.runtime.usage.InferenceFailure.checked(receipt.toJson().getJSONObject("failure"));
+            if(committed.kind==original.kind&&committed.httpStatus==original.httpStatus&&
+                    committed.observedAt==original.observedAt&&committed.nativeCode.equals(original.nativeCode))
+                initialChatAuthorizationFailure=new MainAuthorizationFailure(at.taskId,at.runId,at.epoch,committed.httpStatus);
+        }catch(Exception unavailable){/* Optional presentation, never a reason to change the original failure. */}
+    }
+
     private static RunOutcome finish(String taskId, String status, String summary, JSONObject evidence, int steps,
                                      ModelConfig config, EventSink sink) throws Exception {
         JSONObject result = safeJson(evidence, config, true).put("steps", steps)

@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Choreographer
+import dev.pocketengine.features.assistant.AssistantModule
 import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RunControl
@@ -630,12 +631,13 @@ internal class PocketWebBridge(
         }
     }
 
-    fun foreground(value: Boolean) { reminderNotificationForeground(value); if (!value) { retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    fun foreground(value: Boolean) { reminderNotificationForeground(value); if (!value) { observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
         if (closed) return
         closed = true
+        observeOrdinaryFirstFailure(null)
         retireKeptStaticPages()
         retireSourceCheckpoints()
         retireReplyPicker()
@@ -864,14 +866,51 @@ internal class PocketWebBridge(
         if (publishedMainPausePageReturn != mainPausePageReturn()) publishState()
     }
 
+    private data class OrdinaryFirstVisit(val document: String, val window: PocketWebWindowTicket, val resume: Long,
+        val foreground: Long, val composerEpoch: Int, val sources: Long, val question: AssistantModule.OrdinaryFirstQuestion)
+    @Volatile private var ordinaryFirstRead: OrdinaryFirstVisit? = null
+    private var ordinaryFirstFailure: AssistantModule.OrdinaryFirstFailure? = null
+
+    /** The native surface keeps the same private topic when Home preserves its draft. No other topic or reader is eligible. */
+    private fun ordinaryFirstVisit(): OrdinaryFirstVisit? {
+        val document = documentId ?: return null
+        if (closed || section != null || taskViewId != null || taskReturnSection != null || phoneComposer.intent ||
+            !controller.webPrivateOwnerVisible() || controller.hasChannelPhoneOrigin || controller.conversationReader != null ||
+            controller.queuedInputsPage != null || controller.state.filePath != null ||
+            controller.state.chatAttachmentPickerOpen || controller.attachmentOutcomes.state.open) return null
+        val question = PocketWebState.currentOrdinaryFirstQuestion(controller) ?: return null
+        return OrdinaryFirstVisit(document, captureWindow(), workspaceResumeRevision, controller.displayedPhoneWindowVersion(),
+            controller.composerViewEpochForScopedRead, controller.conversationSourceRevision, question)
+    }
+
+    private fun observeOrdinaryFirstFailure(visit: OrdinaryFirstVisit?) {
+        if (ordinaryFirstRead == visit) return
+        ordinaryFirstRead = visit
+        ordinaryFirstFailure = null
+        if (visit == null) return
+        fun fast() = !closed && ordinaryFirstRead === visit && documentId == visit.document &&
+            commandFence.accepts(visit.window.bridge) && controller.displayedPhoneWindowAlive(visit.foreground) &&
+            controller.composerViewEpochForScopedRead == visit.composerEpoch && controller.conversationSourceRevision == visit.sources &&
+            taskViewId == null
+        controller.readOrdinaryFirstFailure(visit.question, ::fast) { result ->
+            if (result != null && fast() && ordinaryFirstVisit() == visit && result.question() == visit.question) {
+                ordinaryFirstFailure = result
+                publishState()
+            }
+        }
+    }
+
     private fun publishStateNow(force: Boolean = false) {
         if (closed || !started) return
         controller.retireInvalidOriginalReminderHistory()
         var projection: JSONObject? = null
+        var firstVisit: OrdinaryFirstVisit? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
             val exactPicker=currentReplyPicker()
-            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume) {
+            firstVisit = ordinaryFirstVisit()
+            projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume,
+                ordinaryFirstTurnPresentation = if (firstVisit != null && firstVisit == ordinaryFirstRead) ordinaryFirstFailure else null) {
                 liveReplyDocuments(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true,includeText=true).orEmpty()
                     .map{original->PocketWebState.ReplyDocument(original.file,original.checkFirst)}
             }
@@ -941,6 +980,7 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("projectStorage", dataPages.storageSnapshot())
         }
         val snapshot = projection ?: return
+        observeOrdinaryFirstFailure(firstVisit)
         val projectedState = snapshot.getJSONObject("state")
         if (reminderNotificationWindow()) reminderNotificationRead?.let { read ->
             projectedState.put("reminderNotificationAccess", JSONObject().put("sequence", read.sequence)

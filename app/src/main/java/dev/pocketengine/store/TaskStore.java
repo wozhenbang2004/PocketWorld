@@ -21754,6 +21754,55 @@ public final class TaskStore {
         if("phone".equals(task.optString("kind")))context.put("originalNoticePrivateLocal",PhoneActionRecovery.local(task));
         return context;
     }
+    /** Native first-question receipt proof: one current indexed header and the exact
+     * settled run. Never read the task document, audit/operation bodies or run checkpoint. */
+    public synchronized boolean isCurrentFailedOrdinaryChatRun(String id,String conversation,String run,int epoch){
+        if(id==null||id.isBlank()||id.length()>240||conversation==null||conversation.isBlank()||conversation.length()>240||
+                run==null||run.isBlank()||run.length()>240||epoch<1)return false;
+        String generation=Integer.toString(epoch);
+        String sql="SELECT CASE WHEN length(CAST(t.ui_header AS BLOB))<=32768 THEN t.ui_header END FROM tasks t "+
+                "JOIN runs r ON r.task_id=t.task_id AND r.run_id=? AND r.epoch=? AND r.status='failed' "+
+                "WHERE t.task_id=? AND t.audit_format=1 LIMIT 1";
+        try(Cursor row=db.rawQuery(sql,new String[]{run,generation,id})){
+            if(!row.moveToFirst()||row.isNull(0))return false;
+            Set<String> required=Set.of("id","conversationId","runId","coordinatorEpoch","actorId","spaceId","kind","executionMode","status",
+                    "taskProjection","auditBodyIncluded","cancelRequested");
+            Set<String> optional=Set.of("origin","parentTaskId","metadataLimited"),seen=new java.util.HashSet<>();
+            // Read only typed root scalars from the existing bounded native header.
+            // The stock display snippets, nested context and other fields are skipped.
+            try(JsonReader header=new JsonReader(new java.io.StringReader(row.getString(0)))){
+                header.beginObject();
+                while(header.hasNext()){
+                    String key=header.nextName();
+                    if(!required.contains(key)&&!optional.contains(key)){header.skipValue();continue;}
+                    if(!seen.add(key))return false;
+                    JsonToken kind=header.peek();
+                    boolean matches=switch(key){
+                        case "id" -> kind==JsonToken.STRING&&id.equals(header.nextString());
+                        case "conversationId" -> kind==JsonToken.STRING&&conversation.equals(header.nextString());
+                        case "runId" -> kind==JsonToken.STRING&&run.equals(header.nextString());
+                        case "coordinatorEpoch" -> kind==JsonToken.NUMBER&&generation.equals(header.nextString());
+                        case "actorId" -> kind==JsonToken.STRING&&"owner".equals(header.nextString());
+                        case "spaceId" -> kind==JsonToken.STRING&&"private".equals(header.nextString());
+                        case "kind" -> kind==JsonToken.STRING&&"assistant".equals(header.nextString());
+                        case "executionMode" -> kind==JsonToken.STRING&&"capabilities".equals(header.nextString());
+                        case "status" -> kind==JsonToken.STRING&&"failed".equals(header.nextString());
+                        case "taskProjection" -> kind==JsonToken.STRING&&"summary".equals(header.nextString());
+                        case "auditBodyIncluded","cancelRequested","metadataLimited" -> kind==JsonToken.BOOLEAN&&!header.nextBoolean();
+                        case "origin","parentTaskId" -> {
+                            if(kind!=JsonToken.NULL)yield false;
+                            header.nextNull();yield true;
+                        }
+                        default -> false;
+                    };
+                    if(!matches)return false;
+                }
+                header.endObject();
+                return seen.containsAll(required)&&header.peek()==JsonToken.END_DOCUMENT;
+            }catch(java.io.IOException|IllegalStateException invalid){return false;}
+        }
+    }
+
     public synchronized JSONObject get(String id,boolean image)throws Exception{
         JSONObject task=read(id);if(task==null)return null;
         task.put("events",TaskAuditStore.events(db,id,null));

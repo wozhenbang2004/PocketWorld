@@ -22,7 +22,7 @@ import {ConversationLinkedReason,ConversationOpening,ConversationStarters,Conver
 import {MotionFeedback,useCollectionMotion} from './library/journey-motion';
 import {useConversationReading} from './useConversationReading';
 import {ConversationReadingNav} from './ConversationReadingNav';
-import {ConversationDelivery,ConversationDraftStatus,SavedConversationDelivery,savedConversationDelivery,savedLocalScreenResult,conversationPending,useConversationRegistration} from './ConversationDelivery';
+import {ConversationDelivery,ConversationDraftStatus,SavedConversationDelivery,savedConversationDelivery,savedLocalScreenResult,conversationPending,originalFirstTurnFailure,useConversationRegistration} from './ConversationDelivery';
 import {WorkSearch,completedWorkSearchMatch,type WorkSearchConversation,type WorkSearchItem,type WorkSearchMemory} from './WorkSearch';
 import {WorkSearchOriginalReader} from './WorkSearchOriginalReader';
 import {ComposerWorkOptions} from './ComposerWorkOptions';
@@ -1903,6 +1903,7 @@ export default function App(){
  };
  const {switching:draftSwitching,pending:draftSwitchPending,open:openDraftSwitch}=useConversationDraftSwitch(setLocalError);
  const reportDraftFlight=useRef<{key:string;epoch:number}|null>(null);
+ const firstQuestionDraftFlight=useRef<{key:string;epoch:number;document:number;navigation:number}|null>(null);
  const [reportDraftSwitching,setReportDraftSwitching]=useState(false);
  const teamReplacements=useRef(new Map<string,PendingTeamReplacement>());
  const [,showTeamReplacement]=useState(0);
@@ -9944,6 +9945,88 @@ export default function App(){
      ordinaryMessageWorkChat(snapshot,String(state.conversationId||''),draftEpoch)?
      ordinarySavedDelivery(linked,m,taskResult,String(state.conversationId||'')):undefined;
     const delivery=savedConversationDelivery(m,String(state.conversationId||''),obj(state.chatReceipts));
+    const firstFailure=route==='chat'&&intent==='chat'?originalFirstTurnFailure(m,conversation,obj(state.chatReceipts)):undefined;
+    const matchingFirstFailureTask=(live:ReturnType<typeof bridge.getState>)=>{
+     if(!firstFailure)return;
+     const rows=asArray<Task>(live.state.tasks).filter(task=>task.id===firstFailure.taskId);
+     const work=rows.length===1?rows[0]:undefined,raw=work?.raw;
+     if(work?.status==='failed'&&raw?.id===work.id&&raw.status===work.status&&raw.kind==='assistant'&&
+        raw.conversationId===conversation&&raw.actorId==='owner'&&raw.spaceId==='private'&&
+        raw.runId===firstFailure.runId&&raw.coordinatorEpoch===firstFailure.epoch)return work;
+    };
+    const firstFailureCurrent=(openingExactWork=false)=>{
+     const live=bridge.getState(),view=obj(live.view),taskWindow=view.taskId;
+     if(!firstFailure||document.hidden||bridge.getDocumentEpoch()!==personalDocumentEpoch||navigationWindow.current!==navigationRevision||
+        view.resumeRevision!==obj(snapshot.view).resumeRevision||
+        taskOpen||taskOpening||openedTaskId.current!==null||draftSwitchPending()||
+        (taskWindow!==null&&(!openingExactWork||taskWindow!==firstFailure.taskId))||live.state.chatAttachmentPickerOpen||
+        live.state.chatSubmitting||!ordinaryMessageWorkChat(live,conversation,draftEpoch))return false;
+     const originals=asArray<Message>(live.state.messages).filter(message=>message.id===firstFailure.messageId);
+     if(originals.length!==1)return false;
+     const original=originals[0],receipt=original.submission;
+     // The native task window intentionally no longer projects the chat-only outcome.
+     // Keep its already proven origin only while the same accepted owner input and run remain current.
+     if(openingExactWork&&taskWindow===firstFailure.taskId)return original.sourceRevision===firstFailure.revision&&
+      receipt?.clientMessageId===m.submission?.clientMessageId&&receipt?.taskId===firstFailure.taskId&&
+      receipt?.runId===firstFailure.runId&&receipt?.epoch===firstFailure.epoch&&
+      savedConversationDelivery(original,conversation,obj(live.state.chatReceipts))?.status==='accepted';
+     const current=originalFirstTurnFailure(original,conversation,obj(live.state.chatReceipts));
+     return !!current&&current.revision===firstFailure.revision&&current.taskId===firstFailure.taskId&&
+      current.runId===firstFailure.runId&&current.epoch===firstFailure.epoch&&current.authStatus===firstFailure.authStatus;
+    };
+    const failedQuestionDraft=(live:ReturnType<typeof bridge.getState>)=>{
+     if(!firstFailure)return;
+     const owner=live.state,draft=live.composer,latest=asArray<Message>(owner.messages).filter(message=>message.role==='user').at(-1);
+     if(!draft||!latest||!m.content.trim()||m.content.length>12000||latest.id!==firstFailure.messageId||
+        latest.sourceRevision!==firstFailure.revision||latest.content!==m.content||
+        !ordinaryMessageWorkChat(live,conversation,draftEpoch)||obj(live.view).taskId!==null||
+        owner.chatBusy||owner.chatSubmitting||owner.phoneSubmitting||owner.chatAttachmentPickerOpen||owner.attachmentImporting||
+        owner.listening||owner.voiceInput?.active||owner.voiceInput?.reviewAvailable||owner.quickPanelVoice||
+        draft.voiceText!==''||draft.voiceInputId!==''||!Number.isSafeInteger(draft.revision)||draft.revision<1||draft.revision>=Number.MAX_SAFE_INTEGER||
+        !Array.isArray(draft.pending)||draft.pending.some((pending:Json)=>pending?.draftKey===draft.key||pending?.conversationId===conversation)||
+        ![owner.selectedChatAttachments,draft.sourceRefs,draft.previewRefs,draft.objectRefs].every(items=>Array.isArray(items)&&items.length===0))return;
+     return draft;
+    };
+    const emptyFailedQuestionDraft=firstFailure&&row.lastOfRole&&!previewBlocked&&!readingDocuments.length&&!deliveryReader.retained&&
+     !shownChatTeamRead?.page&&!reportDraftFlight.current&&can('composer.edit')?failedQuestionDraft(snapshot):undefined;
+    const shownFailedQuestionDraft=emptyFailedQuestionDraft?.text===''&&emptyFailedQuestionDraft?.saving===false&&
+     chatDraft.currentValueFor(chatOwner)===''?emptyFailedQuestionDraft:undefined;
+    const redraftFirstQuestion=async(trigger:HTMLButtonElement)=>{
+     const live=bridge.getState(),draft=failedQuestionDraft(live),shown=shownFailedQuestionDraft;
+     const editor=workspace.current?.querySelector<HTMLTextAreaElement>('.pw-composer-row textarea:not(:disabled):not([readonly])');
+     if(!draft||!shown||!firstFailureCurrent()||!trigger.isConnected||!chatMessageList.current?.contains(trigger)||
+        trigger.closest<HTMLElement>('[data-message-id]')?.dataset.messageId!==firstFailure?.messageId||
+        !editor?.isConnected||!editor.getClientRects().length||editor.closest('[hidden],[inert],[aria-hidden="true"]')||
+        editor.value!==''||draft.text!==''||draft.saving!==false||
+        draft.key!==shown.key||draft.epoch!==shown.epoch||draft.revision!==shown.revision||draft.mode!==shown.mode||
+        chatDraft.currentValueFor(chatOwner)!==''||reportDraftFlight.current||!live.capabilities.commands.includes('composer.edit'))return;
+     const prior=firstQuestionDraftFlight.current,navigation=navigationWindow.current,doc=bridge.getDocumentEpoch();
+     if(prior?.key===draft.key&&prior.epoch===draft.epoch&&prior.document===doc&&prior.navigation===navigation)return;
+     const attempt={key:draft.key,epoch:draft.epoch,document:doc,navigation},revision=draft.revision,mode=draft.mode;
+     const edit=chatDraft.currentEditSequence(),review=reviewRequest.current,reading=readingSerial.current;
+     firstQuestionDraftFlight.current=attempt;
+     const same=()=>firstQuestionDraftFlight.current===attempt&&firstFailureCurrent()&&!reportDraftFlight.current&&
+      chatDraft.currentValueFor(chatOwner)!==undefined&&chatDraft.currentEditSequence()===edit&&
+      reviewRequest.current===review&&readingSerial.current===reading;
+     const saved=()=>{
+      const after=failedQuestionDraft(bridge.getState());
+      if(!after||after.key!==attempt.key||after.epoch!==attempt.epoch||after.mode!==mode)return false;
+      if(after.revision===revision&&after.text==='')return undefined;
+      if(after.revision!==revision+1||after.text!==m.content)return false;
+      return after.saving===false?true:undefined;
+     };
+     try{
+      // The original accepted question stays in history. Only fill this empty editor,
+      // using its existing text CAS; a command acknowledgement alone is not a saved draft.
+      await bridge.command('composer.edit',{key:attempt.key,epoch:attempt.epoch,expectedRevision:revision,text:m.content});
+      const confirmed=await awaitPickerProjection(same,saved);
+      if(!same())return;
+      if(!confirmed||saved()!==true)throw Error();
+      setLocalStatus('原问题已存入这份草稿，尚未发送。');
+     }catch{
+      if(same())setLocalError('还没确认原问题是否已存入这份草稿，请查看输入框。本次没有发送。');
+     }finally{if(firstQuestionDraftFlight.current===attempt)firstQuestionDraftFlight.current=null;}
+    };
     const openQueuedReceipt=m.role==='user'&&m.submission?.status==='queued'&&!!m.submission?.taskId&&can('queued.open');
     const verifiedQueueLabel=openQueuedReceipt&&delivery?.status==='queued';
     const savedTrace=!phoneResult&&!taskResult&&m.id&&Number(m.sourceRevision)>0?replyContext:null;
@@ -10028,10 +10111,29 @@ export default function App(){
      {m.hostGoalTaskId&&m.id&&can('conversation.openHostGoal')&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFolder}
        disabled={taskOpen||chatWorkReading} onClick={event=>void openHostWorkFromChat(m,event.currentTarget)}>打开原主机工作</Button>}
      {openQueuedReceipt&&<Button variant="ghost" className="pw-message-queue-action" leadingIcon={IconClock} onClick={()=>run('queued.open',{taskId:m.submission!.taskId,conversationId:state.conversationId})}>{verifiedQueueLabel?'已入队 · 查看或调整':'查看原输入队列'}</Button>}
-     {delivery&&row.lastOfRole&&!verifiedQueueLabel&&<SavedConversationDelivery receipt={delivery}/>}
-     {m.role==='user'&&linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&
+     {delivery&&!firstFailure&&row.lastOfRole&&!verifiedQueueLabel&&<SavedConversationDelivery receipt={delivery}/>}
+     {firstFailure&&<div className="pw-linked-reason" aria-label="首条问题的回执">
+      <strong>首条问题已接收，本轮未完成。</strong>
+      {firstFailure.authStatus&&<span>{firstFailure.authStatus===401?'本轮模型请求未通过身份验证（HTTP 401）。':'服务拒绝了本轮模型请求（HTTP 403）。'}</span>}
+      <div className="pw-action-row">
+       {!!firstFailure.authStatus&&!state.chatBusy&&!state.chatSubmitting&&intent==='chat'&&['connections.enter','connections.leave','models.snapshot'].every(can)&&
+        <Button variant="ghost" size="small" leadingIcon={IconModel} onClick={()=>{
+         if(firstFailureCurrent()&&!bridge.getState().state.chatBusy)openOriginalChatModelSettings();
+        }}>核对此对话的模型连接</Button>}
+       {can('tasks.open')&&matchingFirstFailureTask(snapshot)&&<Button variant="ghost" size="small" onClick={()=>{
+        const stillCurrent=()=>firstFailureCurrent(true)&&!!matchingFirstFailureTask(bridge.getState());
+        if(firstFailureCurrent()&&stillCurrent())openTask(firstFailure.taskId,'overview',false,undefined,undefined,{runId:firstFailure.runId,epoch:firstFailure.epoch},stillCurrent,
+         undefined,()=>{if(navigationWindow.current===navigationRevision&&!document.hidden)setLocalError('原工作的本轮失败记录暂不可读，没有打开其他运行。');});
+       }}>查看原工作的失败记录</Button>}
+       {!!shownFailedQuestionDraft&&<Button variant="ghost" size="small"
+        onClick={event=>{if(event.nativeEvent.isTrusted)void redraftFirstQuestion(event.currentTarget);}}>
+        填入原问题（不发送）
+       </Button>}
+      </div>
+     </div>}
+     {m.role==='user'&&!firstFailure&&linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&
       <ConversationLinkedReason conversation={String(state.conversationId||'')} task={linkedFeedback}/>}
-     {linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
+     {!firstFailure&&linkedFeedback&&(attention(linkedFeedback)||linkedFeedback.status==='failed')&&<Button variant="ghost" className="pw-message-work-action" leadingIcon={completedFeedback?IconCheckCircle:attention(linkedFeedback)||linkedFeedback.status==='failed'?IconError:IconClock} aria-label={`查看任务详情：${linkedFeedback.goal}`} title={linkedFeedback.goal} disabled={!can('tasks.open')} onClick={()=>openTask(linkedFeedback.id,attention(linkedFeedback)&&can('tasks.review')?'review':'overview')}><span className="pw-message-work-next">{taskNeedsReconciliation(linkedFeedback)?'有操作待核对':attention(linkedFeedback)?taskActionLabel(linkedFeedback):linkedFeedback.status==='failed'?'查看失败原因':terminal(linkedFeedback)?'查看详情':'查看进展'}<IconChevronRight size={15} aria-hidden="true"/></span></Button>}
      {(m.content||delivery||m.role==='assistant'||canQuote||savedAttachmentChoices.length>0||(m.retainedSources&&can('sources.open')))&&<div className="pw-message-tools">
        {answerInput&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconFile}
         onClick={(event:{currentTarget:HTMLButtonElement})=>{

@@ -74,6 +74,20 @@ export function savedConversationDelivery(message:Data,conversation:string,obser
  return current.status==='consumed'?current:base;
 }
 
+/** Admission and the first native turn's failure are separate. Never promote
+ * diagnostic text, a missing answer, or a later task's outcome into this fact. */
+export function originalFirstTurnFailure(message:Data,conversation:string,observed:Data){
+ const receipt=message.submission,outcome=receipt?.ordinaryTurnOutcome;
+ if(outcome?.format!=='pocketworld.ordinary-turn-outcome.v1'||outcome.status!=='failed'||
+    outcome.ownerMessageId!==message.id||outcome.ownerMessageRevision!==message.sourceRevision||
+    outcome.taskId!==receipt.taskId||outcome.runId!==receipt.runId||outcome.epoch!==receipt.epoch)return;
+ const delivery=savedConversationDelivery(message,conversation,observed);
+ if(delivery?.status!=='accepted'||delivery.localScreenResult||receipt.resourceType!=='assistant_text')return;
+ const failure=outcome.modelFailure,code=failure?.httpStatus;
+ const authStatus=failure?.purpose==='MAIN'&&failure.kind==='HTTP'&&(code===401||code===403)?code:undefined;
+ return {messageId:message.id,revision:message.sourceRevision,taskId:receipt.taskId,runId:receipt.runId,epoch:receipt.epoch,authStatus};
+}
+
 export function SavedConversationDelivery({receipt,details=false}:{receipt:SavedDelivery;details?:boolean}){
  const copy=receipt.localScreenResult?{label:'本机结果已保存',detail:'这次未调用模型。是否读到屏幕数据，以原回复为准。'}:deliveryText[receipt.status];
  if(!details)return <small className="pw-field-hint" role="status">{copy.label}</small>;

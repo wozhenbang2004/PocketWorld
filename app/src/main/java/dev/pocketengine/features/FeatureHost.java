@@ -1025,18 +1025,23 @@ public final class FeatureHost implements AutoCloseable {
         return hostGoalLinks.bind(source.conversation(),source,location,exact);
     }
     public void request(JSONObject request){
-        request(request,()->true,false,false);
+        request(request,()->true,false,false,null);
     }
     /** Captured by the local owner UI; JSON cannot mint or replace this queue admission check. */
     public void request(JSONObject request,BooleanSupplier originalOwnerCurrent){
-        request(request,originalOwnerCurrent,true,false);
+        request(request,originalOwnerCurrent,true,false,null);
+    }
+    /** Same assistant feature dispatch, with a proof that is unavailable to JSON callers. */
+    public void requestOrdinaryFirstChat(JSONObject request,dev.pocketengine.features.assistant.OwnerComposerState.Pending original){
+        request(request,()->true,false,false,java.util.Objects.requireNonNull(original));
     }
     /** Native follow-up to a verified formal save. The write already publishes feature state. */
     public void requestFormalSaveFileList(String projectId,String requestId){
         request(json("feature","workspace","command","list","requestId",requestId,
-                "payload",json("projectId",projectId)),()->true,false,true);
+                "payload",json("projectId",projectId)),()->true,false,true,null);
     }
-    private void request(JSONObject request,BooleanSupplier originalOwnerCurrent,boolean nativeOwnerAdmission,boolean formalSaveFileList){
+    private void request(JSONObject request,BooleanSupplier originalOwnerCurrent,boolean nativeOwnerAdmission,boolean formalSaveFileList,
+                         dev.pocketengine.features.assistant.OwnerComposerState.Pending ordinaryFirst){
         java.util.Objects.requireNonNull(originalOwnerCurrent);
         String feature=request.optString("feature"),command=request.optString("command"),requestId=request.optString("requestId");
         if(requestId.length()>100||feature.length()>40||command.length()>80){reply(feature,command,requestId,false,null,"请求标识过长");return;}
@@ -1045,6 +1050,8 @@ public final class FeatureHost implements AutoCloseable {
             boolean backendAdmission=false;
             try{if(!originalOwnerCurrent.getAsBoolean())throw new SecurityException("原审阅窗口已关闭，未执行排队操作");EngineModule module=module(feature);if(module==null)throw new IllegalArgumentException("此能力尚未接入");
                 JSONObject payload=request.optJSONObject("payload");JSONObject input=payload==null?new JSONObject():new JSONObject(payload.toString());
+                if(ordinaryFirst!=null&&(!"assistant".equals(feature)||!"send".equals(command)||!(module instanceof AssistantModule)))
+                    throw new IllegalArgumentException("原普通私聊输入身份不匹配");
                 JSONObject strictMember=input.optJSONObject(TeamCoordinator.OWNER_SELF_WAIT_RESUME);
                 if(input.has(TeamCoordinator.OWNER_SELF_WAIT_RESUME)&&(strictMember==null||!nativeOwnerAdmission||!"teams".equals(feature)||!"resume".equals(command)
                         ||!(module instanceof dev.pocketengine.features.teams.TeamsModule)||tasks==null||input.optString("memberId").isEmpty()
@@ -1210,6 +1217,7 @@ public final class FeatureHost implements AutoCloseable {
                         result=module.handle(command,input);
                     }
                 }
+                else if(ordinaryFirst!=null)result=((AssistantModule)module).sendOrdinaryFirstFromComposer(input,ordinaryFirst);
                 else result=tasks!=null&&feature.equals("remote")&&command.equals("cancelJob")?cancelOriginalRemoteRequest(input):module.handle(command,input);
                 if(result==null)result=new JSONObject();
                 if(tracked!=null){JSONObject receipt=new JSONObject(result.toString());if(feature.equals("browser")){if(!trackedRun.equals(result.optString("runId"))||!tracked.equals(result.optString("taskId"))||!result.optBoolean("active")||!resources.ownsBrowser(trackedRun))throw new SecurityException("浏览器没有返回本次执行的有效租约");tasks.requireExternalRun(tracked,trackedRun,feature,false);receipt.put("status","running");}updateTask(tracked,receipt);result.put("hostTaskId",tracked);}

@@ -17,6 +17,7 @@ export type SetupDestination = 'connections' | 'background' | 'appearance' | 'lo
 type OriginalPythonRepair = { observation: OwnerPythonRepairObservation; current: (foregroundEpoch: number) => boolean };
 type SubmittedPythonRepair = { requestId: string; observation: OwnerPythonRepairObservation };
 type OriginalViteTools = { current: (foregroundEpoch: number) => boolean; onReview: (runtimeIdentity: string, foregroundEpoch: number) => void };
+type UnsentViteStart = { requestId: string; previous: string | undefined; generation: number; current: OriginalViteTools['current'] };
 export type SetupWorkspaceProps = {
   snapshot: PocketSnapshot;
   mode?: 'onboarding' | 'center';
@@ -54,6 +55,10 @@ const setupOperationMatches = (view: SetupRuntime | null, requestId: string) =>
 const originalRepairChanged = '未核对到原脚本离开时的同一工具状态。请刷新，或返回原副本重新核对。';
 const originalRepairUnobserved = '尚未核对到本次修复的原记录。刷新只会查询，不会重复发起修复。';
 const originalViteUnobserved = '尚未核对到本次工具准备的原记录。刷新只会查询，不会重复发起准备。';
+const viteStartNotSent = '本次工具准备没有发送。核对工具状态后，可以重新审阅准备内容。';
+class ViteSetupQueueNotSent extends Error {}
+const viteSetupNotSent = (failure: unknown) => failure instanceof ViteSetupQueueNotSent ||
+  failure instanceof Error && 'code' in failure && failure.code === 'not_sent';
 
 function SetupRow({ title, status, children, action }: { title: string; status: string; children?: ReactNode; action?: ReactNode }) {
   return <div className="pw-setup-status-row"><div><strong>{title}</strong><span>{status}</span>{children && <p>{children}</p>}</div>{action}</div>;
@@ -71,6 +76,7 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   const readProof = useRef<{view:SetupRuntime; epoch:number}|undefined>(undefined);
   const submittedRepair = useRef<SubmittedPythonRepair|undefined>(undefined);
   const submittedVite = useRef<string|undefined>(undefined);
+  const unsentVite = useRef<UnsentViteStart|undefined>(undefined);
   const latest = useRef({ enabled, can, run, toolsEpoch, pythonRepair, originalVite }); latest.current = { enabled, can, run, toolsEpoch, pythonRepair, originalVite };
   const ownsViteSetup = (requestId: string|undefined, epoch: number) =>
     submittedVite.current === requestId && latest.current.enabled && latest.current.originalVite?.current(epoch) === true;
@@ -118,8 +124,20 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   };
   const read = async (preserveActionError = false) => {
     if (!alive.current || !latest.current.can('setup.runtime.read') || readingRef.current || pending.current || document.hidden) return false;
-    const ticket = generation.current, epoch = bridge.getDocumentEpoch(), attempt = submittedRepair.current, viteAttempt = submittedVite.current;
-    const ownerCurrent = attempt ? () => ownsSubmittedRepair(attempt, epoch) : viteAttempt ? () => ownsViteSetup(viteAttempt, epoch) : undefined;
+    const ticket = generation.current, epoch = bridge.getDocumentEpoch(), attempt = submittedRepair.current;
+    const unsent = unsentVite.current;
+    if (unsent) {
+      // The queue can refuse while the foreground token is moving. Only this
+      // original project visit may retire its unused locator on a fresh read.
+      if (unsent.generation !== ticket || unsent.requestId !== submittedVite.current ||
+          !unsent.current(epoch) || !ownsViteSetup(unsent.requestId, epoch)) return false;
+      submittedVite.current = unsent.previous;
+      unsentVite.current = undefined;
+      readProof.current = undefined;
+    }
+    const viteAttempt = submittedVite.current;
+    const ownerCurrent = attempt ? () => ownsSubmittedRepair(attempt, epoch) :
+      viteAttempt || unsent ? () => ownsViteSetup(viteAttempt, epoch) && (!unsent || unsent.current(epoch)) : undefined;
     if (ownerCurrent && !ownerCurrent()) return false;
     readingRef.current = true; setReading(true);
     requestedReadEpoch.current=epoch;
@@ -130,8 +148,14 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
       const result = await latest.current.run('setup.runtime.read', { ...(taskId ? { taskId } : {}), afterSequence, maxBytes: 32768 }, ownerCurrent);
       if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch || ownerCurrent && !ownerCurrent()) return false;
       readProof.current={view:apply(result,taskId),epoch};
-      if (!preserveActionError) setError(''); return true;
-    } catch (failure) { if (alive.current && generation.current === ticket) { setError(attempt ? originalRepairUnobserved : viteAttempt ? originalViteUnobserved : failureText(failure)); setNeedsRead(true); } return false; }
+      if (!preserveActionError && !unsent) setError(''); return true;
+    } catch (failure) {
+      if (alive.current && generation.current === ticket) {
+        setError(unsent ? viteStartNotSent : attempt ? originalRepairUnobserved : viteAttempt ? originalViteUnobserved : failureText(failure));
+        setNeedsRead(true);
+      }
+      return false;
+    }
     finally { if (generation.current === ticket) { readingRef.current = false; if (alive.current) setReading(false); } }
   };
   const readRef = useRef(read); readRef.current = read;
@@ -199,7 +223,20 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
         reviewEpoch.current=undefined; setReview(null);
         if (attempt || viteAttempt || setupObject(result).format === 'pocketworld.runtime-setup-view.v1') apply(result);
       }
-    } catch (failure) { if (alive.current && ticket === generation.current) { setReview(null); setError(repairStartId ? originalRepairUnobserved : viteStartId ? originalViteUnobserved : failureText(failure)); setNeedsRead(true); } }
+    } catch (failure) {
+      if (alive.current && ticket === generation.current) {
+        const notSent = command === 'setup.runtime.start' && !repairStartId && viteVisit && viteStartId &&
+          submittedVite.current === viteStartId && viteSetupNotSent(failure) ?
+          { requestId: viteStartId, previous: previousVite, generation: ticket, current: viteVisit.current } : undefined;
+        if (notSent) {
+          unsentVite.current = notSent;
+          currentReview.current = null; reviewEpoch.current = undefined;
+        }
+        setReview(null);
+        setError(notSent ? viteStartNotSent : repairStartId ? originalRepairUnobserved : viteStartId ? originalViteUnobserved : failureText(failure));
+        setNeedsRead(true);
+      }
+    }
     finally {
       if (ticket === generation.current) { pending.current = false; if (alive.current) { setWorking(''); if (command !== 'setup.runtime.review') void readRef.current(!repairStartId && !viteStartId); } }
     }
@@ -207,6 +244,7 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   const attempt = submittedRepair.current;
   const repairUnobserved = !!attempt && !setupOperationMatches(view, attempt.requestId);
   const viteUnobserved = !!submittedVite.current && !setupOperationMatches(view, submittedVite.current);
+  const viteUnsent = !!unsentVite.current && unsentVite.current.requestId === submittedVite.current;
   const unobserved = repairUnobserved || viteUnobserved;
   const repairCurrent = !!pythonRepair && !attempt && !needsRead && currentPythonRepair() === pythonRepair.observation;
   const liveReview = !viteUnobserved && (toolsEpoch===undefined||reviewEpoch.current===toolsEpoch) &&
@@ -220,7 +258,7 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
   };
   return { view:unobserved?null:view, review:liveReview, readEpoch, currentReadyRead, reading, working, error,
     log:unobserved?'':log, logTrimmed:!unobserved&&logTrimmed, needsRead, read, dismissReview,
-    repairVisit:!!pythonRepair, repairCurrent, repairAttempted:!!attempt, repairUnobserved, viteUnobserved,
+    repairVisit:!!pythonRepair, repairCurrent, repairAttempted:!!attempt, repairUnobserved, viteUnobserved, viteUnsent,
     canReviewVite: !originalVite || mayReviewVite(bridge.getDocumentEpoch()),
     reviewPreparation: async () => {
       if (!pythonRepair) return needsForegroundRead()?read():action('setup.runtime.review', { mode: view?.ready ? 'repair' : 'prepare' });
@@ -251,14 +289,14 @@ function useRuntimePreparation(enabled: boolean, can: (action: string) => boolea
 }
 
 function RuntimePreparation({ preparation, can, blocked, projectReview }: { preparation: ReturnType<typeof useRuntimePreparation>; can: (action: string) => boolean; blocked: boolean; projectReview: boolean }) {
-  const { view, review, reading, working, error, log, logTrimmed, needsRead, repairVisit, repairCurrent, repairAttempted, repairUnobserved, viteUnobserved, canReviewVite } = preparation;
+  const { view, review, reading, working, error, log, logTrimmed, needsRead, repairVisit, repairCurrent, repairAttempted, repairUnobserved, viteUnobserved, viteUnsent, canReviewVite } = preparation;
   const locked = blocked || reading || !!working, running = runtimePreparing(view), operation = view?.operation;
   const reviewDetails = review ? { effects: review.review.effects, runtime: review.review.runtimeIdentity, catalog: review.review.catalogIdentity } : null;
   const originalError = operation?.error;
   const recoveryHint = view ? runtimeRecoveryHint(view) : '';
   const failedPhase = setupObject(originalError?.details).failedPreparationPhase;
   return <section className="pw-setup-runtime" aria-label="开发工具准备" aria-busy={reading || !!working}>
-    <div className="pw-setup-section-title"><div><h3>手机开发工具</h3><p role="status">{repairUnobserved ? locked ? '正在核对本次修复' : '本次修复待核对' : viteUnobserved ? locked ? '正在核对本次准备' : '本次准备待核对' : repairCurrent ? 'Python 工具需要修复' : view ? runtimeStatusLabel(view) : reading ? '正在检查' : '尚未检查'}</p></div>
+    <div className="pw-setup-section-title"><div><h3>手机开发工具</h3><p role="status">{repairUnobserved ? locked ? '正在核对本次修复' : '本次修复待核对' : viteUnsent ? '本次准备未发送' : viteUnobserved ? locked ? '正在核对本次准备' : '本次准备待核对' : repairCurrent ? 'Python 工具需要修复' : view ? runtimeStatusLabel(view) : reading ? '正在检查' : '尚未检查'}</p></div>
       <Button variant="ghost" leadingIcon={IconRefresh} disabled={locked || !can('setup.runtime.read')} onClick={() => void preparation.read()}>刷新</Button></div>
     {view?.message && <p className="pw-setup-copy">{view.message}</p>}
     <p className="pw-setup-copy">用于 Web / Node.js 项目、Python 与本机命令。普通对话不需要安装，也不需要先开放手机控制权限。</p>
@@ -326,8 +364,13 @@ export function SetupWorkspace({ snapshot, mode = 'center', initialCapability, i
   const run: SetupCommand = (action, args = {}, stillCurrent) => {
     const ticket = generation.current, epoch = bridge.getDocumentEpoch();
     const request = queue.current.then(() => {
-      if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch || !latest.current.entered || document.hidden) throw new Error('准备页面已变化，返回后请重新读取状态。');
-      if (stillCurrent && !stillCurrent()) throw new Error(originalVite ? '原网页项目的准备窗口已变化，没有继续该操作。' : originalRepairChanged);
+      // Tag only these pre-bridge declines, never an error thrown by native Start.
+      const decline = (message: string): never => {
+        if (originalVite && action === 'setup.runtime.start') throw new ViteSetupQueueNotSent(message);
+        throw new Error(message);
+      };
+      if (!alive.current || generation.current !== ticket || bridge.getDocumentEpoch() !== epoch || !latest.current.entered || document.hidden) decline('准备页面已变化，返回后请重新读取状态。');
+      if (stillCurrent && !stillCurrent()) decline(originalVite ? '原网页项目的准备窗口已变化，没有继续该操作。' : originalRepairChanged);
       return bridge.command(action, args);
     });
     queue.current = request.then(() => undefined, () => undefined);
