@@ -52,6 +52,13 @@ public final class AgentRunner {
     /** Local presentation only, never carried into a checkpoint, TaskStore outcome or model request. */
     public record MainAuthorizationFailure(String taskId,String runId,int epoch,int httpStatus) { }
     private boolean observeInitialChatFailure;
+    private ContextCompactor.OrdinarySummarySelection ordinarySummarySelection;
+    /** Native owner of the already admitted direct Chat only; never a model or request option. */
+    public void bindOriginalOrdinarySummary(dev.pocketengine.runtime.models.ModelRoutePlan main,RunControl original){
+        if(lifecycleBegun||ordinarySummarySelection!=null||phone!=null||instructionProfile!=NativeInstructionProfile.OWNER_BUTLER)
+            throw new IllegalStateException("ordinary_summary_requires_original_chat_runner");
+        ordinarySummarySelection=new ContextCompactor.OrdinarySummarySelection(main,original);
+    }
     private TaskMemoryHistory.PlainInput firstPlainBookInput;
     private TaskMemoryHistory.PlainHistory plainBookHistory;
     /** Installs native-only witnesses before the runner starts. Neither can authorize a request. */
@@ -602,7 +609,7 @@ public final class AgentRunner {
             if(historyTurnPrepared.get()&&capabilities!=null&&!capabilities.responseCurrent(control))throw new SecurityException("历史画面来源已撤回");
         },()->System.nanoTime()/1_000_000,DeferredPhoneSession.policyBound(phone)?()->DeferredPhoneSession.policyRevision(phone):null);
         java.util.List<String> recalledScreens=new java.util.ArrayList<>();
-        ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets,requestProjection);
+        ContextCompactor compactor=new ContextCompactor(journal,journal==null?null:journal.compaction(),runBudgets,requestProjection,ordinarySummarySelection);
         long[] pauseSeen = new long[]{control == null ? 0 : control.pauseRevision()};
         try {
             if (control == null || initialConfig == null || sink == null) throw new IllegalArgumentException();

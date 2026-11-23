@@ -79,6 +79,9 @@ internal class PocketWebAttachments(
     }
     // One physical chooser in this live Activity. No old renderer, geometry, URI, or Bundle entry.
     private var workPdfCopyViewport: CopyViewport? = null
+    private data class LibraryCopyDetails(val window:Window,val library:String,val catalog:JSONObject,
+        val file:JSONObject,val requestId:String)
+    private var libraryCopyDetails:LibraryCopyDetails?=null
     private data class Frame(val location: String, val files: List<JSONObject>,
         val libraryPdfResume: PocketWebOriginalFiles.LibraryPdfResume?, val displayedPdfPage: AttachmentPdfPageText?,
         val displayedWord:AttachmentWordExcerpt?, var workPdfShare: WorkPdfPin?, val workPdfText: WorkPdfPin?,
@@ -134,6 +137,7 @@ internal class PocketWebAttachments(
         if (existing != null && existing.accepts(existing.ticket)) return existing
         if(existing!=null) {
             workPdfCopyViewport = null
+            libraryCopyDetails = null
             retireGenericPdf()
             flow.discardLibraryDocumentReturn()
             retireDraftLibrary()
@@ -161,6 +165,20 @@ internal class PocketWebAttachments(
             state.libraryDocumentReturn == null && state.snapshot?.opt("taskId") == "" &&
             state.documentDraft == null && (!state.documentOpen || allowPageText && state.pdfPageText != null) &&
             state.processingSource == null && state.comparison == null
+
+    private fun libraryCopyDetailsSurface(state:AttachmentOutcomeState) =
+        libraryPdfSurface(state) && !passiveGenericPdf() && state.wordSourceVisit == null &&
+            state.originalReturn != AttachmentOriginalReturn.ENTRY && state.file?.opt("availability") == "available"
+
+    private fun copyDetailsFromOriginal(current:Window,state:AttachmentOutcomeState):LibraryCopyDetails? {
+        val file=state.file?:return null
+        val library=state.globalStandaloneDraftVisit?:return null
+        val catalog=state.snapshot?:return null
+        if(current.historicalReply!=null||current.searchAnchorReader!=null||flow.exportPending||
+            !libraryCopyDetailsSurface(state)||!viewer.matchesOriginal(file)||OwnerPythonOutputText.resultRow(file)||
+            OriginalNodeCompilerDelivery.resultRow(file))return null
+        return flow.displayedLibraryPriorCopyRequest()?.let{LibraryCopyDetails(current,library,catalog,file,it)}
+    }
 
     private fun keepsGenericPdf(visit: GenericPdfVisit, state: AttachmentOutcomeState) =
         window === visit.window && visit.owner() && state.globalStandaloneDraftVisit == visit.library &&
@@ -819,7 +837,14 @@ internal class PocketWebAttachments(
         val passivePdf = passiveGenericPdf()
         val privateOriginal = !passivePdf && !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file)
         val ownedCopy= !passivePdf && !selectedPythonText && scoped == null && !state.deviceOriginalOnly && state.group == null && state.team == null && controller.webPrivateOwnerVisible()
-        val copyReceipt=if(ownedCopy)flow.privateCopyReceipt(privateOriginal) else null
+        val detailsCopy=libraryCopyDetails?.takeIf{
+            ownedCopy && it.window===current && it.file===state.file && it.catalog===state.snapshot &&
+                it.library==state.globalStandaloneDraftVisit && state.originalFile==null && libraryCopyDetailsSurface(state)
+        }
+        libraryCopyDetails=detailsCopy
+        // Carry old receipts only in the full live owner projection, not a replayable action ACK.
+        val copyReceipt=if(ownedCopy)flow.privateCopyReceipt(privateOriginal,
+            if(draftPresentation)detailsCopy?.requestId else null) else null
         val ordinaryLibrary=ordinaryLibrary()
         val readableLibrarySources=if(ordinaryLibrary&&state.file==null)JSONArray(files.filter{PocketWebOriginalFiles.libraryDocument(it)}
             .map{JSONObject().put("id",it.getString("id")).put("sha256",it.getString("sha256"))}) else null
@@ -1053,6 +1078,8 @@ internal class PocketWebAttachments(
                     }, { failure -> done(null, failure) })
                     changed(); return
                 } else {
+                    val priorCopy=if(args.length()==3&&state.originalReturn==AttachmentOriginalReturn.DETAILS)
+                        copyDetailsFromOriginal(current,state) else null
                     review = null; processingReview = null; viewer.clear()
                     when {
                         flow.state.savedChatLinkedOnly&&flow.state.originalFile!=null->flow.backFromOriginalFile()
@@ -1061,7 +1088,7 @@ internal class PocketWebAttachments(
                         flow.state.processingSource != null -> flow.closeProcessing()
                         flow.state.documentDraft != null -> flow.closeDocumentDraft()
                         flow.state.wordSourceVisit != null -> flow.backFromWordExcerptSource()
-                        flow.state.originalFile != null -> flow.backFromOriginalFile()
+                        flow.state.originalFile != null -> { flow.backFromOriginalFile(); libraryCopyDetails=priorCopy }
                         flow.state.documentOpen -> flow.backFromDocument()
                         flow.state.file != null -> flow.backFromFile()
                         else -> if (!controller.webPrivateOwnerVisible() || !flow.backToLibraryDocument()) flow.close()
@@ -1161,7 +1188,10 @@ internal class PocketWebAttachments(
                         original!=null && flow.state.originalFile===original && flow.state.file===file && viewer.displayedPdfPage(file)==pairedPdf
                     flow.saveReadAsFile(::stillOnPage)
                 }
-                "originalDetails" -> { flow.showOriginalDetails(); viewer.clear() }
+                "originalDetails" -> {
+                    val priorCopy=if(args.length()==3)copyDetailsFromOriginal(current,state) else null
+                    flow.showOriginalDetails(); libraryCopyDetails=priorCopy; viewer.clear()
+                }
                 "openOriginal" -> if(flow.state.savedChatLinkedOnly){
                     check(args.length()==3&&flow.state.originalFile==null) { "请在文件信息中明确查看这份原件" }
                     val open=checkNotNull(savedChatLinkOpen)
@@ -1667,6 +1697,7 @@ internal class PocketWebAttachments(
     fun clear(keepDraftPresentation: Boolean = false) {
         // Normal pause invalidates the same window twice. Only the one paused chooser retains a visual locator.
         if (!keepDraftPresentation || workPdfCopyViewport?.phase != CopyViewportPhase.PAUSED) workPdfCopyViewport = null
+        libraryCopyDetails = null
         retireGenericPdf()
         val focusedDraft = flow.state.focusedStandaloneDraft
         retireDraftLibrary(keepDraftPresentation)

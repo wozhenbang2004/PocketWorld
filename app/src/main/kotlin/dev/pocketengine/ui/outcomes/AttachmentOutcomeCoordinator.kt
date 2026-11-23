@@ -264,16 +264,37 @@ internal class AttachmentOutcomeCoordinator(
         verifiedCopies.remove(key);verifiedCopies[key]=receipt
         while(verifiedCopies.size>8)verifiedCopies.remove(verifiedCopies.keys.first())
     }
-    fun privateCopyReceipt(originalConfirmed:Boolean):JSONObject?{
-        val key=state.file?.let(::copySource)?:return null
+    private fun verifiedCopy(key:CopySource, bytes:Long?, requestId:String?=null) =
+        verifiedCopies[key]?.takeIf{bytes!=null&&it.result.verifiedBytes==bytes&&(requestId==null||it.requestId==requestId)}
+
+    private fun libraryCopySize(file:JSONObject):Long? {
+        if(!privateLibrary()||state.file!==file||file.opt("id") !is String||file.opt("sha256") !is String)return null
+        return when(val size=file.opt("size")){is Int->size.toLong();is Long->size;else->null}
+    }
+
+    /** A presentation locator for the already admitted historical proof, never a new copy attempt. */
+    fun displayedLibraryPriorCopyRequest():String? {
+        val file=state.file?:return null
+        val key=copySource(file)
+        val original=state.originalFile?:return null
+        val bytes=libraryCopySize(file)?:return null
+        if(original.sha256!=key.sha||original.sizeBytes!=bytes||
+            state.copyReceipt?.takeIf{it.result.status==OwnerCopyStatus.VERIFIED}?.source()==key||
+            state.previousCopyInFile?.source()==key)return null
+        return verifiedCopy(key,bytes)?.requestId
+    }
+
+    fun privateCopyReceipt(originalConfirmed:Boolean,libraryDetailsRequest:String?=null):JSONObject?{
+        val file=state.file?:return null
+        val key=copySource(file)
         if(privateCopyStage()!=null)return null
         val current=state.copyReceipt?.takeIf{it.source()==key}
         if(current?.result?.status==OwnerCopyStatus.VERIFIED)return current.toJson()
-        // A receipt already verified here survives a cancelled attempt even in file details.
-        // Other historical receipts still require re-admission of the exact original.
-        val prior=(state.previousCopyInFile?.takeIf{it.source()==key}?:verifiedCopies[key]?.takeIf{
-            originalConfirmed&&it.result.verifiedBytes==state.originalFile?.sizeBytes
-        })?.toJson()?.put("historical",true)
+        val indexed=if(originalConfirmed)verifiedCopy(key,state.originalFile?.sizeBytes)
+            else if(libraryDetailsRequest!=null&&state.originalFile==null)verifiedCopy(key,libraryCopySize(file),libraryDetailsRequest)
+            else null
+        // Keep the chooser's live attempt separate from the previously verified copy.
+        val prior=(state.previousCopyInFile?.takeIf{it.source()==key}?:indexed)?.toJson()?.put("historical",true)
         return current?.toJson()?.also{if(prior!=null)it.put("previousVerified",prior)}?:prior
     }
     private fun restoreVerifiedCopies(bundle:Bundle?){

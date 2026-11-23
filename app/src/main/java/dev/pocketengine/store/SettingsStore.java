@@ -211,6 +211,9 @@ public final class SettingsStore {
         if(global.model.isEmpty()&&!selected.model.isEmpty())global=selected.withRoutePlan(null);
         ModelTargetRef summary=modelPurposeTarget("SUMMARY");
         ModelConfig capturedSummary=summary==null?global.withRoutePlan(ModelRoutePlan.exact(global,"SUMMARY","APP_OWNER")):captureModelTarget(summary,"SUMMARY","APP_OWNER",global);
+        // Mark only this atomic native capture. Other purposes and consumers keep their original plans.
+        if(summary==null&&target!=null&&target.kind()==ModelTargetRef.Kind.EXACT&&!selected.usesAccount())
+            selected=selected.withRoutePlan(selected.routePlan.withNativeImplicitOrdinarySummary(target));
         selected=selected.withPurposePlans(java.util.Map.of("SUMMARY",capturedSummary.routePlan,"DEFAULT",ModelRoutePlan.exact(global,"DEFAULT","APP_OWNER")));
         return selected.withLocalObservation(prefs.getBoolean("localCaptureAllowed",selected.sendScreenshots),prefs.getBoolean("localOcrAllowed",selected.sendScreenshots));
     }

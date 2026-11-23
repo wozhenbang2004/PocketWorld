@@ -5,10 +5,10 @@ import {fileObject as obj,type FileJson as Json} from './attachment-workspace';
 import {registerOverlayBack} from './overlay-back';
 
 type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints:number};
-type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string;warmResumeKey?:string;fromTxt?:true};
+type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string;warmResumeKey?:string;fromTxt?:true;fromRecentText?:true};
 type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number;linkedRevision?:true;justCopiedMarkdown?:true;justCopiedPdfPage?:true};
 type OutputChoice={editorHandle:string;versionHandle:string;format:Fields['format']};
-type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
+type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format'];singleConfirmation:boolean};
 type RemovalReview={editorHandle:string;versionHandle:string;name:string;format:Fields['format']};
 type Invoke=(command:string,args?:Json)=>Promise<Json>;
 const isHandle=(value:unknown):value is string=>typeof value==='string'&&/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value);
@@ -49,10 +49,10 @@ function acknowledgedResume(value:Json|undefined):Editor|undefined{
 
 /** This editor owns only the current Web document's input. Native versions are opaque handles. */
 export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,fromMessage=false,initialTxt,
- warmResumeKey,onWarmResume,invoke,registerExit,onExit}:{
+ warmReentry=false,warmResumeKey,onWarmResume,invoke,registerExit,onExit}:{
  active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;fromMessage?:boolean;
  initialTxt?:{name:string;body:string};
- warmResumeKey?:string;onWarmResume:(key:string)=>Promise<Json>;invoke:Invoke;
+ warmReentry?:boolean;warmResumeKey?:string;onWarmResume:(key:string)=>Promise<Json>;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
  const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor|undefined>(()=>!active?undefined:initialTxt?acknowledgedTxt(initial,initialTxt):initialBlank?acknowledgedBlank(initial):initialResume?acknowledgedResume(initial):undefined);
@@ -131,6 +131,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
   }
   setNotice(row?'已打开本机保留版':'');
   setEditor({handle:result.editorHandle,version:row?result.versionHandle:undefined,original:input,input,sourceName,
+   fromRecentText:row?.justCopiedMarkdown===true||row?.justCopiedPdfPage===true?true:undefined,
    warmResumeKey:row&&!sourceName&&isHandle(result.warmResumeKey)?result.warmResumeKey:undefined});
  });
  const resume=()=>perform(async()=>{
@@ -216,10 +217,12 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
     result.format!==outputFormat||typeof result.fileName!=='string'||!result.fileName.endsWith(`.${result.format}`)||result.fileName.length>85){
    setError('没有核对到这份已保留的草稿。原稿没有改动。');return;
   }
-  setReview({id:result.reviewId,editorHandle:editor.handle,versionHandle:editor.version,fileName:result.fileName,format:result.format});setAck(false);
+  // Only the ordinary private editor's committed, unlinked version uses the final button alone.
+  const singleConfirmation=!warmReentry&&!initialResume&&!fromMessage&&!initialTxt&&!editor.sourceName&&!editor.fromTxt&&!editor.fromRecentText;
+  setReview({id:result.reviewId,editorHandle:editor.handle,versionHandle:editor.version,fileName:result.fileName,format:result.format,singleConfirmation});setAck(false);
  });
  const confirmGeneration=()=>{
-  if(!active||generationPending||!ack||!review||generation||removalReview||removal||dirty||!editor||editor.uncertain||editor.handle!==review.editorHandle||editor.version!==review.versionHandle)return;
+  if(!active||generationPending||!review||(!review.singleConfirmation&&!ack)||generation||removalReview||removal||dirty||!editor||editor.uncertain||editor.handle!==review.editorHandle||editor.version!==review.versionHandle)return;
   const selected=review,original=editor;
   perform(async()=>{
    setReview(undefined);setAck(false);setGeneration('submitting');setNotice('');
@@ -328,7 +331,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
       <Button variant="ghost" disabled={busy} aria-label={`继续编辑 ${name} · ${caption}`} onClick={()=>start(row)}>继续编辑</Button></div>;
     })}</>}
   <AttachmentDocumentGenerationReview open={active&&!!review} format={review?.format||''} name={review?.fileName}
-   ack={ack} busy={busy} retainedDraft onAck={setAck} onClose={closeGenerationReview} onConfirm={confirmGeneration}/>
+   ack={ack} busy={busy} retainedDraft singleConfirmation={review?.singleConfirmation} onAck={setAck} onClose={closeGenerationReview} onConfirm={confirmGeneration}/>
   <SettingsDialog isOpen={active&&!!removalReview} title="删除这份本机草稿？" closeLabel="取消删除" onClose={()=>setRemovalReview(undefined)}>
    {removalReview&&<><p><strong>{removalReview.name.trim()||'未命名草稿'}</strong> · {removalReview.format==='pdf'?'PDF':'Word'}</p>
     <p>删除后不能继续编辑这份草稿。已经生成的文件和另存的副本不受影响。</p>

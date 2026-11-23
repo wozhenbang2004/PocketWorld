@@ -1260,6 +1260,13 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     } : undefined } : undefined;
   };
   const checkpointEntry = checkpoints.available && !checkpoints.active ? checkpointOrigin() : undefined;
+  // The verified-save action already exits this ordinary editor. Header and
+  // Android Back still return to a selected directory before leaving it.
+  const repeatsSavedExit = (finder==='path'||finder==='directory') && showingSavedFile && !!file &&
+    !sourceMember && !hostFile && !originalDirectoryOpening && !checkpointArrival &&
+    !resume && !entry && !buildResume && !pythonResume && !pythonSetupResume &&
+    !canReviewPython && !canCheckSavedBuild && !checkingSavedSource && !browsingFolder &&
+    !locked && !localFind && !choice && !file.draftError && !error;
   return <SettingsDialog isOpen title={checkpointMove || checkpoints.active?'这份私人副本':showingPageFields?'填写网页内容':showingStatic?'预览已保存网页':readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : checkpointArrival?.side==='sibling'?'新私人副本的文件':'这份私人副本的文件'}
     onClose={() => {if(pythonCloseGap.current||checkpointSibling||moving.current){closeCurrent.current();return;}if(checkpoints.back()||closePageFields()||backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
     closeLabel={checkpointMove||pythonToolsCloseGap?'返回原项目':checkpoints.active?'返回原文件或上一级':showingPageFields?'返回源码编辑器':showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
@@ -1540,7 +1547,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
         </>}
       </section></div>}
     </>}
-    {!(finder==='changes'&&adoption)&&<Button variant="secondary" disabled={busy || editing} onClick={() => {
+    {!repeatsSavedExit&&!(finder==='changes'&&adoption)&&<Button variant="secondary" disabled={busy || editing} onClick={() => {
       if(checkpointSibling)closeCurrent.current();else if(!backFromChanges())close();
     }}>
       {finder==='changes'?changesBackLabel:adoption || choice ? '返回文件' : backLabel}

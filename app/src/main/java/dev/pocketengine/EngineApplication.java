@@ -4528,6 +4528,12 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                     originalInput.conversation.equals(attempt.optString("conversationId"))&&
                     selectedProfile==null&&project==null&&ownerSkill==null&&approval==null&&ordinaryDirectTask(attempt)&&
                     dev.pocketengine.store.OwnerWorkTask.isButlerSource(attempt);
+            // Only this newly admitted native text chat may honor the same exact MAIN for implicit summary.
+            // Do not restrict this to the first-turn failure view: ordinary long history must be covered.
+            if(plainOrdinaryRun&&(originalInput.ordinaryFirst||direct!=null)&&originalInput.config==config&&
+                    originalInput.task.equals(id)&&originalInput.run.equals(admittedRun)&&originalInput.epoch==admittedEpoch&&
+                    config.routePlan!=null&&config.routePlan.hasNativeImplicitOrdinarySummary())
+                runner.bindOriginalOrdinarySummary(config.routePlan,control);
             if(plainOrdinaryRun&&initialChatFailure&&admitted!=null&&admitted.length()==1){
                 var plain=dev.pocketengine.features.memory.TaskMemoryHistory.PlainInput.original(originalInput.conversation,
                         firstMessage,firstInput.optLong("ownerMessageRevision",-1));

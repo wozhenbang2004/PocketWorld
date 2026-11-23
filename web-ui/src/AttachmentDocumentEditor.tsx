@@ -104,16 +104,18 @@ export function AttachmentWordPdfFields({draft,editable,edit,text,draftOnly=fals
  return <><TextField label="标题（可选）" value={draft.title||''} onChange={value=>text('title',value,200)} isDisabled={!editable}/><Accordion className="pw-document-secondary"><AccordionItem id="document-format" title="文件格式与排版" description={`${draft.format?.toUpperCase()} · ${draft.fontPoints||12} pt` }><div className="pw-file-form-grid"><SelectField label={draftOnly?'默认生成格式':'文件格式'} value={draft.format} options={[{id:'docx',label:'Word · 可编辑'},{id:'pdf',label:'PDF · 固定页面'}]} onChange={format=>edit({...draft,format})} isDisabled={!editable}/><SelectField label="字号" value={String(draft.fontPoints||12)} options={[10,11,12,14,16].map(n=>({id:String(n),label:`${n} pt`}))} onChange={font=>edit({...draft,fontPoints:Number(font)})} isDisabled={!editable}/></div></AccordionItem></Accordion><TextAreaField className="pw-document-body" label={`正文 · ${String(draft.body||'').length}/16000`} value={draft.body||''} onChange={value=>text('body',value,16000)} isDisabled={!editable}/>{!draftOnly&&<p className="pw-muted">用 # 标记标题、空行分段、制表符分隔简单表格。生成后可直接查看原件。</p>}</>;
 }
 
-export function AttachmentDocumentGenerationReview({open,format,name,ack,busy,retainedDraft=false,onAck,onClose,onConfirm}:{
- open:boolean;format:string;name?:string;ack:boolean;busy:boolean;retainedDraft?:boolean;
+export function AttachmentDocumentGenerationReview({open,format,name,ack,busy,retainedDraft=false,singleConfirmation=false,onAck,onClose,onConfirm}:{
+ open:boolean;format:string;name?:string;ack:boolean;busy:boolean;retainedDraft?:boolean;singleConfirmation?:boolean;
  onAck:(value:boolean)=>void;onClose:()=>void;onConfirm:()=>void;
 }){
+ const singleConfirm=retainedDraft&&singleConfirmation&&(format==='docx'||format==='pdf');
  return <SettingsDialog isOpen={open} title={`生成新的 ${format.toUpperCase()} 文件`} closeLabel={retainedDraft?'继续编辑':undefined} onClose={onClose}>
   <p>{retainedDraft?'将用已保留版本生成一个新原件，原草稿不变。生成后可查看或另存，不会自动分享。':
     '将保存当前可编辑内容和一个新的独立原件。生成完成后可查看排版，再选择导出或分享。'}</p>
-  <p><strong>{name}</strong></p><CheckboxField isSelected={ack} onChange={onAck}>确认生成这个新版本</CheckboxField>
+  <p><strong>{name}</strong></p>{!singleConfirm&&<CheckboxField isSelected={ack} onChange={onAck}>确认生成这个新版本</CheckboxField>}
   <div className="pw-action-row"><Button variant="secondary" onClick={onClose}>继续编辑</Button>
-   <Button variant="primary" disabled={!ack||busy} onClick={onConfirm}>生成新文件</Button></div>
+   <Button variant="primary" disabled={busy||(!singleConfirm&&!ack)} onClick={singleConfirm?event=>{if(event.nativeEvent.isTrusted)onConfirm()}:onConfirm}>
+    {singleConfirm?`确认生成 ${format==='pdf'?'PDF':'Word'}`:'生成新文件'}</Button></div>
  </SettingsDialog>;
 }
 

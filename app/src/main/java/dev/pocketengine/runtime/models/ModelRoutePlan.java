@@ -14,21 +14,35 @@ public final class ModelRoutePlan {
     public final List<Candidate> candidates;
     private record NativeStepDispatch(Candidate candidate,int maxAttempts) { }
     private final NativeStepDispatch nativeStep;
+    // Capture-time SettingsStore evidence only. Never emitted to route JSON.
+    private final boolean nativeImplicitOrdinarySummary;
 
     public ModelRoutePlan(String alias,long revision,String purpose,String audience,List<Candidate> candidates,int attempts,int switches){
         if(candidates.isEmpty()||candidates.size()>8||attempts<1||attempts>3||switches<0||switches>1||!ModelGroup.AUDIENCES.contains(audience))throw new IllegalArgumentException("invalid_native_route_plan");
-        nativeStep=null;snapshotId=java.util.UUID.randomUUID().toString();requestedAlias=alias;groupRevision=revision;this.purpose=purpose;this.audience=audience;this.candidates=List.copyOf(candidates);maxAttempts=attempts;maxRouteSwitches=switches;
+        nativeStep=null;nativeImplicitOrdinarySummary=false;snapshotId=java.util.UUID.randomUUID().toString();requestedAlias=alias;groupRevision=revision;this.purpose=purpose;this.audience=audience;this.candidates=List.copyOf(candidates);maxAttempts=attempts;maxRouteSwitches=switches;
     }
-    private ModelRoutePlan(ModelRoutePlan original,Candidate candidate,int attempts){
+    private ModelRoutePlan(ModelRoutePlan original,NativeStepDispatch step,boolean implicitSummary){
         snapshotId=original.snapshotId;requestedAlias=original.requestedAlias;purpose=original.purpose;audience=original.audience;
         groupRevision=original.groupRevision;maxAttempts=original.maxAttempts;maxRouteSwitches=original.maxRouteSwitches;candidates=original.candidates;
-        nativeStep=new NativeStepDispatch(candidate,attempts);
+        nativeStep=step;nativeImplicitOrdinarySummary=implicitSummary;
     }
+    /** The native settings snapshot found no explicit SUMMARY for its exact ordinary API MAIN. */
+    public ModelRoutePlan withNativeImplicitOrdinarySummary(ModelTargetRef originalMain){
+        if(originalMain==null||originalMain.kind()!=ModelTargetRef.Kind.EXACT||groupRevision!=0||!"MAIN".equals(purpose)||
+                !"APP_OWNER".equals(audience)||nativeStep!=null||candidates.size()!=1||maxAttempts!=1||maxRouteSwitches!=0)
+            throw new IllegalStateException("ordinary_summary_requires_exact_main");
+        ModelConfig model=primary();
+        if(model.usesAccount()||model.capabilityBinding==null||!originalMain.connectionId().equals(model.capabilityBinding.connectionId())||
+                !originalMain.modelId().equals(model.model))
+            throw new IllegalStateException("ordinary_summary_main_identity_changed");
+        return new ModelRoutePlan(this,null,true);
+    }
+    public boolean hasNativeImplicitOrdinarySummary(){return nativeImplicitOrdinarySummary;}
     /** Package-native transient preference only. The original complete owner snapshot is unchanged. */
     ModelRoutePlan withNativeStepDispatch(Candidate candidate,int attempts){
         if(attempts<1||attempts>maxAttempts||candidate==null||candidate.config()==null||!candidate.exclusion().isEmpty()
                 ||candidates.stream().noneMatch(original->original==candidate))throw new SecurityException("native_step_not_in_original_plan");
-        return new ModelRoutePlan(this,candidate,attempts);
+        return new ModelRoutePlan(this,new NativeStepDispatch(candidate,attempts),false);
     }
     public boolean dispatches(Candidate candidate){return nativeStep==null||nativeStep.candidate==candidate;}
     public int dispatchMaxAttempts(){return nativeStep==null?maxAttempts:nativeStep.maxAttempts;}

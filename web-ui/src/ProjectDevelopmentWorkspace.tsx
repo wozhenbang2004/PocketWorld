@@ -36,12 +36,15 @@ export type ProjectBuildEditorResume = CheckoutBuildEditorResume & { taskId:stri
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume; pythonEditor?:OriginalPythonRun };
 const builtinViteStarter='builtin_vite_starter';
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
-type ImportedFilesReturn = { current:()=>boolean; closed:()=>void; unconfirmed:()=>void };
-export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; exactStarterSource?:true; exactSavedPageStarter?:true; openDirectory?:true; filesReturn?:ImportedFilesReturn};
+export type ProjectFilesLandingReturn = { current:()=>boolean; closed:()=>void; unconfirmed:()=>void };
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; exactStarterSource?:true; exactSavedPageStarter?:true; openDirectory?:true; filesReturn?:ProjectFilesLandingReturn};
 type PendingImportedFilesClose = { viewHandle:string; draftRevision:number; issued:boolean };
-type ImportedFilesClose = { visit:ImportedFilesReturn; opened?:string; pending?:PendingImportedFilesClose };
+type ImportedFilesClose = { visit:ProjectFilesLandingReturn; opened?:string; pending?:PendingImportedFilesClose };
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
-export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
+export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean} & (
+  { originalCopy?:ProjectPreparedLocalCopy; filesReturn?:never } |
+  { originalCopy:ProjectPreparedLocalCopy; filesReturn:ProjectFilesLandingReturn }
+);
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
 export type ProjectTerminalSavedFileReturn = {position:CheckoutSavedPosition; take:()=>boolean};
 export type CheckoutPythonSetupReturn = {position:CheckoutSavedPosition; take:()=>boolean};
@@ -727,7 +730,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
       if((!original||original.projectId===projectId&&original.checkoutId===incoming.checkoutId&&original.requestId===incoming.copyRequestId)&&
         checkouts.length===1&&copy?.projectId===projectId&&copy.checkoutId===incoming.checkoutId&&
         copy.draftWorkingCopy===false&&copy.taskPackageSource===false&&copy.hostSource===false){
-        filesOpened=true;setImportEditorNotice('');setFileWindow({checkoutId:incoming.checkoutId,...(original?{reopenedFiles:true as const}:{})});
+        const filesReturn=original?openLocalFiles.filesReturn:undefined;
+        filesOpened=true;setImportEditorNotice('');
+        setFileWindow({checkoutId:incoming.checkoutId,...(original?{reopenedFiles:true as const}:{}),
+          ...(filesReturn?{importedFilesClose:{visit:filesReturn}}:{})});
       }
     }
     if(!filesOpened&&openLocalFiles?.originalCopy&&openLocalFiles.current())

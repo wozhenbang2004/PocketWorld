@@ -112,7 +112,7 @@ import type {ReturnToAdoptedSource} from './ProjectFormalFileDelivery';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalOrdinarySourceDirectory,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ModelSettingsWorkDraft,type ModelSettingsWorkDraftRead,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalOrdinarySourceDirectory,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectFilesLandingReturn,type ModelSettingsWorkDraft,type ModelSettingsWorkDraftRead,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import {ProjectKeptStaticPages,supportsKeptStaticPages,type KeptStaticShelfNavigation} from './ProjectKeptStaticPages';
@@ -222,9 +222,12 @@ type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{a
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
  savedTeamDefaultModel?:WorkIdentity&{state:'unconfigured';modelSelectionRevision:number}};
 type TaskReviewWindow={taskId:string;request:number;documentEpoch:number;resumeRevision:number};
-type WorkApprovalWindow={window:TaskReviewWindow;navigation:number;nativeTaskRequest:number;work:WorkIdentity;conversation:string};
-type WorkApprovalVisit=WorkApprovalWindow&{reviewHandle:string;approval:{id:string;tool:string;argumentsHash:string;expiresAt:number};
- approved:boolean;phase:'submitting'|'queued'|'recorded'};
+type WorkDecisionWindow={window:TaskReviewWindow;navigation:number;nativeTaskRequest:number;work:WorkIdentity;conversation:string};
+type WorkResultBinding={digest:string;revision:number};
+type WorkDecisionBase=WorkDecisionWindow&{reviewHandle:string;phase:'submitting'|'queued'|'recorded'};
+type WorkApprovalVisit=WorkDecisionBase&{kind:'approval';approval:{id:string;tool:string;argumentsHash:string;expiresAt:number};approved:boolean};
+type WorkResultVisit=WorkDecisionBase&{kind:'result';result:WorkResultBinding;completed:boolean};
+type WorkDecisionVisit=WorkApprovalVisit|WorkResultVisit;
 type DirectoryResultRead={window:TaskReviewWindow;run:{runId:string;epoch:number};query:string;directoryScope:string;navigation:number;projectionRevision?:number;retired?:true};
 type DirectoryQuestionArrival=WorkIdentity&{reviewWindow?:TaskReviewWindow};
 type TeamReportVisit={parent:TeamReportParent;choice:TeamReportChoice;window:TaskReviewWindow;navigation:number;trigger:HTMLButtonElement|null;fromTeam?:{summarySha256:string;conversationId:string}};
@@ -469,6 +472,14 @@ function ordinaryWorkApprovalTask(task:Task|undefined,conversation:string,detail
   (raw.relatedTasks==null||Array.isArray(raw.relatedTasks)&&raw.relatedTasks.length===0)&&
   ['ownerWorkPreparation','ownerResultHandling','ownerWorkTakeover','deviceSourceScope','workProfileRef','workProfileIntent',
    'teamWriteScope','sourceLearningJob','sshSelection','extensionSelection'].every(key=>raw[key]==null)?work:null;
+}
+function savedOrdinaryGoalRevision(task:Task|undefined,original:WorkResultBinding,completed:boolean):number|undefined{
+ if(!task?.raw)return;
+ const raw=task.raw,receipt=obj(raw.resultConfirmation),revision=raw.resultRevision;
+ return task.status===(completed?'completed':'awaiting_user')&&raw.status===task.status&&
+  raw.cancelRequested===false&&raw.hasUnresolvedOperations===false&&receipt.completed===completed&&
+  receipt.resultReviewDigest===original.digest&&receipt.teamReportEvidence==null&&
+  Number.isSafeInteger(revision)&&revision>original.revision&&receipt.confirmedResultRevision===revision?revision:undefined;
 }
 const ordinaryApprovalTool=(tool:unknown):tool is string=>typeof tool==='string'&&!!tool&&
  !/^(?:execution_plan_review$|teams?_|project_|work_profile_)/.test(tool);
@@ -1210,8 +1221,8 @@ export default function App(){
  useEffect(()=>{if(route!=='projects'||state.projectId!==projectDraftReturn?.projectId)setProjectDraftReturn(null);},[route,state.projectId,projectDraftReturn?.projectId]);
  const [projectWorkPresentations,setProjectWorkPresentations]=useState<Record<string,ProjectWorkPresentation>>({});
  const [projectImportedEditor,setProjectImportedEditor]=useState<ProjectImportedEditor|null>(null);
- const importedFilesReturnNow=useRef<ProjectImportedEditor['filesReturn']>(undefined);
- const importedFilesBackPlace=useRef<(projectId:string,presentation:ProjectWorkPresentation)=>boolean>(()=>false);
+ const filesLandingReturnNow=useRef<ProjectFilesLandingReturn|undefined>(undefined);
+ const filesLandingBackPlace=useRef<(projectId:string,presentation:ProjectWorkPresentation,localIntent?:ProjectLocalFilesIntent)=>boolean>(()=>false);
  const phoneImportFilesQuiet=useRef<(project:string)=>boolean>(()=>false);
  const handledImportedEditor=useCallback((target:ProjectImportedEditor)=>setProjectImportedEditor(value=>value===target?null:value),[]);
  const [projectLocalFilesIntent,setProjectLocalFilesIntent]=useState<ProjectLocalFilesIntent|null>(null);
@@ -1573,7 +1584,7 @@ export default function App(){
  const [projectQuestionLink,setProjectQuestionLink]=useState<ProjectQuestionLink|null>(null);
  const [localError,setLocalError]=useState(''),[localStatus,setLocalStatus]=useState(''),[review,setReview]=useState<Review|null>(null),[reviewPending,setReviewPending]=useState(false),[reviewSubmitted,setReviewSubmitted]=useState(false),[reviewNote,setReviewNote]=useState(''),[reviewFeedbackOpen,setReviewFeedbackOpen]=useState(false),[scopeTools,setScopeTools]=useState(''),[scopeModels,setScopeModels]=useState('');
  const [reviewReceipt,setReviewReceipt]=useState('');
- const [workApprovalVisit,setWorkApprovalVisit]=useState<WorkApprovalVisit|null>(null);
+ const [workDecisionVisit,setWorkDecisionVisit]=useState<WorkDecisionVisit|null>(null);
  const [draftAcceptance,setDraftAcceptance]=useState<DraftAcceptanceClick|null>(null);
  const [projectFeedback,setProjectFeedback]=useState<Record<string,string>>({}),projectFeedbackRef=useRef<Record<string,string>>({});
  const putProjectFeedback=(key:string,text:string)=>{if(!key)return;const next={...projectFeedbackRef.current,[key]:text};projectFeedbackRef.current=next;setProjectFeedback(next)};
@@ -2175,12 +2186,11 @@ export default function App(){
     // Accepted is only admission. Use the already-loaded exact native
     // confirmation while its original detail window still exists.
     const live=bridge.getState(),rows=asArray<Task>(live.state.tasks).filter(row=>row.id===origin.taskId),task=rows.length===1?rows[0]:undefined;
-    const raw=obj(task?.raw),receipt=obj(raw.resultConfirmation),revision=raw.resultRevision;
-    const work=ordinaryChatWorkRow(task,String(raw.conversationId||''),true);
-    if(obj(live.view).section===null&&task?.status==='completed'&&raw.status===task.status&&work&&work.runId===pending.runId&&work.epoch===pending.epoch&&
-       raw.cancelRequested===false&&raw.hasUnresolvedOperations===false&&receipt.completed===true&&receipt.resultReviewDigest===pending.digest&&
-       receipt.teamReportEvidence==null&&Number.isSafeInteger(revision)&&revision>pending.revision&&receipt.confirmedResultRevision===revision)
-     origin.confirmedResultRevision=revision;
+    const work=ordinaryChatWorkRow(task,String(task?.raw?.conversationId||''),true);
+    if(obj(live.view).section===null&&work&&work.runId===pending.runId&&work.epoch===pending.epoch){
+     const revision=savedOrdinaryGoalRevision(task,pending,true);
+     if(revision!==undefined)origin.confirmedResultRevision=revision;
+    }
    }
   }
   else homeWorkReturn.current=null;
@@ -7510,7 +7520,7 @@ export default function App(){
    saveOnly={cold&&review.actions?.some(row=>row.action==='tasks.saveColdQuestionChoice')===true}
    onContinueSaved={cold&&review.actions?.some(row=>row.action==='tasks.continueColdQuestion')?confirmColdQuestionContinuation:undefined}
    submit={submit} onSaved={clearSavedQuestionAnswer}/>;
- const workApprovalWindowCurrent=(visit:WorkApprovalWindow,live:ReturnType<typeof bridge.getState>)=>{
+ const workDecisionWindowCurrent=(visit:WorkDecisionWindow,live:ReturnType<typeof bridge.getState>)=>{
   const view=obj(live?.view),owner=obj(live?.state);
   return taskOpen&&!taskOpening&&taskLayer==='overview'&&taskId===visit.work.taskId&&['butler','chat','tasks'].includes(route)&&
    !teamReportModeRef.current&&!workSupplementTarget&&reviewWindow.current===visit.window&&currentReviewWindow(visit.window)&&
@@ -7518,8 +7528,8 @@ export default function App(){
    view.resumeRevision===visit.window.resumeRevision&&owner.requestedTaskRevision===visit.nativeTaskRequest&&
    !owner.conversationReader&&!owner.filePath&&!owner.queuedInputsPage&&!owner.attachmentWorkspace?.open;
  };
- const workApprovalTask=(visit:WorkApprovalWindow,live:ReturnType<typeof bridge.getState>,detail=false)=>{
-  if(!workApprovalWindowCurrent(visit,live))return;
+ const workDecisionTask=(visit:WorkDecisionWindow,live:ReturnType<typeof bridge.getState>,detail=false)=>{
+  if(!workDecisionWindowCurrent(visit,live))return;
   const rows=asArray<Task>(live.state.tasks).filter(row=>row.id===visit.work.taskId),task=rows.length===1?rows[0]:undefined;
   const original=ordinaryWorkApprovalTask(task,visit.conversation,detail);
   return original&&workIdentityKey(original)===workIdentityKey(visit.work)?task:undefined;
@@ -7534,8 +7544,8 @@ export default function App(){
   const shown=asArray<Json>(value.approvals).filter(row=>(row?.approvalId||row?.id)===id);
   if(shown.length!==1||shown[0].webReview?.kind!=='operation'||shown[0].state!=='pending'||
      args.approved&&shown[0].webReview.canApprove!==true)return null;
-  const visit:WorkApprovalWindow={window,navigation:navigationWindow.current,nativeTaskRequest,work,conversation};
-  const visible=workApprovalTask(visit,snapshot,true),current=workApprovalTask(visit,native,true);
+  const visit:WorkDecisionWindow={window,navigation:navigationWindow.current,nativeTaskRequest,work,conversation};
+  const visible=workDecisionTask(visit,snapshot,true),current=workDecisionTask(visit,native,true);
   const row=exactWorkApprovalRow(current,work.runId,id),painted=exactWorkApprovalRow(visible,work.runId,id);
   const bounded=obj(value.capabilityApprovalRead);
   const exactItem=bounded.format==='pocketworld.capability-approval-read.v1'&&bounded.approvalComplete===true&&bounded.approvalId===id?shown[0]:undefined;
@@ -7544,31 +7554,53 @@ export default function App(){
      taskBinding(current)!==taskBinding(value.task)||taskBinding(visible)!==taskBinding(value.task)||
      [reviewed,painted].some(item=>item.runId!==row.runId||item.tool!==row.tool||item.expiresAt!==row.expiresAt||
       item.argumentsHash!==row.argumentsHash))return null;
-  return {...visit,reviewHandle:value.reviewHandle,approval:{id,tool:row.tool,argumentsHash:row.argumentsHash,expiresAt:row.expiresAt},
+  return {...visit,kind:'approval',reviewHandle:value.reviewHandle,approval:{id,tool:row.tool,argumentsHash:row.argumentsHash,expiresAt:row.expiresAt},
    approved:args.approved,phase:'submitting'};
  };
+ const captureWorkResult=(value:Review,window:TaskReviewWindow,completed:boolean):WorkResultVisit|null=>{
+  const reviewed=value.task,raw=reviewed?.raw,conversation=raw?.conversationId;
+  const digest=raw?.resultReviewDigest,revision=raw?.resultRevision;
+  if(typeof conversation!=='string'||!conversation||typeof digest!=='string'||!/^[a-f0-9]{64}$/.test(digest)||
+     !Number.isSafeInteger(revision)||revision<1||reviewPending||questionPending||value.ownerQuestion||value.capabilityApprovalRead||
+     !Array.isArray(value.approvals)||value.approvals.length||!Array.isArray(value.unresolvedOperations)||value.unresolvedOperations.length||
+     !value.actions?.some(row=>row.action==='tasks.confirm'))return null;
+  const native=bridge.getState(),nativeTaskRequest=native.state.requestedTaskRevision,work=ordinaryWorkApprovalTask(reviewed,conversation,true);
+  if(!work||!Number.isSafeInteger(nativeTaskRequest))return null;
+  const visit:WorkResultVisit={window,work,conversation,navigation:navigationWindow.current,nativeTaskRequest,
+   kind:'result',result:{digest,revision},completed,reviewHandle:value.reviewHandle,phase:'submitting'};
+  const matches=(task:Task|undefined)=>task?.status==='needs_confirmation'&&task.raw?.cancelRequested===false&&
+   task.raw.hasUnresolvedOperations===false&&task.raw.resultReviewDigest===digest&&task.raw.resultRevision===revision&&
+   taskBinding(task)===taskBinding(reviewed);
+  return matches(reviewed)&&matches(workDecisionTask(visit,snapshot,true))&&matches(workDecisionTask(visit,native,true))?visit:null;
+ };
+ const recordedWorkResult=(visit:WorkResultVisit,native:ReturnType<typeof bridge.getState>)=>{
+  const revision=savedOrdinaryGoalRevision(workDecisionTask(visit,snapshot,true),visit.result,visit.completed);
+  return revision!==undefined&&savedOrdinaryGoalRevision(workDecisionTask(visit,native,true),visit.result,visit.completed)===revision;
+ };
  useEffect(()=>{
-  const retire=()=>setWorkApprovalVisit(null),hidden=()=>{if(document.hidden)retire()};
+  const retire=()=>setWorkDecisionVisit(null),hidden=()=>{if(document.hidden)retire()};
   const stop=bridge.subscribeDocumentEpoch(retire);
   document.addEventListener('visibilitychange',hidden);window.addEventListener('pagehide',retire);
   return()=>{stop();document.removeEventListener('visibilitychange',hidden);window.removeEventListener('pagehide',retire)};
  },[]);
  useLayoutEffect(()=>{
-  const visit=workApprovalVisit;
+  const visit=workDecisionVisit;
   if(!visit)return;
   const native=bridge.getState();
-  if(!workApprovalWindowCurrent(visit,native)){setWorkApprovalVisit(null);return;}
+  if(!workDecisionWindowCurrent(visit,native)){setWorkDecisionVisit(null);return;}
   if(visit.phase!=='queued'||!reviewSubmitted||review?.reviewHandle!==visit.reviewHandle)return;
-  const recorded=(live:ReturnType<typeof bridge.getState>)=>{
-   const {id,tool,argumentsHash,expiresAt}=visit.approval;
-   const row=exactWorkApprovalRow(workApprovalTask(visit,live,true),visit.work.runId,id);
-   return row&&row.tool===tool&&row.argumentsHash===argumentsHash&&row.expiresAt===expiresAt&&
-    row.policyDecision==null&&row.source==null&&(visit.approved?['approved','consumed'].includes(row.state):row.state==='denied');
-  };
-  // The queue ACK is not the decision. Retire only this spent handle once
-  // the ordinary native refresh shows its exact saved row in this Work visit.
-  if(!recorded(snapshot)||!recorded(native))return;
-  setWorkApprovalVisit({...visit,phase:'recorded'});setReview(null);setReviewSubmitted(false);
+  if(visit.kind==='approval'){
+   const recorded=(live:ReturnType<typeof bridge.getState>)=>{
+    const {id,tool,argumentsHash,expiresAt}=visit.approval;
+    const row=exactWorkApprovalRow(workDecisionTask(visit,live,true),visit.work.runId,id);
+    return row&&row.tool===tool&&row.argumentsHash===argumentsHash&&row.expiresAt===expiresAt&&
+     row.policyDecision==null&&row.source==null&&(visit.approved?['approved','consumed'].includes(row.state):row.state==='denied');
+   };
+   if(!recorded(snapshot)||!recorded(native))return;
+  }else if(!recordedWorkResult(visit,native))return;
+  // Admission is not a verdict. Only the native record retires this spent
+  // review; any next read or action remains an explicit owner choice.
+  setWorkDecisionVisit({...visit,phase:'recorded'});setReview(null);setReviewSubmitted(false);
  });
  const reviewedAction=(action:string,args:Json={})=>{
   if(!taskId||!review||reviewStale||reviewSubmitted||!can(action))return;
@@ -7608,8 +7640,9 @@ export default function App(){
   const request=reviewRequest.current,originalTask=taskId;
   const planDecision=action==='tasks.plan.enter'||action==='tasks.approve'&&asArray<Json>(review.approvals).some(row=>(row.approvalId||row.id)===args.approvalId&&row.webReview?.kind==='execution_plan');
   const at=reviewWindow.current;
-  const approvalClick=action==='tasks.approve'&&!planDecision&&at?captureWorkApproval(review,at,args):null;
-  if(approvalClick)setWorkApprovalVisit(approvalClick);
+  const decisionClick=at&&action==='tasks.approve'&&!planDecision?captureWorkApproval(review,at,args):
+   at&&action==='tasks.confirm'&&typeof args.completed==='boolean'?captureWorkResult(review,at,args.completed):null;
+  if(decisionClick)setWorkDecisionVisit(decisionClick);
   const draftClick=action==='tasks.confirm'&&typeof args.completed==='boolean'&&taskLayer==='overview'&&at&&currentReviewWindow(at)?draftAcceptanceClick(review,at,args.completed):null;
   const homeOrigin=homeWorkReturn.current, homePending=homeOrigin?.pendingReview;
   const homeClick=action==='tasks.confirm'&&args.completed===true&&route==='butler'&&taskLayer==='overview'&&
@@ -7621,8 +7654,8 @@ export default function App(){
   void (planDecision?bridge.command(action,payload):act(action,payload,taskId)).then(value=>{
    if(reviewRequest.current!==request)return;
    // This ACK is only admission. The exact persisted confirmation is checked in the task view.
-   if(approvalClick&&obj(value).accepted===true)
-    setWorkApprovalVisit(current=>current===approvalClick?{...approvalClick,phase:'queued'}:current);
+   if(decisionClick&&obj(value).accepted===true)
+    setWorkDecisionVisit(current=>current===decisionClick?{...decisionClick,phase:'queued'}:current);
    if(draftClick&&obj(value).accepted===true&&currentReviewWindow(draftClick.window))setDraftAcceptance(draftClick);
    if(homeClick&&homeOrigin&&homeWorkReturn.current===homeOrigin&&obj(value).accepted===true&&currentReviewWindow(homeClick))
     homeOrigin.positiveClick=homeClick;
@@ -7644,7 +7677,7 @@ export default function App(){
     }
    }
   }).catch(error=>{if(reviewRequest.current!==request)return;
-   if(approvalClick)setWorkApprovalVisit(current=>current===approvalClick?null:current);
+   if(decisionClick)setWorkDecisionVisit(current=>current===decisionClick?null:current);
    setReviewSubmitted(false);setReview(null);if(planDecision){const message=error instanceof Error?error.message:'未确认原计划决定，请核对原任务；没有重复提交。';setReviewReceipt(message);setTaskErrors(previous=>({...previous,[originalTask]:message}))}});
  };
  const projectDirectory=useWorkDirectory({tasks,projectId:String(state.projectId||''),query:projectWorkView.query,filter:projectWorkView.filter,enabled:ready&&route==='projects'&&!!state.projectId&&!state.filePath&&projectSection==='work'&&!choosingSavedStaticFile&&!projectPreview.expanded&&can('work.tasks.list'),identity:`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`,scrollRef:projectScroll});
@@ -9202,10 +9235,19 @@ export default function App(){
    </BlurCrossfade>
   </section>;
   const outcomeRecord=review&&!reviewStale?review.task:task;
+  const ask=obj(task.raw?.evidence?.ownerQuestion);
+  const askWork=decisionFirst&&originalToolsWindow&&freshOwnerQuestionReview&&!protectedDisabled&&!questionPending&&
+   !inlineDraftDecision&&!fixedDraft&&task.status==='awaiting_user'&&task.raw?.cancelRequested===false&&
+   ordinaryWorkApprovalTask(task,String(task.raw?.conversationId||''),true);
+  const answerControl=ownerQuestion?.replyAvailability==='current_wait'&&can('tasks.answerQuestion')&&actionNames.includes('tasks.answerQuestion')||
+   canUseColdWorkQuestion&&ownerQuestion?.replyAvailability==='cold_save_only'&&can('tasks.saveColdQuestionChoice')&&actionNames.includes('tasks.saveColdQuestionChoice');
+  const shownWorkQuestion=askWork&&answerControl&&ownerQuestion?.kind==='capabilities'&&ownerQuestion.answered===false&&
+   ask.format==='pocketworld.owner-question.v1'&&ask.taskId===askWork.taskId&&ask.runId===askWork.runId&&ask.coordinatorEpoch===askWork.epoch&&
+   ask.replyKind==='answer'&&ask.approval===false&&ask.takeover===false&&ask.question===ownerQuestion.question?ownerQuestion.question:undefined;
   const visiblePhoneOutcome=overviewActive?originalBackgroundPhoneOutcome(task):'';
   const phoneOutcome=visiblePhoneOutcome&&originalBackgroundPhoneOutcome(outcomeRecord)===visiblePhoneOutcome?visiblePhoneOutcome:'';
   const originalEvidence=<TaskOutcome key="task-evidence" registerProjectDraftBeforeLeave={registerProjectDraftBeforeLeave} projectDraftSourceRetired={task.raw?.contextAvailable===false||task.raw?.contextWithdrawn===true||task.raw?.sourceCurrentReadRequired===true||task.raw?.taskProjection==='source_unavailable'} task={outcomeRecord} messages={messages} resultFiles={taskFiles}
-   active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'}
+   active={overviewActive} focusedOriginalDraft={focusedOriginalDraft?.taskId===task.id?focusedOriginalDraft:undefined} showEmptyResult={inspectResult&&task.status==='completed'} deferExecutionDetails={!inspectResult&&task.status!=='failed'} shownWorkQuestion={shownWorkQuestion}
    draftGoalDecision={draftAcceptanceSaved?settledOriginalDraft:durableDraftDecision} lateDependencyObserved={lateDependencyObserved} reviewedDependencyHoldKey={legacyBuildHold?heldBuildKey:undefined}
    draftReview={inlineDraftDecision?{original:inlineDraftDecision,render:readback=><section className="pw-form-flow" aria-label="验收本轮原改稿">
     <div className="pw-section-heading"><h4>验收本轮原改稿</h4>{refreshControl}</div>{resultFeedback}
@@ -9251,15 +9293,19 @@ export default function App(){
    }
    loadTaskReview(task.id,pendingNodeCommand.approvalId);
   };
-  const approvalNative=workApprovalVisit?.phase==='recorded'?bridge.getState():null;
-  const savedApproval=approvalNative&&workApprovalVisit&&workApprovalVisit.work.taskId===task.id&&workApprovalTask(workApprovalVisit,snapshot)&&
-   workApprovalTask(workApprovalVisit,approvalNative)?workApprovalVisit:null;
-  const nextCandidate=savedApproval&&can('tasks.review')?nextWorkApproval(workApprovalTask(savedApproval,snapshot,true),savedApproval):undefined;
-  const nextApproval=savedApproval&&approvalNative&&nextCandidate?
-   stillPendingWorkApproval(workApprovalTask(savedApproval,approvalNative,true),savedApproval,nextCandidate):undefined;
+  const decisionNative=workDecisionVisit?.phase==='recorded'?bridge.getState():null;
+  const recordedDecision=workDecisionVisit?.work.taskId===task.id&&decisionNative?workDecisionVisit:null;
+  const savedApproval=recordedDecision?.kind==='approval'&&decisionNative&&workDecisionTask(recordedDecision,snapshot)&&
+   workDecisionTask(recordedDecision,decisionNative)?recordedDecision:null;
+  // An affirmative verdict already belongs to the result body. A negative
+  // verdict leaves work open; say what was saved instead of calling it done.
+  const unmetGoalRecorded=recordedDecision?.kind==='result'&&!recordedDecision.completed&&decisionNative&&recordedWorkResult(recordedDecision,decisionNative);
+  const nextCandidate=savedApproval&&can('tasks.review')?nextWorkApproval(workDecisionTask(savedApproval,snapshot,true),savedApproval):undefined;
+  const nextApproval=savedApproval&&decisionNative&&nextCandidate?
+   stillPendingWorkApproval(workDecisionTask(savedApproval,decisionNative,true),savedApproval,nextCandidate):undefined;
   const readNextApproval=()=>{
    if(!savedApproval||!nextApproval||readingReview||questionPending||!can('tasks.review'))return;
-   const exact=stillPendingWorkApproval(workApprovalTask(savedApproval,bridge.getState(),true),savedApproval,nextApproval);
+   const exact=stillPendingWorkApproval(workDecisionTask(savedApproval,bridge.getState(),true),savedApproval,nextApproval);
    if(!exact){setTaskErrors(previous=>({...previous,[task.id]:'下一项授权已变化，请重新核对原工作。'}));return;}
    loadTaskReview(task.id,exact.id);
   };
@@ -9275,9 +9321,9 @@ export default function App(){
     {savedApproval?<div className="pw-form-flow">
       <p className="pw-muted" role="status">{savedApproval.approved?'这次批准已记录，不代表操作已经执行。':'这次拒绝已记录。'}</p>
       {nextApproval&&<Button variant="secondary" disabled={readingReview||questionPending} onClick={readNextApproval}>核对下一项授权</Button>}
-     </div>:draftAcceptanceSaved?<p className="pw-muted" role="status" data-fixed-draft-decision-fallback={settledOriginalDraft?true:undefined}>{draftAcceptance?.completed?'验收已记录，原稿保留。':'已记录目标尚未达到，原稿保留。'}</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
+     </div>:unmetGoalRecorded?<p className="pw-muted" role="status">已记录目标尚未达到。原工作仍保留。</p>:draftAcceptanceSaved?<p className="pw-muted" role="status" data-fixed-draft-decision-fallback={settledOriginalDraft?true:undefined}>{draftAcceptance?.completed?'验收已记录，原稿保留。':'已记录目标尚未达到，原稿保留。'}</p>:!continuation&&!teamDeclineSettlesReview&&(reviewSubmitted||reviewReceipt)&&!review?.ownerQuestion&&(reviewReceipt?<p className="pw-muted" role="status">{reviewReceipt}</p>:state.taskActionErrors?.[task.id]?<p className="pw-error" role="alert">本次提交未确认。请先重新核对原任务，再决定是否操作。</p>:<p className="pw-muted" role="status">已提交这次决定，等待任务回执。</p>)}
   </>;
-  const decision=(savedApproval||heldProfileApproval||declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||needsWorkReview(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
+  const decision=(savedApproval||unmetGoalRecorded||heldProfileApproval||declinedTeam||originalIntegrator||review||reviewPending||continuation||(canReadProject||needsWorkReview(task))&&can('tasks.review'))&&<div key="task-decision" className="pw-task-decision">
       {taskLayer==='overview'&&reviewStatus}
       {teamReportChoice&&<Button variant="secondary" trailingIcon={IconChevronRight} data-team-evidence-entry={teamReportChoice.teamRunId}
        onClick={event=>selectTeamReport(task,teamReportChoice,event.currentTarget)}>用本轮团队汇总核对目标</Button>}
@@ -11471,7 +11517,7 @@ export default function App(){
   setProjectWorkPresentations(previous=>({...previous,[original.projectId]:{open:false,mode:'default'}}));
  };
  const showProjectSection=(section:'work'|'files'|'preview')=>{
-  importedFilesReturnNow.current=undefined;
+  filesLandingReturnNow.current=undefined;
   if(section!=='work'&&leaveProjectModelReturnForAction(()=>showProjectSection(section)))return;
   if(section!=='work'){projectQuestionRequest.current++;dismissModelWorkArrival();}
   const commit=()=>{
@@ -11619,9 +11665,16 @@ export default function App(){
   retainedVisit.key===openedRetainedDraftCopyKey(snapshot));
  const importedWorkTarget=importedCopy&&projectSection==='work'&&!importedPresentation?.open&&
   !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
- // The source entry does not disappear on a formal-file search, list refresh, or display menu.
- const exactFilesLanding=ready&&currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&
-  canOpenImported&&can('projects.development.files.close')?originalOrdinarySourceDirectory(currentProject.id):null;
+ type ExistingFilesLanding={kind:'imported';original:ProjectImportedEditor}|{kind:'prepared';original:ProjectPreparedLocalCopy};
+ // The formal list is presentation, not proof of a ready working copy. Only
+ // add the prepared entry beside actual formal rows of the selected project.
+ const filesLandingProject=ready&&currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&
+  canOpenImported&&can('projects.development.files.close')?currentProject.id:null;
+ const originalFilesLanding=filesLandingProject?originalOrdinarySourceDirectory(filesLandingProject):null;
+ const preparedFilesLanding=filesLandingProject&&!originalFilesLanding&&projectListInput.projectId===filesLandingProject&&
+  projectListInput._failed!==true&&files.length>0?originalPreparedLocalCopy(filesLandingProject):null;
+ const exactFilesLanding:ExistingFilesLanding|null=originalFilesLanding?{kind:'imported',original:originalFilesLanding}:
+  preparedFilesLanding?{kind:'prepared',original:preparedFilesLanding}:null;
  const importedFileTarget=!exactFilesLanding&&importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
   !projectListBusy&&!projectListError&&!files.length&&!fileQuery?importedCopy:null;
  const projectStartDraft=currentProject?projectWorkDrafts[currentProject.id]:undefined;
@@ -11674,23 +11727,32 @@ export default function App(){
   setProjectWorkPresentations(previous=>({...previous,[projectId]:{open:true,mode:'default'}}));
  };
  const fixedTaskCopy=importedCopy?.sourceKind==='task_source_package';
+ const showProjectFilesWork=(projectId:string,presentation:ProjectWorkPresentation)=>{
+  setProjectSections(previous=>({...previous,[projectId]:'work'}));
+  setProjectWorkPresentations(previous=>({...previous,[projectId]:presentation}));
+ };
  const showImportedEditor=(target:ProjectImportedEditor,presentation:ProjectWorkPresentation={open:true,mode:'default'})=>{
   setProjectImportedEditor(target);
-  setProjectSections(previous=>({...previous,[target.projectId]:'work'}));
-  setProjectWorkPresentations(previous=>({...previous,[target.projectId]:presentation}));
+  showProjectFilesWork(target.projectId,presentation);
  };
- const importedFilesQuiet=(projectId:string)=>route==='projects'&&state.projectId===projectId&&
+ const filesLandingQuiet=(projectId:string,localIntent?:ProjectLocalFilesIntent)=>route==='projects'&&state.projectId===projectId&&
   !previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&!projectDraftReturn&&!projectBuildReturn&&
-  !projectLocalFilesIntent&&!pythonSetupReturn&&!dependencyBuildReturn&&!viteToolsReturn&&!viteResultLookup&&!modelWorkArrival&&
+  (!projectLocalFilesIntent||projectLocalFilesIntent===localIntent)&&
+  !pythonSetupReturn&&!dependencyBuildReturn&&!viteToolsReturn&&!viteResultLookup&&!modelWorkArrival&&
   !terminalSavedFileArrival.current&&!projectWorkDrafts[projectId]?.operation&&!projectWorkDrafts[projectId]?.expanded;
- importedFilesBackPlace.current=(projectId,presentation)=>projectSection==='work'&&importedFilesQuiet(projectId)&&
+ filesLandingBackPlace.current=(projectId,presentation,localIntent)=>projectSection==='work'&&filesLandingQuiet(projectId,localIntent)&&
   projectWorkPresentations[projectId]===presentation;
- const canEnterFilesLanding=!!exactFilesLanding&&!projectImportedEditor&&importedFilesQuiet(exactFilesLanding.projectId);
- const openFilesLanding=(target:ProjectImportedEditor)=>{
+ const canEnterFilesLanding=!!exactFilesLanding&&!projectImportedEditor&&filesLandingQuiet(exactFilesLanding.original.projectId);
+ const openFilesLanding=(target:ExistingFilesLanding)=>{
   if(!canEnterFilesLanding||target!==exactFilesLanding||projectSection!=='files')return;
-  const {projectId}=target, initial=bridge.getState(), resume=obj(initial.view).resumeRevision;
+  const {projectId}=target.original, initial=bridge.getState(), resume=obj(initial.view).resumeRevision;
   const documentEpoch=bridge.getDocumentEpoch(), navigation=navigationWindow.current, taskRequest=reviewRequest.current;
   const questionRequest=projectQuestionRequest.current, revision=initial.state.requestedProjectRevision;
+  const sameOriginal=()=>{
+   if(target.kind==='imported')return sameImportedEditor(target.original,originalOrdinarySourceDirectory(projectId));
+   const observed=originalPreparedLocalCopy(projectId);
+   return observed?.checkoutId===target.original.checkoutId&&observed.requestId===target.original.requestId;
+  };
   const owner=()=>{
    const live=bridge.getState(), state=live.state, place=obj(live.view);
    return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation&&
@@ -11700,15 +11762,16 @@ export default function App(){
     state.projectId===projectId&&!state.filePath&&!state.fileLoading&&!state.fileSaving&&!state.conversationReader&&
     !state.localSourceIntake?.window&&!state.projectGitImport?.open&&!state.attachmentWorkspace?.open&&!state.chatAttachmentPickerOpen&&
     canEditImportedCheckout(action=>live.capabilities.commands.includes(action))&&live.capabilities.commands.includes('projects.development.files.close')&&
-    sameImportedEditor(target,originalOrdinarySourceDirectory(projectId));
+    sameOriginal();
   };
   if(!owner()){setLocalError('原项目或本机副本已变化，没有打开其他文件。');return;}
   const before=projectWorkPresentations[projectId], temporary:ProjectWorkPresentation={open:true,mode:'default'};
-  const filesReturn:NonNullable<ProjectImportedEditor['filesReturn']>={
-   current:()=>importedFilesReturnNow.current===filesReturn&&owner()&&importedFilesBackPlace.current(projectId,temporary),
+  let localIntent:ProjectLocalFilesIntent|undefined;
+  const filesReturn:ProjectFilesLandingReturn={
+   current:()=>filesLandingReturnNow.current===filesReturn&&owner()&&filesLandingBackPlace.current(projectId,temporary,localIntent),
    closed:()=>{
     if(!filesReturn.current())return;
-    importedFilesReturnNow.current=undefined;
+    filesLandingReturnNow.current=undefined;
     setProjectSections(previous=>previous[projectId]==='work'?{...previous,[projectId]:'files'}:previous);
     setProjectWorkPresentations(previous=>{
      if(previous[projectId]!==temporary)return previous;
@@ -11718,13 +11781,18 @@ export default function App(){
    },
    unconfirmed:()=>{
     if(!filesReturn.current())return;
-    importedFilesReturnNow.current=undefined;
+    filesLandingReturnNow.current=undefined;
     setLocalError('未确认关闭原本机文件窗口。可从项目页手动返回「文件」。');
    },
   };
   setLocalError('');
-  importedFilesReturnNow.current=filesReturn;
-  showImportedEditor({...target,openDirectory:true,filesReturn},temporary);
+  filesLandingReturnNow.current=filesReturn;
+  if(target.kind==='imported'){showImportedEditor({...target.original,openDirectory:true,filesReturn},temporary);return;}
+  // A separate existing-ready intent. With originalCopy present, native Work
+  // never falls through to the first-time preparation affordance.
+  localIntent={projectId,current:filesReturn.current,originalCopy:target.original,filesReturn};
+  setProjectLocalFilesIntent(localIntent);
+  showProjectFilesWork(projectId,temporary);
  };
  const openOriginalImportedFiles=(target:ProjectImportedEditor,from:'work'|'files')=>{
   const live=bridge.getState().state,list=obj(obj(live.moduleResultInputs)['workspace.list']);
@@ -11934,7 +12002,7 @@ export default function App(){
           retainedDraftCopy={retainedCopyFirst}
           presentation={projectStartPresentation}
           onPresentationChange={presentation=>{
-           importedFilesReturnNow.current=undefined;
+           filesLandingReturnNow.current=undefined;
            if(!presentation.open||presentation.mode!=='default')dismissModelWorkArrival();
            setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}));
           }}
@@ -11984,7 +12052,7 @@ export default function App(){
           <h3>本机工作副本</h3>
           <p className="pw-field-hint">继续编辑原副本里的源码。下面的正式文件另行保存。</p>
           <Button variant="primary" leadingIcon={IconFolder} disabled={!canEnterFilesLanding} onClick={()=>openFilesLanding(exactFilesLanding)}>
-            {exactFilesLanding.exactStarterSource?'打开网页源码':'打开本机源码'}
+            {exactFilesLanding.kind==='imported'&&exactFilesLanding.original.exactStarterSource?'打开网页源码':'打开本机源码'}
           </Button>
         </section>}
         {can('projects.keptDrafts.list')&&<ProjectKeptDraftIndex key={currentProject.id} project={currentProject.id}/>}

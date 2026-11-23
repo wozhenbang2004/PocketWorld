@@ -86,8 +86,9 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; accountRead.current++; }; }, []);
   useEffect(() => { if (view.kind === 'main' && tab === 'services') void loadAccounts(); }, [view.kind, tab, state.modelSelectionRevision, canReadAccounts]);
   const hostSection = (next: View) => next.kind === 'account' ? 'accounts' : next.kind === 'proxy' ? 'proxy' : 'models';
-  const changeTab = (next: string) => {
+  const changeTab = (next: string, showAllModels = false) => {
     if (pending.current || pickerPending.current || busy) return;
+    if (next === 'models' && showAllModels) setModelPresentation({ query: '', filter: 'all' });
     setTab(next); setError(''); setNotice('');
   };
   const open = (next: View) => {
@@ -384,7 +385,8 @@ export function AICenter({ state, data, supported, run, registerTransientBack, i
         {minimalFirst ? <Button variant="ghost" data-ai-return-key="show-management" className="pw-ai-more-settings" onClick={() => setShowManagement(true)}>查看全部接入设置</Button> : <section className={firstService ? "pw-ai-utilities pw-ai-first-utilities" : "pw-ai-utilities"} aria-label="更多设置"><h3>更多设置</h3><div className="pw-ai-service-group-body"><Button variant="ghost" leadingIcon={IconServer} trailingIcon={IconChevronRight} className="pw-ai-utility-row pw-ai-proxy-link" data-ai-return-key="proxy" disabled={busy} onClick={() => open({ kind: 'proxy' })}>本机 API</Button><Button variant="ghost" leadingIcon={IconControls} trailingIcon={IconChevronRight} className="pw-ai-utility-row" data-ai-return-key="usage" onClick={() => open({ kind: 'tools' })}>用量统计</Button></div></section>}
       </>}
       {tab === 'models' && <AIModelPicker state={state} can={supported} act={runPicker} scope="default" presentationState={modelPresentation} onPresentationChange={setModelPresentation} onManage={() => changeTab('services')} onAddService={() => open({ kind: 'add' })} onSelected={() => { const choice = pickerChoice.current; pickerChoice.current = null; if (choice) completedChoice(choice); else setNotice('模型选择已返回，请核对服务和当前默认模型。'); setTab('services'); }} onSelectionPending={modelSelectionPending} />}
-      {tab === 'routing' && <AIModelGroups state={state} data={live} supported={supported} run={run} registerTransientBack={registerChildBack} />}
+      {tab === 'routing' && <AIModelGroups state={state} data={live} supported={supported} run={run}
+        registerTransientBack={registerChildBack} onChooseDefault={() => changeTab('models', true)} />}
       </TabPanel>
     </Tabs> : <>
       <header className="pw-ai-detail-heading"><h2 tabIndex={-1} data-ai-detail-heading>{view.kind === 'proxy' ? '本机 API' : view.kind === 'api' ? '选择 API 服务' : view.kind === 'add' ? '添加服务' : view.kind === 'openai' ? '连接 OpenAI' : view.kind === 'account' ? accountName || 'ChatGPT 账号' : view.kind === 'tools' ? '用量统计' : view.kind === 'edit' ? connection?.name || view.preset?.name || '服务配置' : connection?.name || '服务详情'}</h2></header>

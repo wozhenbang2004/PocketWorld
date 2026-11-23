@@ -156,7 +156,7 @@ export function originalBackgroundPhoneOutcome(task: Record<string, any> | undef
 }
 
 /** Composition of PW-05 Answer and PW-22 file actions around host-owned evidence. */
-export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, onResumeViteBuildEditor, previewArrival, resultFiles, showEmptyResult, deferExecutionDetails, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, revealedPhoneOutcome, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
+export function TaskOutcome({ task, messages, active, canReadReport, readIdentity, onCopy, attachmentConversation, canOpenAttachment, canLocateAttachment, onOpenProjectPackage, onContinueBuildCopy, onResumeViteBuildEditor, previewArrival, resultFiles, showEmptyResult, deferExecutionDetails, shownWorkQuestion, onFollowUp, canReadPhoneTaskOriginal, phoneWorkReportLocation, revealedPhoneOutcome, focusedOriginalDraft, draftGoalDecision, draftReview, registerProjectDraftBeforeLeave, projectDraftSourceRetired, lateDependencyObserved, reviewedDependencyHoldKey }: {
   task: unknown;
   messages: unknown;
   active: boolean;
@@ -171,6 +171,7 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   readIdentity: string;
   showEmptyResult: boolean;
   deferExecutionDetails: boolean;
+  shownWorkQuestion?: string;
   onCopy: (text: string) => Promise<unknown>;
   attachmentConversation: string;
   canOpenAttachment: boolean;
@@ -247,7 +248,12 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
     : typeof record.raw?.summary === 'string' ? record.raw.summary : '';
   const settlementDetail = showReconciliation ? '操作可能已经发生，请在这件工作里核对原操作。' : recoveredDependency ? '同一副本的依赖准备命令退出 0。本轮没有运行构建。'
     : currentSummary.trim() || (outcome.source === 'result-event' && outcome.resultStatus === status ? outcome.text.trim() : '');
-  const resultText = settlementTitle && (outcome.text.trim() === settlementDetail || outcome.text.trim() === settlementTitle)
+  // The literal heading can replace plain prose, not Markdown's links, lists or copy controls.
+  const repeatedQuestion = active && deferExecutionDetails && !!shownWorkQuestion && status === 'awaiting_user' &&
+    !outcome.partial && !outcome.image && !remotePhone && !phoneStatus && outcome.source === 'result-event' &&
+    outcome.resultStatus === 'awaiting_user' && outcome.text === shownWorkQuestion &&
+    /^[\p{L}\p{N}]/u.test(shownWorkQuestion) && !/[^\p{L}\p{N} ,!?;，。！？、；：]/u.test(shownWorkQuestion);
+  const resultText = repeatedQuestion || settlementTitle && (outcome.text.trim() === settlementDetail || outcome.text.trim() === settlementTitle)
     ? '' : outcome.text;
   const readyForConfirmation = status === 'needs_confirmation' && outcome.resultStatus === 'needs_confirmation';
   const ownerAcceptance = active && !projectDraftSourceRetired && !settlementTitle &&
