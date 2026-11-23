@@ -429,6 +429,32 @@ public final class OwnerKeptStaticPages {
         return member==null?JSONObject.NULL:new JSONObject().put("sha256",member.sha256).put("bytes",member.bytes);
     }
 
+    /** Derive one new portable file from one immutable committed record, never from a current checkout.
+     * The caller separately proves the native original starter registration; no renderer is mounted. */
+    public dev.pocketengine.features.local.project.PortableOfflinePage.Copy portableCopy(
+            ProjectWindow window,Catalog shown,Page page)throws Exception{
+        String project=project(window);
+        if(!project.equals(shown.projectId)||!project.equals(page.projectId)||page.resourceCount!=3)
+            throw new SecurityException("只保存原保留版的入口、样式和计数器");
+        synchronized(LOCK){
+            requireCurrent(window,project);
+            for(Slot slot:shown.slots)if(slot.page.equals(page)){
+                // Read.OPEN constructs a verified in-memory bundle value, not a WebView or a session.
+                Stored selected=read(shown.root,project,slot.path,page,Read.OPEN);
+                requireSame(slot.identity,selected.identity);
+                var bundle=Objects.requireNonNull(selected.bundle);
+                var entry=bundle.resource(bundle.origin+"index.html");
+                var css=bundle.resource(bundle.origin+"src/style.css");
+                var script=bundle.resource(bundle.origin+"src/main.js");
+                if(entry==null||css==null||script==null)throw new SecurityException("原保留版缺少确切起步资源");
+                var result=dev.pocketengine.features.local.project.PortableOfflinePage.fromVerifiedStarter(entry.bytes(),css.bytes(),script.bytes());
+                requireSame(slot.identity,leaf(slot.path));requireRoot(shown.root);requireCurrent(window,project);
+                return result;
+            }
+            throw new SecurityException("原保留列表没有这份确切版本");
+        }
+    }
+
     /** Exact immutable selected version only. Never resolves against the current source checkout. */
     public Opened open(ProjectWindow window,String versionId,String manifestIdentity)throws Exception{
         String project=project(window);

@@ -1,8 +1,9 @@
-import { useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { useProjectPreviewViewport } from './ProjectPreviewPane';
+import { exactKeptPortableDelivery, leaveKeptPortableCopy, ProjectKeptPortableCopy, supportsKeptPortableCopy } from './ProjectKeptPortableCopy';
 
 const prefix='projects.keptStaticPages.';
 export const keepStaticPage=prefix+'keep';
@@ -196,6 +197,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   const visit=useRef<Visit|null>(null), latest=useRef(active),mounted=useRef(false);
   const [shown,setShown]=useState<Presentation|null>(null);
   const nextFocus=useRef<Focus|null>(null), panelHeading=useRef<HTMLHeadingElement>(null);
+  const portableState=useSyncExternalStore(bridge.subscribe,()=>bridge.getState().state.keptStaticPagePortable);
+  const portable=active?exactKeptPortableDelivery(portableState,project.id):null;
   latest.current=active;
   const update=(original:Visit)=>{
     if(!mounted.current||visit.current!==original)return;
@@ -577,7 +580,13 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     }
     return true;
   };
-  const leave=()=>visit.current?close(visit.current,false):undefined;
+  const leave=()=>{
+    const original=visit.current;
+    const delivery=latest.current&&supportsKeptPortableCopy()?
+      exactKeptPortableDelivery(bridge.getState().state.keptStaticPagePortable,project.id):null;
+    if(!delivery)return original?close(original,false):undefined;
+    return leaveKeptPortableCopy(delivery).then(cleared=>cleared&&(!original||close(original,false)));
+  };
   const handlers=useRef({back,leave,inspect,retire,requestClose});handlers.current={back,leave,inspect,retire,requestClose};
   useLayoutEffect(()=>{
     mounted.current=true;
@@ -626,6 +635,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   const rowsDisabled=!!shown?.busy||!!shown?.closing||!!shown?.removalRecheck;
   return <>
     {(canEnter||showing)&&<Button variant="ghost" size="small" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={showing} onClick={enter}>保留的网页</Button>}
+    {canEnter&&!showing&&portable&&<p className="pw-field-hint" role="status">打开「保留的网页」{portable.phase==='target_selected'?'确认写入原离线副本。':'核对原离线副本。'}</p>}
     {showing&&original&&shown&&<SettingsDialog isOpen title="保留的网页" onClose={back} closeLabel={!shown.closing&&(reader||review||removal)?'返回保留列表':'关闭保留列表'}>
       <div className="pw-form-flow" aria-busy={!!shown.busy||!!original.closing||!!reader&&!original.closeUnconfirmed&&(!frame?.ready||!!reader.closing)}>
         <div hidden={rowsHidden} inert={rowsHidden}>
@@ -653,6 +663,11 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
               disabled={rowsDisabled} loading={shown.busy==='compare'}
               choose={(side,version)=>choose(original,catalog,side,version)} compare={()=>compare(original,catalog)}
               open={(page,trigger)=>open(original,page,trigger)} />}
+            {catalog&&catalog===original.catalog&&supportsKeptPortableCopy()&&<ProjectKeptPortableCopy key={original.visitId}
+              shelf={{...wire(original),shelfHandle:catalog.shelfHandle}} pages={catalog.versions} delivery={portable}
+              active={!rowsHidden&&!rowsDisabled}
+              current={()=>current(original)&&publishedCatalog(original)&&original.catalog===catalog&&!original.reader&&!original.review&&
+                !original.removal&&!original.removalRecheck&&!original.busy&&!original.closing&&!original.closeUnconfirmed} />}
             {catalog&&<div className="pw-form-actions">
               <Button variant="ghost" size="small" disabled={!!shown.busy} onClick={()=>read(original)}>核对列表</Button>
               {catalog.pendingState==='reviewable'&&<Button variant="ghost" size="small" disabled={rowsDisabled}

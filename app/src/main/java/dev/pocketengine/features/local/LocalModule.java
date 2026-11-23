@@ -2518,6 +2518,17 @@ public final class LocalModule implements EngineModule {
         return source.length()==7&&ProjectSourceImport.BUILTIN_VITE_STARTER.equals(source.opt("sourceKind"))&&
                 ProjectSourceImport.matchesSavedPageStarterImport(source.opt("manifestIdentity"),source.opt("sourceEvidenceSha256"));
     }
+    /** Exact native registration only, no body access or live checkout observation for a kept-page export. */
+    public synchronized void requireKeptPagePortableStarterForOwner(String project,String copy)throws Exception{
+        if(closed)throw new IllegalStateException("原项目模块已关闭");
+        JSONObject actual=checkout(copy),source=ordinaryEditorImportHeader(actual,project,copy);
+        if(source==null||!savedPageStarterSource(source))
+            throw new SecurityException("原保留版没有内置离线起步来源依据");
+        JSONObject registered=packageWorkspace().sourceProjectRegistrationForOwner(source.getString("clientId"),
+            source.getString("packageSha256"),actual.optString("name"),true);
+        if(!Boolean.TRUE.equals(registered.opt("registered"))||!project.equals(registered.opt("expectedProjectId")))
+            throw new SecurityException("原内置网页所在项目登记已变化");
+    }
     private static boolean originalPhoneEditorImport(JSONObject row,EditorSaveOrigin origin){
         JSONObject imported=row.optJSONObject("sourceImport");
         return origin==EditorSaveOrigin.IMPORTED_VERSIONED&&imported!=null&&

@@ -66,6 +66,8 @@ class ComposeActivity : ComponentActivity() {
     internal fun chooseFormalFileTarget(id:String,mime:String,name:String):OutcomeExportLaunch {
         check(businessCurrent());armBusinessPicker("formalFile:$id");return formalFilePicker.launch(id,mime,name)
     }
+    /** The kept-page export picker observes this same Activity business generation only. */
+    internal fun keptPageExportOwnerCurrent()=businessCurrent()
     private val outcomeExportPicker = AttachmentExportPicker(activityResultRegistry){requestId,uri->if (acceptBusinessResult("outcome:$requestId")) controller.attachmentOutcomes.exportResult(requestId,uri)}
     private fun restoreOutcomeDocument(requestId:String){
         if (!businessCurrent()) return

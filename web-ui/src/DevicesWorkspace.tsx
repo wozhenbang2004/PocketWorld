@@ -891,6 +891,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     return !!inviterWindow && waitingGoalWindow() === inviterWindow && live.host?.ready === true &&
       live.state.deviceWorkspaceRevision === localRead?.revision;
   };
+  const addSurface = form === 'add' && !sourceFocus && !review ? waitingGoalWindow() : '';
+  const joinWindow = addSurface && localRead?.originalWindow && localReadCurrent &&
+    Number.isSafeInteger(localRead.revision) && localRead.window === addSurface ? addSurface : '';
+  const currentJoin = () => {
+    const live = bridge.getState();
+    return !!joinWindow && waitingGoalWindow() === joinWindow && live.host?.ready === true &&
+      live.state.deviceWorkspaceRevision === localRead?.revision && available(actions.join);
+  };
   const pairingNotificationsBlocked = !!inviterWindow && local.receiverEnabled === false &&
     actions.enable?.available === false && actions.invite?.available === false &&
     localPhone.some(group => group.id === 'taskNotificationsForStart' && group.state === 'blocked');
@@ -2141,7 +2149,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     </SettingsDialog>
     <PhoneControlPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
     <DeviceTaskPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
-    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || form === 'invite' || !!snapshot) &&
+    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (form !== 'add' || !!addSurface) &&
       (!sourceFocus || form === 'connection' && originalAddressCurrent)}
       onClose={() => { if (addressRepair.current?.originalPhone) closeOriginalAddressForm(); else { clearSensitive(true); refresh(); } }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
@@ -2149,20 +2157,29 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         <WorkingStatus active={busy}>正在读取原设备回执…</WorkingStatus>
         {pairingEntry && <RadioOptions className="pw-device-pair-roles" label="从哪台设备发出邀请？" value={form} onChange={side => { if (side === 'add' || side === 'invite') openPairEntry(side); }} isDisabled={busy}
           options={[{id: 'add', label: '对方已发邀请'}, {id: 'invite', label: '从这台手机发出'}]} />}
-        {['add', 'connection', 'relay'].includes(form) && <section className="pw-device-form-step">
+        {form === 'add' && !joinWindow && <section className="pw-device-form-step">
+          <p role="status">尚未核对到本机配对状态。重读后可在这里继续核对对方的邀请。</p>
+          <Button variant="ghost" disabled={busy || !supported('devices.snapshot')} onClick={() => {
+            if (addSurface && waitingGoalWindow() === addSurface) refresh();
+          }}>重读本机状态</Button>
+        </section>}
+        {(form === 'connection' || form === 'relay' || form === 'add' && (!!joinWindow || !!snapshot && !!firstPair)) && <section className="pw-device-form-step">
           {form === 'add' && <p>加入对方的短时邀请，无需开启这台手机的接收或屏幕读取。两端仍需分别核对指纹和权限。</p>}
           {form === 'connection' && originalAddressCurrent && <p>请从这台原手机复制它当前的局域网邀请。先在本机核对，不联系对方；确认后才更新地址并尝试连接，不重新配对或提交目标。</p>}
           {form==='add'&&firstPair?<div className="pw-device-review">
             <h3>先看这次原邀请</h3>
             <p>发起设备 …{firstPair.deviceId.slice(-8)} · 有效至 {time(firstPair.expiresAt)}</p><p className="pw-source-copy">邀请中的完整证书指纹：<bdi>{fingerprint(firstPair.fingerprint)}</bdi></p>
             <p>本机还没有设备身份。继续会将本机身份保存在 Android 密钥库里，再核对两端指纹和权限；不会发送请求或开启接收。</p>
-            <div className="pw-form-actions"><Button disabled={busy||!supported('devices.continueFirstPair')} onClick={continueFirstPair}>继续配对并创建本机身份</Button>
+            <div className="pw-form-actions"><Button disabled={busy || !joinWindow || !available(actions.join) || !supported('devices.continueFirstPair')}
+              onClick={() => { if (currentJoin()) continueFirstPair(); }}>继续配对并创建本机身份</Button>
               <Button variant="ghost" disabled={busy} onClick={leaveFirstPair}>返回，不创建身份</Button></div>
           </div>:<>
           {form === 'add' && supported('devices.pairImage.pick') && supported('devices.pairImage.review') && <>
             <div className="pw-form-actions">
-              <Button variant="secondary" disabled={busy || !available(actions.join)} onClick={chooseImage}>{imageId ? '重新选择图片' : '选择邀请二维码图片'}</Button>
+              <Button variant="secondary" disabled={busy || !available(actions.join)}
+                onClick={() => { if (currentJoin()) chooseImage(); }}>{imageId ? '重新选择图片' : '选择邀请二维码图片'}</Button>
               {imageId && <Button disabled={busy || !available(actions.join)} onClick={() => {
+                if (!currentJoin() || activeImage.current !== imageId) return;
                 void invoke('devices.pairImage.review', { pickerId: imageId }, value => {
                   if (activeImage.current !== imageId) throw new Error('原选图窗口已变化，请重新选择。');
                   if (value.cancelled === true && value.pickerId === imageId) { closeImage();setError('没有选择图片。请重新选图，或粘贴原邀请。'); return; }
@@ -2173,9 +2190,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <p>可选另一台手机或电脑这次邀请的截图或照片，保留四周白边。只在本机识别，不上传，也不自动加入。也可以粘贴邀请：</p>
           </>}
           <TextAreaField label={form === 'relay' ? '已有临时租约' : form === 'add' ? '对方的短时邀请' : '原设备短时邀请'} value={raw} onChange={setRaw} isDisabled={busy} hint="仅在当前窗口核对，离开或进入后台后清除。" />
-          <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => { if (form === 'connection') reviewAddressForm({ raw }); else void invoke(form === 'relay' ? 'devices.reviewRelay' : 'devices.inspectInvitation', { raw }, form==='add'?value=>showPairPreview(value):acceptReview); }}>{form === 'add' ? '核对原邀请' : '读取原生审阅'}</Button>
+          <Button disabled={busy || !raw.trim() || form === 'add' && !available(actions.join)} onClick={() => {
+            if (form === 'add' && !currentJoin()) return;
+            if (form === 'connection') reviewAddressForm({ raw });
+            else void invoke(form === 'relay' ? 'devices.reviewRelay' : 'devices.inspectInvitation', { raw }, form === 'add' ? value => showPairPreview(value) : acceptReview);
+          }}>{form === 'add' ? '核对原邀请' : '读取原生审阅'}</Button>
           </>}
-          {form === 'add' && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}
+          {form === 'add' && joinWindow && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}
         </section>}
         {form === 'invite' && <section className="pw-device-form-step">
           <h3>{inviterWindow ? receiverLabel : '本机接收'}</h3>
@@ -2198,7 +2219,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             <Button disabled={busy || !inviteAddress || !supported('devices.createInvitation')} onClick={() => { if (!currentInviter()) return; void invoke('devices.createInvitation', { address: inviteAddress }, value => { setInvitation(shownPairingInvitation(value,local)); setRaw(''); setForm(''); }); }}>创建短时邀请</Button>
           </>}
         </section>}
-        {pairingEntry && <Accordion className="pw-device-form-alternatives">
+        {pairingEntry && (form !== 'add' || !!joinWindow) && <Accordion className="pw-device-form-alternatives">
           <AccordionItem id="relay-invitation" title="两台设备不在同一网络" description="使用已取得的临时中继租约">
             <p>使用你已有的临时租约建立控制通道。这里不会自动注册中继账号、开放端口或启用 VPN；设备权限仍单独核对，桌面画面另需可达媒体通道。</p>
             <Button variant="secondary" disabled={busy} onClick={() => { setForm('relay'); setRaw(''); }}>接收异网连接的临时中继租约</Button>

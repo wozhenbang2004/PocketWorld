@@ -107,7 +107,7 @@ internal class PocketWebProjectPreview(
         } != false
 
     /** Observe the exact passive renderer without releasing it or acquiring any resource. */
-    fun pinKeptRemovalWindow(visit:KeptVisit):()->Boolean{
+    fun pinKeptPassiveWindow(visit:KeptVisit):()->Boolean{
         val prior=session
         val originalOpening=opening
         val originalStaticOpening=openingStatic
@@ -163,6 +163,8 @@ internal class PocketWebProjectPreview(
         val selected = session?.takeIf { it.id == sessionId && it.original == null } ?: error("原网页已关闭")
         val owner = selected.savedStatic ?: error("只能保留原编辑器已显示的静态网页")
         val review = keepWitness(selected,documentGeneration,manifestIdentity)
+        val project=owner.request.project
+        check(KeptStaticEffects.idle(project)){"请先等这个项目的原网页操作结束，没有再次保留"}
         val attempt = Any()
         keepingStaticPage = attempt
         val until = SystemClock.elapsedRealtime()+20_000L
@@ -171,7 +173,7 @@ internal class PocketWebProjectPreview(
             runCatching { review.requireCurrent() }.isSuccess
         fun admitted() = keepingStaticPage === attempt && SystemClock.elapsedRealtime()<until && shown()
         val window = object : OwnerKeptStaticPages.PreviewWindow {
-            override fun projectId() = owner.request.project
+            override fun projectId() = project
             override fun current() = try { keptMain.call(::admitted) } catch (_: Exception) { false }
             override fun atCommit(commit: OwnerKeptStaticPages.Commit) {
                 keptMain.call {
@@ -194,7 +196,13 @@ internal class PocketWebProjectPreview(
         try {
             val storage = keptStaticPages
             controller.runPluginCatalogWork(Runnable {
-                val result = try { storage.keep(review, window) } catch (_: Exception) {
+                val result = try {
+                    check(window.current())
+                    val effect=KeptStaticEffects.begin(project,KeptStaticEffects.Kind.KEEP)
+                        ?:error("原项目另有网页操作，没有再次保留")
+                    // A UI timeout must not free this lease while the store is still publishing.
+                    try{storage.keep(review,window)}finally{KeptStaticEffects.end(effect)}
+                } catch (_: Exception) {
                     OwnerKeptStaticPages.KeepResult.unknown()
                 }
                 main.post { finish(result) }

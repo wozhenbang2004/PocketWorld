@@ -459,7 +459,8 @@ internal class PocketWebBridge(
     private val projectDevelopment = PocketWebProjectDevelopment(controller, { !closed && documentId != null && section == null && taskViewId == null && controller.webPrivateOwnerVisible() },
         ::captureWindow, ::acceptsWindow, ::captureRetainedDraftOriginal, ::captureSuppliedViteLockRoute)
     private val keptStaticPages=lazy {
-        PocketWebKeptStaticPages(controller,{projectPreview},{documentId},::keptStaticProjectVisible,::captureWindow,::acceptsWindow)
+        PocketWebKeptStaticPages(controller,{projectPreview},{documentId},::keptStaticProjectVisible,::captureWindow,::acceptsWindow,
+            ::captureKeptPortableRoute){publishState()}
     }
     private val sourceCheckpoints=lazy {
         PocketWebSourceCheckpoints(controller,{documentId},::captureSourceCheckpointFiles,SOURCE_CHECKPOINT_CONTINUE_ENABLED){publishState()}
@@ -643,6 +644,7 @@ internal class PocketWebBridge(
     fun foreground(value: Boolean) {
         // Fence native mailbox admission as soon as the host begins pausing this surface.
         if (!value) retireActiveSpanSend()
+        if(!value&&keptStaticPages.isInitialized())keptStaticPages.value.portableBackground()
         reminderNotificationForeground(value); if (!value) { retireChatDefaults(); observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value)
     }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
@@ -655,6 +657,7 @@ internal class PocketWebBridge(
         retireChatDefaults()
         observeOrdinaryFirstFailure(null)
         retireKeptStaticPages()
+        if(keptStaticPages.isInitialized())keptStaticPages.value.closePortable()
         retireSourceCheckpoints()
         retireReplyPicker()
         controller.closeOwnerWorkRequestHistory()
@@ -909,6 +912,15 @@ internal class PocketWebBridge(
                 original==Triple(now.requestedProjectRevision,now.requestedTaskRevision,now.requestedConnectionRevision)
         }
     }
+    /** The system chooser can rotate the Web token, not this document or native project owner. */
+    private fun captureKeptPortableRoute(project:String):()->Boolean{
+        val sameProject=captureSuppliedViteLockRoute(project)
+        val resume=workspaceResumeRevision;val plan=controller.state.requestedExecutionPlanRevision
+        val conversation=controller.state.conversationId
+        return {sameProject()&&workspaceResumeRevision==resume&&controller.state.requestedExecutionPlanRevision==plan&&
+            controller.state.conversationId==conversation&&!controller.hasChannelPhoneOrigin&&!phoneComposer.intent&&
+            taskReturnSection==null&&controller.conversationReader==null}
+    }
     private fun freshLibraryEntry(): (() -> Boolean)? {
         val document = documentId ?: return null
         val ticket = captureWindow()
@@ -933,6 +945,7 @@ internal class PocketWebBridge(
         retireSavedModelTestWait()
         retireChatDefaults()
         retireKeptStaticPages()
+        if(documentReplaced&&keptStaticPages.isInitialized())keptStaticPages.value.retirePortable()
         retireSourceCheckpoints()
         retireReplyPicker()
         originalSavedPdfVisit?.let { retireSavedPdfVisit(it,closeWindow=false) }
@@ -1102,6 +1115,7 @@ internal class PocketWebBridge(
             if(keptStaticPages.isInitialized())keptStaticPages.value.retireLostOwner()
             if(KEPT_STATIC_PAGES_ENABLED)projection?.getJSONObject("state")?.put("keptStaticPageShelf",
                 keptStaticPages.takeIf{it.isInitialized()}?.value?.snapshot() ?: JSONObject.NULL)
+                ?.put("keptStaticPagePortable",keptStaticPages.takeIf{it.isInitialized()}?.value?.portableSnapshot()?:JSONObject.NULL)
             if(SOURCE_CHECKPOINTS_ENABLED){
                 if(sourceCheckpoints.isInitialized())sourceCheckpoints.value.retireLostOwner()
                 if(sourceCheckpointContinue.isInitialized())sourceCheckpointContinue.value.retireLostOwner()
@@ -3781,6 +3795,7 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
+                    if(keptStaticPages.isInitialized())keptStaticPages.value.retirePortable()
                     retireActiveSpanSend()
                     retireChatDefaults()
                     clearReminderNotificationWindow()
