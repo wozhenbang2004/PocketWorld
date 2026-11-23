@@ -1679,7 +1679,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             {hasMemoryRows ? <p>待确认建议和过去的记忆不计入当前列表。</p> : !memories.complete ? <p>清单尚未完整读取，可先刷新记忆。</p> : <><p>告诉我一件你希望下次不用再解释的事。</p><Button leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button><p>也可以在对话中直接说“记住这件事”。</p></>}
           </div>}
           {memories.pendingConflicts.length > 0 && <Accordion className="pw-profile-disclosure"><AccordionItem id="personal-conflicts" title={`有 ${memories.pendingConflicts.length} 项信息需要核对`}><p className="pw-profile-help">这些信息存在差异，尚未自动覆盖已保存内容。</p>{memories.pendingConflicts.map((row, index) => <p key={string(row.id) || index} className="pw-profile-conflict-text">{string(row.text || row.summary || row.reason) || '请核对相关个人记忆的来源与内容。'}</p>)}</AccordionItem></Accordion>}
-          <div className="pw-profile-collection-footer">{!historyMatchLink && <Button variant="ghost" leadingIcon={IconHistory} trailingIcon={IconChevronRight} disabled={locked} onClick={() => go('memory-history')}>过去的记忆</Button>}{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>项目记忆与更多管理</Button>}<Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button></div>
+          <div className="pw-profile-collection-footer">{!historyMatchLink && <Button variant="ghost" leadingIcon={IconHistory} trailingIcon={IconChevronRight} disabled={locked} onClick={() => go('memory-history')}>过去的记忆</Button>}{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>高级管理 · 先读个人记忆，可切换项目</Button>}<Button variant="ghost" className="pw-profile-refresh" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>刷新记忆</Button></div>
         </>}
         {(loaded || !!manualEntry && enteredProfile) && view === 'memory-new' && !manualSaved && <div className="pw-profile-form">
           <p className="pw-profile-intro">{manualEntry ? '写一件之后可能会用到的事。只有点保存才会写入你的个人记忆，不会发送消息或调用模型。' : '手动保存的背景、兴趣或偏好可供以后参考。只对这次任务有效的要求，留在原对话即可。'}</p>
@@ -1699,7 +1699,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
             <p className="pw-profile-preference-priority">明确填写的交流与做事偏好优先于推断的记忆。项目资料在各自项目范围内管理。</p>
           </> : !locked && <p className="pw-profile-list-hint">设置尚未完整读取。</p>}
           {controlsError && <p className="pw-profile-list-hint">{controlsError}</p>}
-          <div className="pw-profile-collection-footer"><Button variant="ghost" leadingIcon={IconRefresh} disabled={locked} onClick={openMemorySettings}>重新读取设置</Button>{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>项目记忆与更多管理</Button>}</div>
+          <div className="pw-profile-collection-footer"><Button variant="ghost" leadingIcon={IconRefresh} disabled={locked} onClick={openMemorySettings}>重新读取设置</Button>{onOpenAdvancedMemory && <Button variant="ghost" leadingIcon={IconArrowUpRight} disabled={locked} onClick={() => guarded(onOpenAdvancedMemory)}>高级管理 · 先读个人记忆，可切换项目</Button>}</div>
         </div>}
         {loaded && view === 'memory-history' && <>
           <p className="pw-profile-intro">这里显示仍可查看、但不在当前背景中的个人记忆。</p>

@@ -1764,11 +1764,11 @@ internal class PocketWebBridge(
                     }
                     return
                 }
-                // Only a no-locator open starts a Library visit. An explicit query or View in file
-                // details may recheck that same owner window, without starting or restoring a draft lease.
+                // The confirmed import continuation uses the same fresh no-locator Library owner.
+                // A query or View can still recheck the current owner without renewing a draft lease.
                 val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0 ||
-                    action == "attachmentWorkspace.action" && (draftCommand == "queryDocument" ||
-                        draftCommand == "openOriginal" && args.length() == 3)) freshLibraryEntry() else null
+                    action == "attachmentWorkspace.action" && (draftCommand == PocketWebAttachments.CONTINUE_IMPORTED_TXT ||
+                        draftCommand == "queryDocument" || draftCommand == "openOriginal" && args.length() == 3)) freshLibraryEntry() else null
                 if (action == "attachmentWorkspace.open" && (args.has("messagePdf") || args.has("messageInputDocument"))) {
                     val key=if(args.has("messagePdf"))"messagePdf" else "messageInputDocument"
                     val kind=if(key=="messagePdf")AttachmentMessageInput.PDF else AttachmentMessageInput.WORD_OR_TEXT

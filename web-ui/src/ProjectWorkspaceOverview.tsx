@@ -4,6 +4,7 @@ import { IconAttention, IconChevronRight, IconDevices, IconFile, IconTerminal } 
 import { readFollowUp, WorkQueueRow, type WorkEntry, type WorkReading } from './WorkFollowUp';
 import type { WorkCollectionFilter } from './work-collection';
 import { WorkDirectoryControls, type useWorkDirectory } from './WorkDirectory';
+import { homeWorkIdentity } from './butler-work-entry';
 import { ProjectSavedWebLink, type FindSavedBuildWeb } from './ProjectSavedBuildWeb';
 import './project-workspace-overview.css';
 import './project-workspace-manga.css';
@@ -40,6 +41,9 @@ export type ProjectWorkspaceOverviewProps = {
 export type ProjectWorkEntry = WorkEntry | 'outcomes';
 export type ProjectWorkCollectionView = { query: string; filter: WorkCollectionFilter; expanded: boolean; selected: string; selectedEntry?: ProjectWorkEntry };
 
+const pendingOwnerStates = new Set(['waiting_approval', 'awaiting_approval', 'waiting_permission', 'awaiting_permission',
+  'awaiting_user', 'waiting_user', 'needs_confirmation']);
+
 /** Project work directory; saved Web versions separately use exact original B4 receipts. */
 export function ProjectWorkspaceOverview({ project, directory, directoryAvailable, view, onViewChange, canOpenTask, canReview, canContinue, onOpenTask, onOpenTerminal, onOpenPairedDevices, onAskButler, editLocalFiles, localCopyFirst = false, startContent, savedWebContent, keptStaticContent }: ProjectWorkspaceOverviewProps) {
   const root = useRef<HTMLElement>(null);
@@ -53,6 +57,20 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
   const work = directory.tasks.filter(task => project.id && task.raw?.developmentContext?.projectId === project.id)
     .map(task => readFollowUp(task, canReview, canContinue(task)));
   const attention = work.filter(item => item.group === 'attention');
+  // The existing file shortcut is offered by App only on the quiet project
+  // landing, not while its Work launcher owns a draft or file editor.
+  const leadingReview = editLocalFiles && !localCopyFirst && !hasFilters && view.query === '' &&
+    directoryAvailable && directory.enabled && directory.loaded && !directory.busy && !directory.error && canOpenTask && canReview
+    ? attention.find(item => {
+      const task = item.task, raw = task.raw, identity = raw?.workCollectionIdentity;
+      const original = homeWorkIdentity(task);
+      return item.readable && item.ownerRequest && item.next.entry === 'review' && pendingOwnerStates.has(task.status) &&
+        original?.domain === 'project' && raw?.workCollectionGroup === 'attention' && raw.workCollectionReconciliation === false && raw.cancelRequested !== true &&
+        identity?.taskId === task.id && identity.runId === original.runId && identity.epoch === original.epoch &&
+        identity.updatedAt === task.updatedAt && Number.isSafeInteger(task.updatedAt) && Number(task.updatedAt) > 0 &&
+        identity.status === task.status && identity.contextAvailable === true && !directory.sourceUnavailable(task.id);
+    }) : undefined;
+  const remainingAttention = leadingReview ? attention.filter(item => item !== leadingReview) : attention;
   const active = work.filter(item => item.group === 'running');
   const recent = work.filter(item => item.group === 'ended');
   useLayoutEffect(() => {
@@ -85,9 +103,9 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
           onClick={() => onViewChange({ filter: option.id, selected: '', expanded: false })}>{option.label}</Button>)}
     </div>
   </section>;
-  const needsOwner = attention.length > 0 && <section key="work-attention" className="pw-project-work-group pw-project-work-attention" aria-label="需要你处理">
+  const needsOwner = remainingAttention.length > 0 && <section key="work-attention" className="pw-project-work-group pw-project-work-attention" aria-label="需要你处理">
     <h3><IconAttention size={17} aria-hidden />需要你处理</h3>
-    <ol className="pw-project-work-list pw-depth-tasks">{attention.map(renderTask)}</ol>
+    <ol className="pw-project-work-list pw-depth-tasks">{remainingAttention.map(renderTask)}</ol>
   </section>;
   const running = active.length > 0 && <section key="work-running" className="pw-project-work-group" aria-label="进行中的项目工作"><h3>进行中</h3><ol className="pw-project-work-list pw-depth-tasks">{active.map(renderTask)}</ol></section>;
   const start = startContent && <section key="work-start" className="pw-project-new-work" aria-label="开始或继续项目工作">
@@ -107,6 +125,11 @@ export function ProjectWorkspaceOverview({ project, directory, directoryAvailabl
     <div className="pw-project-overview-layout">
       <div className="pw-project-overview-work" data-local-copy-first={localCopyFirst || undefined}>
         <ProjectSavedWebLink.Provider value={savedWebContent ? savedWebLink : null}>
+          {leadingReview && <section className="pw-project-work-group pw-project-work-attention"
+            aria-label="等你核对的工作" style={{ marginBottom: 'var(--pw-gap-content, 16px)' }}>
+            <h3><IconAttention size={17} aria-hidden />等你核对</h3>
+            <ol className="pw-project-work-list pw-depth-tasks">{renderTask(leadingReview)}</ol>
+          </section>}
           {sections}
           {savedWebContent && <section className="pw-project-saved-web" aria-label="找回这个项目的已保存网页">{savedWebContent}</section>}
         </ProjectSavedWebLink.Provider>

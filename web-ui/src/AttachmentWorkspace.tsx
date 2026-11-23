@@ -1336,6 +1336,12 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const confirmedImport=importPhase==='confirmed'&&Number.isSafeInteger(selectedCount)&&Number.isSafeInteger(registeredCount)&&
   selectedCount>0&&selectedCount<=10&&registeredCount>=0&&registeredCount<=selectedCount;
  const importedKeys=new Set(confirmedImport?rows(registration.files).map(exactFileKey).filter(Boolean):[]);
+ const continuedTxt=obj(view.continuedImportedTxt);
+ const continuedTxtKey=mode==='list'&&offerDraftDesk&&!draftDesk&&typeof continuedTxt.requestId==='string'?
+  exactFileKey(continuedTxt):'';
+ if(continuedTxtKey)importedKeys.add(continuedTxtKey);
+ const continueTxtRequest=mode==='list'&&mayReenterDraftShelf&&!draftDesk&&!filterActive&&
+  view.canContinueImportedTxt===true&&typeof libraryImport.requestId==='string'?libraryImport.requestId:undefined;
  const systemShare=privateLibrary&&mode==='list'?obj(view.librarySystemShare):{},shareRegistration=obj(systemShare.registration);
  const shareReceived=shareRegistration.selected,shareRegistered=shareRegistration.registered;
  const shareFiles=rows(shareRegistration.files),shareKeys=new Set(shareFiles.map(exactFileKey).filter(Boolean));
@@ -1398,11 +1404,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  </AccordionItem></Accordion>;
  const libraryActions=privateFiles&&!resultFilesOnly&&<div className="pw-action-row pw-file-library-actions">
   <Button variant={hasLibraryFiles?'secondary':'primary'} leadingIcon={IconUpload} disabled={busy||selectionPending||state.attachmentImporting===true} onClick={()=>run('import')}>导入文件</Button>
-  {offerDraftDesk&&!pendingDraftGeneration&&<Button variant="secondary" leadingIcon={IconFileAdd} data-new-document-draft disabled={busy||selectionPending}
-   onClick={()=>openDraftDesk('blank')}>新建 Word / PDF</Button>}
-  <Button variant="ghost" leadingIcon={offerDraftDesk?undefined:IconFileAdd} disabled={busy||selectionPending||!!view.pendingDocumentTask}
-   aria-description={offerDraftDesk?'生成前不保留独立草稿':undefined} onClick={()=>run('newDocument')}>
-   {privateLibrary?(offerDraftDesk?'直接生成文件':'直接生成 Word / PDF'):'创建文档'}</Button>
+  <Button variant="ghost" leadingIcon={privateLibrary?undefined:IconFileAdd} disabled={busy||selectionPending||!!view.pendingDocumentTask}
+   onClick={()=>run('newDocument')}>{privateLibrary?'直接生成 Word / PDF（不单独留草稿）':'创建文档'}</Button>
   {view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}
  </div>;
  const offerPdfPageText=(privateLibrary||workPdfText)&&mode==='original'&&view.canReadPdfPageText===true&&!busy&&!draftBusy&&!view.exportPending;
@@ -1676,10 +1679,18 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {!busy&&catalogUnread&&!catalogIncomplete&&!error&&!view.error&&<p className="pw-muted" role="status">文件清单尚未读取。</p>}
  {privateLibrary&&<>
   {!scopedResultOnly&&bridge.getState().capabilities.commands.includes('projects.savedBuildWeb.read')&&<p className="pw-field-hint">通过「确认保存网页包」保存的网页，在原项目的「工作 → 已保存的构建网页」查找。其他固定网页，请从「我的工作」打开原工作，在「概览 → 项目固定成果」查看。</p>}
+  {offerDraftShelf&&<div role="group" aria-label="本机文档草稿" className="pw-action-row">
+   <Button variant="secondary" leadingIcon={IconFolder} data-local-document-drafts disabled={busy}
+    onClick={()=>openDraftDesk('catalog')}>打开本机文档草稿</Button>
+   {offerDraftDesk&&!pendingDraftGeneration&&(!catalogUnconfirmed||hasLibraryFiles)&&
+    <Button variant="ghost" leadingIcon={IconFileAdd} data-new-document-draft disabled={busy||selectionPending}
+     onClick={()=>openDraftDesk('blank')}>新建 Word / PDF 草稿</Button>}
+  </div>}
   {(!catalogUnconfirmed||hasLibraryFiles)&&libraryActions}
-  {offerDraftShelf&&<Button variant="ghost" data-local-document-drafts disabled={busy} onClick={()=>openDraftDesk('catalog')}>本机文档草稿</Button>}
   {importMessage&&<p role="status" className="pw-field-hint">{importMessage}
    {confirmedImport&&registeredCount>recentSources.length&&!busy&&' 当前清单未列齐这批已登记文件，可重新读取，不必再导入。'}</p>}
+  {continueTxtRequest&&<Button variant="secondary" disabled={busy||draftBusy} aria-description="重新打开私人文件库，不打开原件或新建草稿"
+   onClick={event=>{if(event.nativeEvent.isTrusted)run('continueImportedTxtLibrary',{importRequestId:continueTxtRequest})}}>继续到成果</Button>}
   {shareMessage&&<p role="status" className="pw-field-hint">{shareMessage}
    {confirmedShare&&!busy&&shareRegistered>sharedSources.length&&' 当前清单未核对到全部已登记版本，可重新读取，不必再导入。'}</p>}
  </>}

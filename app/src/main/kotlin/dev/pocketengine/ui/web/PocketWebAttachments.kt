@@ -49,6 +49,7 @@ internal class PocketWebAttachments(
 ) {
     companion object {
         val COMMANDS = setOf("attachmentWorkspace.open", "attachmentWorkspace.action", "attachmentWorkspace.viewer")
+        const val CONTINUE_IMPORTED_TXT = "continueImportedTxtLibrary"
         val PRIVATE_DRAFT_COMMANDS = setOf("drafts.list", "drafts.new", "drafts.open", "drafts.saveFirst",
             "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument",
             "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown",
@@ -109,6 +110,9 @@ internal class PocketWebAttachments(
     }
     // Set only by a freshly admitted explicit ordinary Library entry from the business bridge.
     private var globalDraftLibrary: DraftLibraryVisit? = null
+    private data class RegisteredTxt(val requestId:String,val id:String,val sha:String)
+    private data class ContinuedImportedTxt(val window:Window,val library:DraftLibraryVisit,val receipt:RegisteredTxt)
+    private var continuedImportedTxt:ContinuedImportedTxt?=null
     private data class TxtDraftLanding(val window:Window,val library:DraftLibraryVisit,val catalog:JSONObject,
         val file:JSONObject,val receipt:String)
     private val txtDraftMain=Handler(Looper.getMainLooper())
@@ -280,6 +284,51 @@ internal class PocketWebAttachments(
             (if (focused) catalog == null else catalog != null && catalog.opt("taskId") == "" &&
                 catalog.optJSONArray("sources") != null && catalog.optJSONArray("artifacts") != null)
     }
+    // This is the same no-locator entry as 「成果」. No old visit, frame or source is authorized here.
+    private fun openFreshLibrary(owner:()->Boolean):DraftLibraryVisit {
+        check(owner()) { "私人文件库窗口尚未就绪" }
+        return DraftLibraryVisit(UUID.randomUUID().toString(),owner).also {
+            globalDraftLibrary=it
+            flow.openTask(null,globalStandaloneDraftVisit=it.id)
+        }
+    }
+
+    private fun listedRegisteredTxt(state:AttachmentOutcomeState,receipt:RegisteredTxt)=
+        state.snapshot?.optJSONArray("sources").objects().singleOrNull{it.opt("id")==receipt.id}?.let{
+            it.opt("sha256")==receipt.sha&&it.opt("role")=="source"&&it.opt("availability")=="available"&&
+                it.opt("sourceKind")=="content_uri"&&!it.has("sourceTaskId")&&it.opt("mimeType")=="text/plain"&&
+                (it.opt("name") as? String)?.endsWith(".txt",ignoreCase=true)==true
+        }==true
+
+    private fun idleImportLibrary(state:AttachmentOutcomeState)=ordinaryDraftLibrarySurface()&&
+        state.error==null&&state.pendingDocumentTask==null&&state.pendingProcessingTask==null&&
+        (!drafts.isInitialized()||!drafts.value.showing()&&!drafts.value.retainingLinked()&&drafts.value.textSource()==null)
+
+    private fun registeredTxtAfterPicker():RegisteredTxt? {
+        val state=flow.state
+        if(globalDraftLibrary!=null||state.globalStandaloneDraftVisit==null||retiredSavedDraft!=null||
+            warmDraftCheck!=null||!idleImportLibrary(state))return null
+        val received=state.libraryImport?.takeIf{it.phase=="confirmed"}?:return null
+        val registration=received.registration?.takeIf{it.opt("selected")==1&&it.opt("registered")==1}?:return null
+        val files=registration.optJSONArray("files")?.takeIf{it.length()==1}?:return null
+        val selected=files.optJSONObject(0)?:return null
+        val id=(selected.opt("id") as? String)?.takeIf{it.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}"))}?:return null
+        val sha=(selected.opt("sha256") as? String)?.takeIf{it.matches(Regex("[a-f0-9]{64}"))}?:return null
+        return RegisteredTxt(received.requestId,id,sha).takeIf{listedRegisteredTxt(state,it)}
+    }
+
+    // Presentation only. Do not publish the receipt until this new catalogue has confirmed that exact row.
+    private fun displayedContinuedImport(current:Window):RegisteredTxt? {
+        val held=continuedImportedTxt?:return null
+        val state=flow.state
+        if(held.window===current&&globalDraftLibrary===held.library&&keepsDraftLibraryVisit(held.library.id)){
+            if(state.busy)return null
+            if(state.libraryImport==null&&idleImportLibrary(state)&&listedRegisteredTxt(state,held.receipt))return held.receipt
+        }
+        continuedImportedTxt=null
+        return null
+    }
+
     private fun warmSavedDraft(now: Window): RetiredSavedDraft? = retiredSavedDraft?.takeIf {
         globalDraftLibrary == null && it.previousWindow != now.id && it.library == flow.state.globalStandaloneDraftVisit &&
             it.editor.pendingDocument == flow.state.pendingDocumentTask && ordinaryDraftLibrarySurface()
@@ -531,6 +580,7 @@ internal class PocketWebAttachments(
             frames[selected.frameId]?.location == location(flow.state) && linkedEditorSource() != null
     }
     private fun retireDraftLibrary(keepPresentation: Boolean = false) {
+        continuedImportedTxt=null
         txtDraftOpening?.cancel();txtDraftOpening=null;txtDraftLanding=null
         val state = flow.state
         val visit = globalDraftLibrary
@@ -902,6 +952,10 @@ internal class PocketWebAttachments(
             .put("progress", state.progress).put("observing", state.observing).put("exportPending", flow.exportPending)
             .put("privateCopyStage", if(ownedCopy)flow.privateCopyStage() else null).put("privateCopyReceipt",copyReceipt)
             .put("libraryImport",state.libraryImport?.takeIf{ordinaryLibrary}?.toJson()).put("readableLibrarySources",readableLibrarySources)
+            .put("canContinueImportedTxt",draftPresentation&&registeredTxtAfterPicker()!=null)
+            .put("continuedImportedTxt",if(draftPresentation)displayedContinuedImport(current)?.let {
+                JSONObject().put("requestId",it.requestId).put("id",it.id).put("sha256",it.sha)
+            } else null)
             .put("librarySystemShare",if(draftPresentation&&ordinaryLibrary&&state.file==null&&state.originalFile==null&&
                 !state.documentOpen&&(!drafts.isInitialized()||!drafts.value.showing()))flow.librarySystemShare?.toJson() else null)
             .put("canRequestOcr", state.pdfPageText==null&&flow.canRequestOcr()).put("canSaveRead", exposeDocument&&flow.canSaveRead())
@@ -980,9 +1034,10 @@ internal class PocketWebAttachments(
                     // An older task need not still be in the home page's summary cache.
                     clear(); scopedResultCurrent = readerCurrent
                     val visit = if (args.length() == 0 && task == null && resultRun == null && readerCurrent == null &&
-                        draftLibraryEntry != null && draftLibraryEntry()) DraftLibraryVisit(UUID.randomUUID().toString(), draftLibraryEntry) else null
-                    globalDraftLibrary = visit
-                    flow.openTask(task, resultRun, visit?.id)
+                        draftLibraryEntry != null && draftLibraryEntry()) openFreshLibrary(draftLibraryEntry) else {
+                        flow.openTask(task,resultRun)
+                        null
+                    }
                     // Identity of the accepted private no-locator file window, not a read grant.
                     if (visit != null && flow.state.open && flow.state.globalStandaloneDraftVisit == visit.id && visit.current())
                         opened.put("windowId", activeWindow().id)
@@ -1019,6 +1074,20 @@ internal class PocketWebAttachments(
                 passivePdf && command in GENERIC_PDF_EXIT && promotedGenericPdfExit(frame,state)) {
                 "当前来源或编辑内容已变化，请重新核对"
             }
+            if(command==CONTINUE_IMPORTED_TXT){
+                require(args.keys().asSequence().toSet()==setOf("windowId","frameId","command","importRequestId"))
+                val owner=checkNotNull(draftLibraryEntry){"私人文件库窗口尚未就绪"}
+                val receipt=registeredTxtAfterPicker()?.takeIf{it.requestId==args.opt("importRequestId")}
+                    ?:error("这次 TXT 登记尚未核对；没有重新导入")
+                check(owner())
+                clear()
+                val visit=openFreshLibrary(owner)
+                val next=activeWindow()
+                check(next!==current&&keepsDraftLibraryVisit(visit.id))
+                continuedImportedTxt=ContinuedImportedTxt(next,visit,receipt)
+                done(JSONObject().put("accepted",true),null);changed();return
+            }
+            continuedImportedTxt=null // One result location; normal next actions keep their own scope.
             workPdfCopyViewport = null // Any new explicit file action retires the previous chooser's place.
             retiredSavedDraft = null // A different explicit use of the Library retires the old editor locator.
             val pairedPdf = flow.state.pdfPageText

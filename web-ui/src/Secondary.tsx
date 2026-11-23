@@ -1204,39 +1204,6 @@ function Collection({ data, keys, label, children, titleKeys, formatStatus }: { 
   return <>{!loaded ? <Empty>{'尚未读取' + label + '。'}</Empty> : records.length === 0 ? <Empty>{'当前读取窗口没有' + label + '。'}</Empty> : records.map((row, index) => <SourceRecord key={recordId(row, String(index))} item={row} titleKeys={titleKeys} formatStatus={formatStatus}>{children?.(row)}</SourceRecord>)}</>;
 }
 
-/** BoardUI disclosures keep the record itself primary and its review actions local. */
-function MemoryRecords({ domain, data, supported, run }: { domain: string; data: Data; supported: (action: string) => boolean; run: Run }) {
-  const [query, setQuery] = useState('');
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const keys = domain === 'memory' ? ['records'] : ['records', 'memories', 'candidates', 'jobs'];
-  const loaded = hasRows(data, keys);
-  const bodyOf = (row: Data) => first(row, ['text', 'content', 'body', 'summary', 'description', 'message']);
-  const titleOf = (row: Data) => first(row, ['title', 'name']) || bodyOf(row).split('\n')[0].slice(0, 72) || '未命名记录';
-  const layerOf = (row: Data) => ({ fact: '事实', preference: '偏好', episodic: '经历', procedural: '方法' } as Record<string, string>)[text(row.layer)] || text(row.layer) || '其他记录';
-  const sourceOf = (row: Data) => first(row, ['source', 'sourceLabel', 'sourceKind']);
-  const contextOf = (row: Data) => [sourceOf(row), row.core === true ? '核心记忆' : '', row.status || row.state ? statusText(row.status || row.state) : row.active === false ? '已停用' : ''].filter(Boolean).join(' · ');
-  const records = list(rowsAt(data, keys)).filter(row => [titleOf(row), bodyOf(row), layerOf(row), sourceOf(row), recordId(row)].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const layers = [...new Set(records.map(layerOf))];
-  return <section className="pw-memory-collection" aria-label={domain === 'memory' ? '记住的内容' : '待核对内容'}>
-    <SearchField className="pw-secondary-search" data-input-size="medium" aria-label="筛选当前读取的记录" placeholder={domain === 'memory' ? '查找记住的内容' : '查找待核对内容'} value={query} onChange={setQuery} shape="rounded" />
-    <p className="pw-reading-lead">{domain === 'memory' ? '按内容类型阅读。展开一条，核对内容和来源。' : '先阅读内容与来源，再决定是否采用。'}</p>
-    {!loaded ? <Empty>尚未读取当前记录。</Empty> : !records.length ? <Empty>{query.trim() ? '当前读取窗口没有匹配的内容。' : '当前读取窗口没有记录。'}</Empty> : layers.map(layer => <section className="pw-memory-category" key={layer} aria-label={layer}>
-      <h2>{layer}</h2>
-      <Accordion variant="divided" expandedKeys={expanded} onExpandedChange={values => setExpanded(new Set([...values].map(String)))} allowsMultipleExpanded>
-        {records.filter(row => layerOf(row) === layer).map((row, index) => <AccordionItem key={recordId(row, String(index))} id={`${layer}:${recordId(row, String(index))}`} className="pw-memory-record" headingLevel={3}
-          title={titleOf(row)} description={contextOf(row) ? <span className="pw-memory-source">{contextOf(row)}</span> : undefined}>
-          <div className="pw-memory-reading">
-            {bodyOf(row) && <p className="pw-reading-copy">{bodyOf(row)}</p>}
-            <Facts items={[[ '内容类型', layerOf(row) ], ['来源', sourceOf(row) ], ['所属用户', row.ownerId ], ['记忆空间', row.spaceId ], ['版本', row.revision]]} />
-            <div className="pw-record-decisions"><CapabilityAction action={domain + '.review'} args={{ id: recordId(row), expectedRevision: row.revision }} supported={supported} run={run}>{domain === 'memory' ? '核对与纠正' : '核对这条内容'}</CapabilityAction><CapabilityAction action={domain + '.openSource'} args={{ id: recordId(row), expectedRevision: row.revision }} supported={supported} run={run}>查看来源</CapabilityAction></div>
-          </div>
-        </AccordionItem>)}
-      </Accordion>
-    </section>)}
-    {domain === 'learning' && <p className="pw-field-hint">经验导入后保持停用；完整阅读当前 SKILL.md 并取得真实阅读回执后，才允许启用。</p>}
-  </section>;
-}
-
 /** BoardUI Tabs and object rows separate shared work from team administration. */
 function TeamWorkspace({ domain, data, supported, run, registerTransientBack }: { domain: string; data: Data; supported: (action: string) => boolean; run: Run; registerTransientBack: BackHandlerRegistration }) {
   const [tab, setTab] = useState<'runs' | 'definitions'>('runs');
@@ -2035,11 +2002,7 @@ export default function Secondary({ pairedWorkChoice, homeWindowsFile, homeDevic
   const feature = object(object(state.features)[dataPage === 'commitments' ? 'automation' : dataPage]);
   const owner = object(object(state.ownerSnapshots)[dataPage]);
   const specialized = isAIPage ? object(state.modelConnections) : page === 'devices' ? object(state.deviceWorkspace) : {};
-  // MemoryModule.snapshot is summary-only. Its actual list reply lives in
-  // moduleResults; an in-flight or failed reread must not present an old list.
-  const memoryListReady = !object(state.moduleErrors)['memory.list'] && !(Array.isArray(state.moduleBusy) && state.moduleBusy.includes('memory.list'));
-  const memoryList = memoryListReady ? object(object(state.moduleResults)['memory.list']) : {};
-  const data: Data = { ...feature, ...owner, ...specialized, ...(page === 'memory' ? { records: memoryList.records } : {}) };
+  const data: Data = { ...feature, ...owner, ...specialized };
   const errorPage = isAIPage ? hostSection || 'models' : dataPage;
   const domainError = text(object(state.ownerErrors)[errorPage]) || Object.entries(object(state.moduleErrors)).filter(([key]) => key.startsWith(errorPage + '.')).map(([, value]) => text(value)).filter(Boolean).join('\n');
   const settingsGroup = settingsGroupFor(page);
@@ -2107,7 +2070,7 @@ export default function Secondary({ pairedWorkChoice, homeWindowsFile, homeDevic
     }
     navigate(id === 'execution-policy' ? 'group:privacy' : id, null, id);
   };
-  const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : page === 'memory' ? 'memory.list' : 'app.refresh';
+  const refreshAction = page === 'background' ? 'background.refresh' : isModelPage ? 'models.snapshot' : 'app.refresh';
   const renderUsage = (registerBack: BackHandlerRegistration) => <UsageWorkspace
     supported={supported} registerTransientBack={registerBack}
     records={<HistoryPage usage supported={supported} run={run}/>}

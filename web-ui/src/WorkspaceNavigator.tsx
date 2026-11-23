@@ -12,6 +12,7 @@ export type OwnerNavigationMemory = { homeY?: number; conversationHomeY?: number
 type Props = {
   items: WorkNavItem[]; selected: string; recent: readonly Recent[]; selectedConversation?: string;
   conversationFirst?: boolean;
+  takeConversationFocus?: () => string | undefined;
   conversationActivity?: ReadonlyMap<string, ConversationNavigationState>;
   desktop: boolean; compact: boolean; onToggleCompact: () => void;
   directoryOpen: boolean; setDirectoryOpen: (open: boolean) => void;
@@ -49,7 +50,7 @@ const withoutUnreadBadge = (item: WorkNavItem): WorkNavItem =>
 
 /** The app remains the only route/guard owner. This shell projects the same real
  * items and conversation IDs onto three faces of its existing drawer or desktop rail. */
-export function WorkspaceNavigator({items, selected, recent, selectedConversation, conversationFirst, conversationActivity, desktop, compact, onToggleCompact,
+export function WorkspaceNavigator({items, selected, recent, selectedConversation, conversationFirst, takeConversationFocus, conversationActivity, desktop, compact, onToggleCompact,
   directoryOpen, setDirectoryOpen, searchOpen, openSearch, closeSearch, search, searchTrigger, memory, navigate,
   openConversation, organizeConversation, newConversation, newConversationLabel, newPending, onResumeIndependentReportFollowUp,
   profileName, avatar, canProfile, openUnread}: Props) {
@@ -114,6 +115,14 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
     } else if (face === 'directory') back.current?.focus({ preventScroll: true });
     // WorkSearch owns its own focus and input method while open.
   }, [face, homePosition, chatFirst, memory]);
+  useLayoutEffect(() => {
+    const id = face === 'home' && !mini ? takeConversationFocus?.() : undefined;
+    if (!id) return;
+    const row = Array.from(scroll.current?.querySelectorAll<HTMLButtonElement>('[data-owner-conversation]') || [])
+      .find(button => button.dataset.ownerConversation === id);
+    if (row?.isConnected && !row.disabled && row.getClientRects().length &&
+        !row.closest('[hidden],[inert],[aria-hidden="true"]')) row.focus({ preventScroll: true });
+  }, [takeConversationFocus, face, mini]);
   const changeQuery = (value: string) => {
     if (chatFirst) setWorkspaceQuery(value);
     else { setDirectoryQuery(value); memory.query = value; memory.directoryY = 0; }
@@ -125,7 +134,7 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
     return <div className="pw-conversation-row" key={c.id}>
       <Button variant="ghost" leadingIcon={IconChat} title={title} disabled={!openConversation}
         aria-current={c.id === selectedConversation ? 'page' : undefined} className={c.id === selectedConversation ? 'is-current' : undefined}
-        data-conversation-activity={!!mark || undefined}
+        data-owner-conversation={c.id} data-conversation-activity={!!mark || undefined}
         onClick={() => { remember(); openConversation?.(c.id); }}><span dir="auto">{title}</span>{mark && <small>{mark.label}</small>}</Button>
       {organizeConversation && <IconButton icon={IconMore} aria-label={'整理对话：' + title} onClick={() => organizeConversation(c.id)}/>}
     </div>;
