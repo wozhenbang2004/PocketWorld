@@ -19,6 +19,7 @@ const array = (value: any): Data[] => Array.isArray(value) ? value.filter(x => x
 const date = (value: any) => Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : '';
 const types = [{ id: 'once', label: '一次' }, { id: 'interval', label: '固定间隔' }, { id: 'daily', label: '每天' }, { id: 'weekly', label: '每周' }, { id: 'monthly', label: '每月' }, { id: 'cron', label: 'Cron 表达式' }];
 type OccurrenceFeedback = { id: string; location: string; read: string; message: string; error?: boolean; prepared?: boolean };
+type NotificationSettingsAction = { sequence: number; opening: boolean; error?: string };
 export type OriginalChatReminderRuleVisit = {
   ruleId:string; ruleRevision:number; navigation:number; documentEpoch:number; previousList:string;
   source:{conversationId:string; taskId:string; runId:string; epoch:number};
@@ -123,6 +124,8 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const occurrenceLock = useRef(false), occurrenceReturn = useRef<{ location: string; id: string; ruleId: string; selected: string; entered: boolean } | null>(null);
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all');
   const selectedRule = rules.find(rule => rule.id === selectedId) || null;
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsAction>();
+  const notificationLaunch = useRef<number | undefined>(undefined);
   const root = useRef<HTMLDivElement | null>(null), heading = useRef<HTMLHeadingElement | null>(null);
   const listPosition = useRef(0), returnRule = useRef(''), returnIndex = useRef(0), previousRule = useRef<string | undefined>(undefined);
   const chooseRule = (id: string) => { keepSchedule(); scheduleBackFocus.current = undefined; listPosition.current = root.current?.closest('.pw-secondary-scroll')?.scrollTop || 0; returnRule.current = id; returnIndex.current = Array.from(root.current?.querySelectorAll<HTMLElement>('[data-reminder-id]') || []).findIndex(row => row.dataset.reminderId === id); setSelectedId(id); };
@@ -133,6 +136,33 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
   const reading = (state.moduleBusy || []).includes('automation.list');
   const readingError = Boolean(state.moduleErrors?.['automation.list']);
   const pending = requesting || busy || occurrenceBusy || Boolean(submission) || uncertain;
+  const delivery = state.reminderNotificationAccess;
+  const deliveryObserved = replyRevision(delivery?.sequence) && (typeof delivery.enabled === 'boolean' || delivery.enabled === null);
+  const notificationBlocked = deliveryObserved && delivery.enabled === false;
+  const notificationRestored = deliveryObserved && delivery.enabled === true && delivery.afterSettings === true;
+  const previousBlock = data.available === true && data.notificationsEnabled === false;
+  const notificationUnverified = deliveryObserved ? delivery.enabled === null : previousBlock;
+  const settingsAction = notificationSettings?.sequence === delivery?.sequence ? notificationSettings : undefined;
+  const openNotificationSettings = async () => {
+    if (!notificationBlocked || !supported('settings.openSystem') || pending || editor || review ||
+        notificationLaunch.current === delivery.sequence || document.hidden || state.webWorkspaceSection !== 'automation' ||
+        state.webWorkspaceTaskOpen !== false || state.conversationReader) return;
+    const original: NotificationSettingsAction = { sequence: delivery.sequence, opening: true };
+    const documentEpoch = bridge.getDocumentEpoch();
+    notificationLaunch.current = original.sequence;
+    setNotificationSettings(original);
+    let error: string | undefined;
+    try {
+      const value = await bridge.command('settings.openSystem', { section: 'reminderNotifications', sequence: original.sequence });
+      if (!['settings_opened', 'notification_state_changed'].includes(value?.status) || value.grantVerified !== false)
+        error = '尚未确认打开系统通知设置，请从 Android 设置核对「私人提醒」。';
+    } catch (failure) {
+      if (bridge.getDocumentEpoch() === documentEpoch) error = failure instanceof Error ? failure.message : String(failure);
+    } finally {
+      if (notificationLaunch.current === original.sequence) notificationLaunch.current = undefined;
+      if (mounted.current) setNotificationSettings(current => current === original ? { ...original, opening: false, error } : current);
+    }
+  };
   const originalChatVisit=state.originalChatReminderRuleVisit as OriginalChatReminderRuleVisit|undefined;
   const handledChatVisit=useRef<OriginalChatReminderRuleVisit|undefined>(undefined);
   const ruleListResult=state.moduleResultInputs?.['automation.list'];
@@ -234,7 +264,9 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
     const attempt = origin?.warm ? ++warmReadGeneration.current : 0;
     if (origin?.warm) attemptedWarm.current = origin;
     try {
-      const [list, receipts] = await Promise.all([run('automation.list'), run('automation.receipts')]);
+      const access = supported('automation.notificationStatus')
+        ? bridge.command('automation.notificationStatus').catch(() => {}) : Promise.resolve();
+      const [list, receipts] = await Promise.all([run('automation.list'), run('automation.receipts'), access]);
       if (uncertain && list?.requestId && receipts?.requestId) setCheckRequests({ list: list.requestId, receipts: receipts.requestId });
       if (origin?.warm) recordWarmRead(origin, attempt, previous, receipts);
     } catch (failure) {
@@ -553,6 +585,17 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
       {(selectedRule || scheduleOpened) && <Button variant="ghost" leadingIcon={IconChevronLeft} disabled={pending} onClick={returnFromRule}>{scheduleOpened ? '返回这次提醒' : '返回提醒列表'}</Button>}
       {selectedRule ? <header className="pw-followup-heading"><div><h2 ref={heading} tabIndex={-1}>{selectedRule.title || '未命名提醒'}</h2></div>{refreshButton}</header> : !emptyDirectory && <div className="pw-reminder-directory-toolbar">{hasRules && rules.length > 0 && <p>{rules.length} 条提醒</p>}<div className="pw-reminder-directory-actions">{refreshButton}{newReminder}</div></div>}
       {scheduleOpened && selectedRule && <p className="pw-field-hint">这里是提醒现在的安排。修改不会重放上面这次发生记录。</p>}
+      {!editor && !review && (notificationBlocked || notificationRestored || notificationUnverified) && <div className="pw-form-flow">
+        <p className="pw-field-hint" role="status">{notificationRestored
+          ? '已重新核对：未发现「私人提醒」的通知权限或渠道被关闭。实际投递以发生记录为准。'
+          : notificationBlocked
+            ? '最近核对时，「私人提醒」通知不可用。安排仍可保存；开启通知不会重发已记录为未投递的提醒。'
+            : '暂未核对到「私人提醒」的当前通知状态。可刷新，或在 Android 设置 → 应用 → PocketWorld → 通知中手动核对。'}</p>
+        {notificationBlocked && supported('settings.openSystem') && <div className="pw-form-actions">
+          <Button variant="secondary" disabled={pending || settingsAction?.opening || !!state.conversationReader} onClick={() => { void openNotificationSettings(); }}>打开系统通知设置</Button>
+        </div>}
+        {notificationBlocked && settingsAction?.error && <p className="pw-field-error" role="alert">{settingsAction.error}</p>}
+      </div>}
       {!editor && <FormDraftNotice draft={formDraft} />}
     {notice && <MotionFeedback identity={notice} className="pw-field-hint" role="status">{notice}</MotionFeedback>}
       {unknownControls}
@@ -622,6 +665,10 @@ export default function ReminderWorkspace({ state, data, supported, run, registe
         {array(review.preview?.occurrences).map((occurrence, index) => <div key={index} className="pw-selected-object"><p>预计：{String(occurrence.local || '').replace('T', ' ')} · {occurrence.zone} · {occurrence.offset}</p>{occurrence.dstResolution === 'gap_shifted_forward' && <p className="pw-field-hint">原当地时间不存在，已按策略向后移。</p>}{occurrence.dstResolution === 'overlap_earlier' && <p className="pw-field-hint">当地时间重复，使用较早一次。</p>}{occurrence.dstResolution === 'overlap_later' && <p className="pw-field-hint">当地时间重复，使用较晚一次。</p>}</div>)}
         <p className="pw-field-hint">{review.command === 'delete' ? reminderDeleteWarning : review.command === 'setEnabled' ? '只改变此提醒的后续调度，不启动或停止原任务。' : review.intent === 'edit' ? '保留原启停状态、已用次数和其他策略。旧版本未投递的提醒会取消。' : review.intent === 'reschedule' ? '这是新的未来提醒。原发生、任务和未知结果保留，不会重放或替换。' : '只保存提醒计划。手机任务仍需要你查看并明确开始。'}</p>
         {review.command === 'save' && <p className="pw-field-hint">以上由手机原日历计算。固定时间以此预览为准；系统可能延后，不保证秒级准点。</p>}
+        {(notificationBlocked || notificationUnverified) && (review.command === 'save' || review.command === 'setEnabled' && review.enabled === true) &&
+          <p className="pw-field-hint" role="status">{notificationBlocked
+            ? '安排可以保存，但「私人提醒」通知目前不可用。可回提醒页核对系统通知设置。'
+            : '安排可以保存，「私人提醒」通知状态尚未核对。可回提醒页刷新。'}</p>}
         <div className="pw-form-actions"><Button variant="secondary" onClick={() => { generation.current++; setReview(null); }}>{editor ? '返回修改' : '取消'}</Button><PressButton compact disabled={pending || !supported('automation.confirmReview')} onClick={() => { void confirm(); }}>{review.command === 'delete' ? '确认删除' : review.command === 'setEnabled' ? review.enabled ? '确认启用' : '确认暂停' : editor?.intent === 'edit' ? '保存修改' : '创建提醒'}</PressButton></div>
       </> : draft && <>
         {editor!.intent === 'reschedule' && <p className="pw-field-hint">新建一个未来提醒，原发生与结果保留。请核对目标和新时间。</p>}

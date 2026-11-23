@@ -863,6 +863,34 @@ function savedDraftAcceptanceMatches(task:Task,click:DraftAcceptanceClick){
   receipt?.completed===click.completed&&receipt.resultReviewDigest===click.reviewDigest&&Number.isSafeInteger(revision)&&revision>click.reviewedRevision&&receipt.confirmedResultRevision===revision;
 }
 const timeLabel=(value:any)=>typeof value==='number'&&value>0?new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+function duplicateProjectDetails(projects:readonly Project[],catalog:unknown) {
+ const details=new Map<string,string>();
+ const duplicates=projects.filter(row=>projects.some(peer=>peer.id!==row.id&&peer.name===row.name));
+ if(!duplicates.length)return details;
+ const rows=asArray<Json>(catalog);
+ const created=new Map(duplicates.map(project=>{
+  const registered=rows.filter(row=>row?.id===project.id);
+  const at=registered.length===1&&registered[0].name===project.name?registered[0].createdAt:undefined;
+  const time=typeof at==='number'&&Number.isSafeInteger(at)&&at>0&&at<=8.64e15
+   ?new Date(at).toLocaleString('zh-CN',{year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}):'';
+  return [project.id,time] as const;
+ }));
+ for(const project of duplicates){
+  const time=created.get(project.id)||'';
+  const ties=duplicates.filter(peer=>peer.id!==project.id&&peer.name===project.name&&created.get(peer.id)===time);
+  if(time&&!ties.length){details.set(project.id,`创建于 ${time}`);continue}
+  if(!/^[a-f0-9-]{36}$/.test(project.id))continue;
+  let length=8;
+  while(length<project.id.length&&ties.some(peer=>peer.id.startsWith(project.id.slice(0,length))))length++;
+  const code=`编号 ${project.id.slice(0,length)}`;
+  details.set(project.id,time?`创建于 ${time} · ${code}`:code);
+ }
+ return details;
+}
+function projectDirectoryName(name:string,detail?:string){
+ return detail?<span className="block min-w-0 flex-1"><bdi className="block truncate" title={name}>{name}</bdi>
+  <small className="pw-muted block whitespace-normal break-words">{detail}</small></span>:name;
+}
 const sourceRefs=(m:Message)=>asArray<Json>(m.memoryReference?.sources||m.memoryReference?.sourceRefs||m.submission?.sourceRefs).map((s,i)=>({...s,id:String(s.id||s.sourceId||s.sourceRef||i),title:s.title||s.name||s.label||'来源'}));
 function treeData(files:Json[]){
  const roots:any[]=[];const nodes=new Map<string,any>();
@@ -907,6 +935,8 @@ export default function App(){
  const commands=asArray<string>(snapshot?.capabilities?.commands);const commandKey=commands.join('\u0000');const commandSet=useMemo(()=>new Set(commands),[commandKey]);const can=useCallback((action:string)=>commandSet.has(action),[commandSet]);
  const messages=asArray<Message>(state.messages),tasks=asArray<Task>(state.tasks),projects=asArray<Project>(state.projects),files=asArray<Json>(state.files),conversations=asArray<Json>(state.conversations);
  const [route,setRoute]=useState('butler'),[workOpen,setWorkOpen]=useState(false),[commandOpen,setCommandOpen]=useState(false),[taskId,setTaskId]=useState<string|null>(null),[taskOpen,setTaskOpen]=useState(false),[filter,setFilter]=useState('all'),[taskQuery,setTaskQuery]=useState('');
+ const projectCatalog=state.features?.workspace?.projects;
+ const projectDetails=useMemo(()=>route==='projects'?duplicateProjectDetails(projects,projectCatalog):null,[route,projects,projectCatalog]);
  const isChatSurface=route==='chat'||route==='butler';
  const butlerScrollTop=useRef(0),butlerSendConversation=useRef<string|null>(null);
  useEffect(()=>setConversationMemoryOpen(false),[route,state.conversationId]);
@@ -1360,6 +1390,7 @@ export default function App(){
  const taskHidden=noticeNotReady||reportSourceChanged||wrongProjectRun||wrongChatReportRun||teamWorkNotReady||liveProcessNotReady||
    projectReading&&(openedTaskId.current!==taskId||snapshot?.view?.taskId!==taskId||state.projectId!==projectReading.projectId);
  const selectedTask=taskHidden?undefined:ownerRequestWindow?ownerRequestTask:taskCandidate;const currentProject=projects.find(x=>x.id===state.projectId);const currentConversation=conversations.find(x=>x.id===state.conversationId);
+ const selectedProjectDetail=currentProject&&projectDetails?.get(currentProject.id);
  useLayoutEffect(()=>{
   // Choose one parent before mounting the tools in this admitted drawer visit. Later receipts must not move a live reader.
   const task=selectedTask,raw=task?.raw,view=obj(snapshot?.view);
@@ -9719,7 +9750,11 @@ export default function App(){
         </section>:desktopNavigation?<div className="pw-project-connected-workspace" data-preview-open="true"><motion.section layoutScroll className="pw-project-files-pane" aria-label="正式项目文件"><header className="pw-project-connected-header"><h2>正式项目文件</h2></header>{projectFiles}</motion.section><section className="pw-project-preview-panel" aria-label="项目预览"><ProjectPreviewPane control={projectPreview} composer={composer}/></section></div>:<ProjectPreviewPane control={projectPreview} composer={composer}/>}</TabPanel>
     </Tabs>
 
-  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>{localProjectSourceLabel}</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></header><div>{projects.map(project=><Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{project.name}</Button>)}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
+  </section>:projects.length>0?<section className="pw-project-library" aria-label="项目目录"><header><h2>你的项目</h2><div className="pw-project-library-actions">{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>run('projects.localSource.open')}>{localProjectSourceLabel}</Button>}{can('projects.gitImport.open')&&<Button variant="ghost" onClick={()=>run('projects.gitImport.open')}>从 Git 导入</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>openCreate('project')}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></header><div>{projects.map(project=>{
+   const detail=projectDetails?.get(project.id);
+   return <Button key={project.id} variant="ghost" className="pw-project-library-row" data-motion-key={project.id} leadingIcon={IconFolder} trailingIcon={IconChevronRight}
+    aria-label={detail?`${project.name}，${detail}`:undefined} disabled={!can('projects.select')} onClick={()=>run('projects.select',{id:project.id})}>{projectDirectoryName(project.name,detail)}</Button>;
+  })}</div></section>:!ready?<p className="pw-muted" role="status">正在读取项目…</p>:<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
    <h3>{canImportLocalProject&&!canCreateLocalStarter?'把已有工程带到这台手机':'从一个项目开始'}</h3>
    <p>{canCreateLocalStarter?'从内置小网页开始，或导入已有的 ZIP、文件夹。创建和编辑私人副本不必先准备开发工具或连接模型。':
     canImportLocalProject?'先从 ZIP 或文件夹核对源码，再建立私人副本。导入和编辑不需要先准备开发工具或连接模型。':'把相关任务、文件和成果放在一起，随时接着做。'}</p>
@@ -9827,7 +9862,14 @@ export default function App(){
    />:returnToArchiveWork?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回原工作"
     disabled={!!projectPreview.busy||projectPreview.exportBusy||projectPreview.blocked||!can('tasks.open')} onClick={projectPreview.returnToPackageTask}
    />:route==='tasks'&&endedScopeOrigin?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回工作总览" title="返回工作总览" onClick={restoreWorkScope}/>:route==='projects'&&state.filePath?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="返回项目文件" disabled={fileAdoption.pending||!!state.fileSaving} onClick={()=>{if(!fileAdoption.isPending()&&!bridge.getState().state.fileSaving&&!projectFileBack.current?.())run('projects.close',fileIdentity)}}/>:(route==='projects'||route==='tasks')&&relatedOrigin.current?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label={relatedWorkspaceBackLabel} title={relatedWorkspaceBackLabel} onClick={backFromRelatedWorkspace}/>:route==='projects'&&state.projectTaskReturn?.taskId?<IconButton ref={navigationBackGlass} icon={IconArrowLeft} aria-label="回到原任务" onClick={()=>openTask(state.projectTaskReturn.taskId)}/>:navigationTrigger}
-   {route==='tasks'?<WorkFindTitle editing={taskFiltersOpen} query={taskQuery} onQuery={setTaskQuery} edit={()=>setTaskFiltersOpen(true)} close={closeWorkFind}/>:route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label="切换项目"><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=><Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}><IconFolder size={17}/><span>{project.name}</span>{project.id===state.projectId&&<small>当前</small>}</Button>)}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>{setProjectPickerOpen(false);run('projects.localSource.open')}}>{localProjectSourceLabel}</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
+   {route==='tasks'?<WorkFindTitle editing={taskFiltersOpen} query={taskQuery} onQuery={setTaskQuery} edit={()=>setTaskFiltersOpen(true)} close={closeWorkFind}/>:route==='chat'?<div className="pw-current-work pw-chat-title"><h1 title={currentTitle} aria-label={messages.length?currentTitle:'PocketWorld'}>{messages.length>0&&currentConversation&&can('conversation.organization.read')?<Button variant="ghost" className="pw-chat-title-trigger" aria-label="整理当前对话" onClick={()=>setOrganizationTarget(currentConversation.id)}><span className="pw-chat-title-text">{currentTitle}</span><IconChevronDown size={16} aria-hidden="true"/></Button>:messages.length?currentTitle:'PocketWorld'}</h1></div>:route==='projects'&&!state.filePath?<PopoverTrigger isOpen={projectPickerOpen} onOpenChange={setProjectPickerOpen}><Button variant="ghost" className="pw-object-title" aria-label={selectedProjectDetail?`切换项目，当前：${currentTitle}，${selectedProjectDetail}`:'切换项目'}
+    title={selectedProjectDetail?`${currentTitle}，${selectedProjectDetail}`:undefined}><h1>{currentTitle}</h1><IconChevronDown size={16}/></Button><Popover aria-label="切换项目"><PopoverHeader title="项目"/><div className="pw-project-menu">{projects.map(project=>{
+    const detail=projectDetails?.get(project.id);
+    return <Button key={project.id} variant="ghost" aria-current={project.id===state.projectId?'true':undefined}
+     aria-label={detail?`${project.name}，${detail}`:undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}>
+     <IconFolder size={17}/>{detail?projectDirectoryName(project.name,detail):<span>{project.name}</span>}{project.id===state.projectId&&<small>当前</small>}
+    </Button>;
+   })}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>{setProjectPickerOpen(false);run('projects.localSource.open')}}>{localProjectSourceLabel}</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
    {isChatSurface?<div ref={headerActionsGlass} className="pw-header-actions pw-navigation-glass" role="group" aria-label="对话操作">
     {can('remoteInbox.state')&&Number(state.remoteInbox?.unread||0)>0&&<IconButton icon={IconNotification} aria-label={'外部消息 · '+state.remoteInbox.unread+' 条未读'} title="外部未读消息" onClick={openUnreadMessages}/>}
     {!homeNewTopic&&can('conversation.new')&&<IconButton icon={IconNewChat} aria-label="聊件新事" title="聊件新事" disabled={!!state.chatSubmitting||draftSwitching} onClick={()=>chooseConversation(null)}/>}

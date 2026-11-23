@@ -55,17 +55,21 @@ export function ModelConnectionOptions({ value, onChange, provider, adding, revi
 export function ModelConnectionTestFeedback({ value }: { value: Row }) {
   const proof = value.connectionTest || {}, feedback = value.inferenceFeedback || {};
   const calls: Row[] = Array.isArray(feedback.calls) ? feedback.calls : [];
+  const hasOriginalCalls = !!proof.inferenceReference && feedback.available === true && calls.length > 0;
   const unknown = proof.outcome === 'unknown';
   return <section className="pw-request-notice" aria-label="本次连接测试结果" aria-live="polite">
     <h3>{unknown ? '文字测试 · 结果待核对' : proof.outcome === 'not_dispatched' ? '文字测试 · 未发出' : value.ok === true ? '文字测试 · 已返回结果' : '文字测试 · 未确认可用'}</h3>
-    <p>{unknown ? '原测试结果待核对。请先查看实际调用记录，再决定是否发起新的测试。' : String(value.message || '原测试未返回说明。')}</p>
+    <p>{unknown ? hasOriginalCalls ? '可展开下方核对已保留的原调用，本次结果仍未确认。'
+      : '没有可核对的调用记录，请返回原连接手动核对。' : String(value.message || '原测试未返回说明。')}</p>
     <p className="pw-field-hint">{proof.outcome === 'not_dispatched' ? '本次没有进入模型调用。' : '仅对应本次草稿的文字测试；图片、流式用量和工具能力尚未验证。'}</p>
-    <p className="pw-field-hint">{proof.connectionId ? `原连接修订 ${String(proof.connectionRevision ?? '未提供')}` : '新连接草稿'} · 草稿修订 {String(proof.draftRevision ?? '未提供')}。此回执不代表已保存配置。</p>
-    <Accordion><AccordionItem id="actual-call" title="实际调用详情" description="原测试身份、协议、缓存用量与费用">
+    <p className="pw-field-hint">{proof.connectionId ? `原连接修订 ${String(proof.connectionRevision ?? '未提供')}` : '新连接草稿'} · 草稿修订 {String(proof.draftRevision ?? '未提供')}。测试不会保存连接配置或更改默认模型。</p>
+    <Accordion><AccordionItem id="actual-call" title={hasOriginalCalls ? '查看本次调用与缓存用量' : '查看原测试回执'}>
     <dl className="pw-facts"><div><dt>原测试</dt><dd>{String(proof.testId || '未提供')}</dd></div><div><dt>原连接</dt><dd>{String(proof.connectionId || '未保存的新连接')}</dd></div></dl>
-    {feedback.available === true ? calls.map(call => <div key={String(call.callId)}>
+    {hasOriginalCalls ? calls.map(call => <div key={String(call.callId)}>
       <dl className="pw-facts">
         <div><dt>实际协议</dt><dd>{String(call.protocol || '原回执未提供')}</dd></div>
+        {typeof call.requestedModel === 'string' && call.requestedModel && <div><dt>请求模型</dt><dd>{call.requestedModel}</dd></div>}
+        {typeof call.responseModel === 'string' && call.responseModel && <div><dt>回复模型</dt><dd>{call.responseModel}</dd></div>}
         <div><dt>兼容档案</dt><dd>{call.providerProjection?.compatProfileRevision ? `修订 ${call.providerProjection.compatProfileRevision}` : '原回执未记录档案'}</dd></div>
         <div><dt>缓存提示</dt><dd>{cacheHintText(call.providerProjection)}</dd></div>
         <div><dt>缓存读取</dt><dd>{cacheCounterText(call.cacheCounters?.CACHE_READ)}</dd></div>
@@ -74,7 +78,7 @@ export function ModelConnectionTestFeedback({ value }: { value: Row }) {
         {call.cacheCounters?.CACHE_WRITE_1H?.source === 'provider_reported' && <div><dt>1 小时写入</dt><dd>{cacheCounterText(call.cacheCounters.CACHE_WRITE_1H)}</dd></div>}
         <div><dt>实际费用</dt><dd>未知；用量不是账单</dd></div>
       </dl>
-    </div>) : <p className="pw-field-hint">尚无可核对的原始用量，缓存与费用保持未知。</p>}
+    </div>) : <p className="pw-field-hint">{proof.outcome === 'not_dispatched' ? '本次未发出，没有调用记录。' : '本机回执未提供可核对的调用记录。缓存用量与费用未知。'}</p>}
     </AccordionItem></Accordion>
   </section>;
 }

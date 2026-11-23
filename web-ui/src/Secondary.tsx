@@ -549,10 +549,11 @@ function ModelSettings({ state, connection, supported, run, adding = false, pres
       {bedrock && <p className="pw-field-hint" role="status">{bedrockNeedsSave ? '先保存这项连接和有效短期凭据，再测试已保存的原连接。' : '测试将使用已保存的原区域、模型和短期凭据。'} 本连接使用原生 Messages 请求，不添加缓存提示。</p>}
       {testResult && !stale && <div ref={testResultView} onTransitionEnd={event => {
         if (event.propertyName === 'height') testResultView.current?.scrollIntoView({ block: 'start' });
-      }}><ModelConnectionTestFeedback value={testResult} />
-        {testResult.inferenceReference?.taskId && <CapabilityAction action="tasks.open" supported={supported} run={run} args={{ id: testResult.inferenceReference.taskId }}>查看本次实际调用与用量</CapabilityAction>}
+      }}><ModelConnectionTestFeedback value={testResult} /></div>}
+      {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status">
+        <p>{testResult && !stale ? '' : '尚未取得可核对的测试回执，请返回原连接手动核对。'}本表单不会自动重试或再次发送。</p>
+        <Button variant="secondary" onClick={() => leaveEditor.current(onInspect)}>返回原连接核对</Button>
       </div>}
-      {unknownTest && <div ref={outcomeNotice} className="pw-request-notice" role="status"><p>原测试结果待核对；本表单不会自动重试或再次发送。请先核对原调用与连接，再明确开始新的测试。</p><Button variant="secondary" onClick={() => leaveEditor.current(onInspect)}>返回核对连接</Button></div>}
       {(formError || state.error) && <p role="alert" className="pw-field-error">{formError || text(state.error)}</p>}
       </div>
       <footer className="pw-model-editor-footer"><p className="pw-field-hint pw-model-test-cost">{adding ? '先保存服务，再选择用于新工作的模型。保存不会发送测试消息。' : '保存不会切换默认模型。推理测试可能产生费用。'}</p>

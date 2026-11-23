@@ -3,6 +3,7 @@ import { Button, CheckboxField, IconButton, TextField } from './forms-library';
 import { Drawer } from './shell-library';
 import { PressButton, ProgressBar } from './library';
 import { IconAdd, IconClose, IconSearch, IconShieldCheck } from './icons';
+import { bridge } from './bridge';
 import { exactFileKey, exactFileTarget, fileBytes, fileObject, fileRows, libraryFileOrigins, normalizedFileName, type FileJson } from './attachment-workspace';
 
 // Mirror the definite limits in AttachmentRequestProjection; final payload/budget stay native.
@@ -49,7 +50,22 @@ type Props = {
 export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, onClose, onCloseAutoFocus, onImport, onToggle, original }: Props) {
   const catalog = fileObject(inventory), focused = !!original;
   const [query, setQuery] = useState('');
-  useEffect(() => { if (!open || focused) setQuery(''); }, [open, focused]);
+  const [pickError, setPickError] = useState('');
+  const snapshot = bridge.getState(), input = snapshot.composer, picker = snapshot.state.chatAttachmentPickerRequest;
+  const addFromPhone = !focused && !!onImport && !!input?.ready && typeof picker === 'string' &&
+    snapshot.state.chatFilePickReadyFor === picker &&
+    snapshot.capabilities.commands.includes('attachments.pickForDraft');
+  useEffect(() => { setPickError(''); if (!open || focused) setQuery(''); }, [open, focused, picker]);
+  const pickForDraft = () => {
+    if (!addFromPhone || !input || importing) return;
+    setPickError('');
+    void bridge.command('attachments.pickForDraft', {key:input.key, epoch:input.epoch, revision:input.revision, pickerRequestId:picker})
+      .catch(error => {
+        const now = bridge.getState();
+        if (now.state.chatAttachmentPickerRequest === picker && now.composer?.key === input.key && now.composer?.epoch === input.epoch)
+          setPickError(error instanceof Error ? error.message : '没有确认打开文件选择，请核对当前输入。');
+      });
+  };
   const inventoryRows = useMemo(() => fileRows(catalog.attachments), [catalog.attachments]);
   const files = original ? inventoryRows.filter(row => row.id === original.fileId && row.sha256 === original.sha256) : inventoryRows;
   const needle = focused ? '' : normalizedFileName(query);
@@ -78,6 +94,8 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
           <IconButton icon={IconClose} aria-label="关闭附件选择" onClick={onClose}/>
         </header>
         <div className="pw-drawer-body">
+          {pickError ? <p className="pw-error" role="alert">{pickError}</p> : !focused && typeof snapshot.state.chatFilePickFeedback === 'string' &&
+            <p className="pw-muted" role="status">{snapshot.state.chatFilePickFeedback}</p>}
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
           {!focused && (files.length > 0 || query !== '') && <div role="search" aria-label="在当前附件清单中查找">
             <TextField label="文件名" leadingIcon={IconSearch} type="search" placeholder="查找当前清单" value={query}
@@ -111,12 +129,13 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
             })}
           </div>
           {!rows.length && !importing && <div className="pw-empty-small" role={needle ? 'status' : undefined}>
-            {needle ? '当前已读取的附件没有匹配的文件名。' : original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : '还没有附件，可以先导入。'}
+            {needle ? '当前已读取的附件没有匹配的文件名。' : original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : addFromPhone ? '从手机选照片、PDF 等文件，返回后可在草稿中移除或发送。' : '还没有附件，可以先导入。'}
           </div>}
           {rows.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}
         </div>
         <footer className="pw-drawer-actions">
-          {onImport && <Button variant="secondary" leadingIcon={IconAdd} disabled={importing} onClick={onImport}>{importing ? '正在导入…' : '导入新附件'}</Button>}
+          {onImport && <Button variant="secondary" leadingIcon={IconAdd} disabled={importing || (addFromPhone && choices.length >= maxSelections)}
+            onClick={addFromPhone ? pickForDraft : onImport}>{importing ? '正在导入…' : addFromPhone ? '从手机添加到草稿' : '导入到附件库'}</Button>}
           <span className="pw-grow"/>
           <PressButton label={choices.length ? '保留选择' : '返回输入'} onClick={onClose}/>
         </footer>

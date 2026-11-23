@@ -23,7 +23,14 @@ internal class PocketWebVoiceInput(
     fun dispatch(action: String, args: JSONObject): JSONObject? {
         when (action) {
             "voice.start" -> { require(args.optBoolean("phone") == phoneComposer.intent) { "原输入方式已变化" }; controller.startSystemVoiceInput(phoneComposer.intent) }
-            "voice.stop" -> controller.stopListening()
+            "voice.stop" -> {
+                // The microphone's Finish control carries the input mode. The
+                // dedicated Cancel control and navigation deliberately omit it.
+                if (args.has("phone")) {
+                    val phone = requiredBoolean(args, "phone"); require(phone == phoneComposer.intent) { "原输入方式已变化" }
+                    controller.finishSystemVoiceInput(phone)
+                } else controller.stopListening()
+            }
             "voice.review" -> {
                 val phone = requiredBoolean(args, "phone"); require(phone == phoneComposer.intent) { "原输入方式已变化" }
                 val draft = controller.composerDraft

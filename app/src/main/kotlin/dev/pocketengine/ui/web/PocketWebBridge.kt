@@ -15,6 +15,7 @@ import dev.pocketengine.EngineApplication.OwnerWorkControlRejected
 import dev.pocketengine.core.ModelConfig
 import dev.pocketengine.core.RuntimeDiagnostics
 import dev.pocketengine.features.attachments.OriginalReplyDocument
+import dev.pocketengine.features.automation.AutomationModule
 import dev.pocketengine.features.devices.DirectedPhoneTarget
 import dev.pocketengine.features.devices.DirectedWorkspaceTarget
 import dev.pocketengine.features.devices.NativeDeviceWorkspaceHost
@@ -355,6 +356,12 @@ internal class PocketWebBridge(
     private var reportDraftHandoff:ReportDraftHandoff?=null
     private val formDrafts = PocketWebFormDrafts(controller.webPresentationActivity().applicationContext)
     private val automation = PocketWebAutomation(controller)
+    private data class ReminderNotificationRead(val sequence: Long, val enabled: Boolean?, val afterSettings: Boolean)
+    private data class ReminderSettingsVisit(val document: String, val paused: Boolean = false)
+    private var reminderNotificationRead: ReminderNotificationRead? = null
+    private var reminderSettingsVisit: ReminderSettingsVisit? = null
+    private var reminderNotificationSequence = 0L
+    private var reminderNotificationEntry = 0L
     private val mcpImports = PocketWebMcp(controller)
     private val sourceReader = PocketWebSources(controller)
     private val messageQuotes = PocketWebMessageQuotes(controller)
@@ -525,7 +532,7 @@ internal class PocketWebBridge(
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
             "ownerWork.teamReport.read", "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
-            "attachments.pick", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
+            "attachments.pick", "attachments.pickForDraft", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original", "phone.result.taskOriginal",
             "phone.resultImage.held", "phone.result.original", "phone.resultNotice.read", "phone.resultNotice.set", "phone.activity.original", "phone.draft.original",
             "quickVoice.start", "quickVoice.save", "quickVoice.close", "quickVoice.return",
@@ -543,7 +550,7 @@ internal class PocketWebBridge(
             "accounts.beginLogin", "accounts.cancelLogin", "accounts.openAuthorization", "accounts.select", "accounts.refresh", "accounts.models", "accounts.retryPlanUsage", "accounts.model.review", "accounts.model.select", "accounts.logout.review", "accounts.logout.confirm", "accounts.setEnabled", "accounts.refreshAuthorization", "accounts.reauthorize", "accounts.acknowledgePlanWelcome", "accounts.manageUsage",
             "memoryReview.list", "memoryReview.getCandidate", "memoryReview.capacity", "memoryReview.history", "memoryReview.openSource",
             "memoryReview.candidates", "mcp.snapshot", "mcp.pickConfig", "mcp.cancel", "mcp.discoverImport", "mcp.discoverDirect", "mcp.reviewImport", "mcp.installImport", "mcp.reviewEnabled", "mcp.confirmEnabled", "mcp.read", "mcp.reviewGrant", "mcp.confirmGrant", "learning.snapshot", "groups.snapshot",
-            "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
+            "remote.probe", "remote.environments", "local.termuxProbe", "local.inspectRuntime", "local.readReceipts", "local.prepareCheckout", "local.describeCheckout", "local.terminal.review", "local.terminal.confirm", "local.terminal.query", "local.terminal.stop", "local.terminal.open", "local.terminal.read", "local.terminal.input", "local.terminal.inputReceipt", "local.terminal.close", "automation.receipts", "automation.list", "automation.notificationStatus", "automation.reviewSchedule", "automation.reviewRule", "automation.confirmReview", "automation.prepareOccurrence", "channels.inspect", "skills.read", "plugins.history", "proxy.status", "proxy.stop"
         ) + PocketWebSetup.COMMANDS + PocketWebModelConnectionCommands.COMMANDS + PocketWebAiSources.COMMANDS + PocketWebAiGroups.COMMANDS + PocketWebConversationModels.COMMANDS + PocketWebPermissionPolicy.COMMANDS + PocketWebData.COMMANDS + PocketWebConnections.COMMANDS + PocketWebMemoryDrafts.COMMANDS + setOf("conversation.drafts", "composer.firstMemory.save", "composer.oneLearning.save") + PocketWebKnowledge.COMMANDS + PocketWebPersonal.COMMANDS + PocketWebMessageQuotes.COMMANDS + PocketWebChannels.COMMANDS + PocketWebExperience.COMMANDS + PocketWebRouteReferences.COMMANDS + PocketWebSkills.COMMANDS + PocketWebPresentation.COMMANDS + PocketWebTeams.COMMANDS + PocketWebGroups.COMMANDS + PocketWebMedia.COMMANDS + PocketWebComposerModels.COMMANDS + PocketWebDevices.COMMANDS + PocketWebReceivedTextResult.COMMANDS + PocketWebPlugins.COMMANDS + PocketWebRealtime.COMMANDS + PocketWebProxy.COMMANDS + PocketWebPlans.COMMANDS + PocketWebCommitments.COMMANDS + PocketWebTokenBudgets.COMMANDS + PocketWebProfiles.COMMANDS + PocketWebProjectDraftDifference.COMMANDS + PocketWebProjectWork.COMMANDS + PocketWebProjectPreview.COMMANDS + PocketWebPhoneViewer.COMMANDS + PocketWebBackground.COMMANDS + PocketWebMemoryHistory.COMMANDS + PocketWebModelDiagnostics.COMMANDS + PocketWebDeveloperLogs.COMMANDS + PocketWebAttachments.COMMANDS + PocketWebRemoteTasks.COMMANDS + PocketWebTeamEvidence.COMMANDS + PocketWebConversationOrganization.COMMANDS + PocketWebTaskCapabilities.COMMANDS + PocketWebPhoneControl.COMMANDS + PocketWebDeviceTaskScope.COMMANDS + PocketWebProjectRuntime.COMMANDS + PocketWebProjectLivePreview.COMMANDS + PocketWebRemoteInbox.COMMANDS + PocketWebProjectDevelopment.COMMANDS + dev.pocketengine.ui.ProjectFormalDrafts.COMMANDS + dev.pocketengine.ui.ProjectFormalFileExport.COMMANDS + PocketWebProjectGitImport.COMMANDS + PocketWebButlerPreparations.COMMANDS + PocketWebWorkSearch.COMMANDS + PocketWebFormDrafts.COMMANDS
     }
 
@@ -571,7 +578,52 @@ internal class PocketWebBridge(
         projectLivePreview = PocketWebProjectLivePreview(controller, container, ::captureWindow, ::acceptsWindow) { publishState() }
         remoteTasks.attachPreview(container)
     }
-    fun foreground(value: Boolean) { if (!value) { retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
+    private fun reminderNotificationWindow(): Boolean {
+        val shown = controller.state
+        return !closed && documentId != null && section == "automation" && taskViewId == null &&
+            taskReturnSection == null && controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+            controller.queuedInputsPage == null && !attachmentPages.hasOpenWorkspace && !controller.attachmentOutcomes.state.open &&
+            !shown.chatAttachmentPickerOpen
+    }
+
+    private fun clearReminderNotificationWindow() {
+        reminderNotificationEntry++
+        reminderSettingsVisit = null
+        reminderNotificationRead = null
+    }
+
+    private fun notificationAvailability(): Boolean? =
+        runCatching { AutomationModule.notificationAvailability(controller.webPresentationActivity()) }.getOrNull()
+
+    private fun readReminderNotifications(afterSettings: Boolean, enabled: Boolean? = notificationAvailability()) {
+        // Never treat a newer rule-list sequence as a new Android permission read.
+        reminderNotificationRead = ReminderNotificationRead(++reminderNotificationSequence, enabled, afterSettings)
+        publishState()
+    }
+
+    private fun reminderNotificationForeground(visible: Boolean) {
+        if (!visible) {
+            reminderNotificationRead = null
+            reminderSettingsVisit = reminderSettingsVisit?.takeIf { it.document == documentId && section == "automation" }
+                ?.copy(paused = true)
+            return
+        }
+        val document = documentId ?: return
+        if (section != "automation") return
+        val entry = reminderNotificationEntry
+        val visit = reminderSettingsVisit
+        // PocketWebHost resumes before the controller marks the owner foreground.
+        // Read afterward on the same main queue, in the original reminder window.
+        main.post {
+            if (document != documentId || entry != reminderNotificationEntry || !reminderNotificationWindow() ||
+                reminderSettingsVisit !== visit) return@post
+            val afterSettings = visit != null && visit.paused && visit.document == document
+            reminderSettingsVisit = null
+            readReminderNotifications(afterSettings)
+        }
+    }
+
+    fun foreground(value: Boolean) { reminderNotificationForeground(value); if (!value) { retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value) }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
 
     fun close() {
@@ -762,6 +814,7 @@ internal class PocketWebBridge(
         if (documentReplaced) routeReferences.clear() else routeReferences.background()
         if (documentReplaced) { controller.webChannels.clear(); controller.webSkills.clear() } else { controller.webChannels.background(); controller.webSkills.background() }
         if (documentReplaced) {
+            clearReminderNotificationWindow()
             controller.projectPackages.retireDirectViteExport()
             // A replacement document did not choose this project namespace. Normal backgrounding is not an exit.
             if (section == "memory" || section == "memoryReview") { controller.leaveOwnerDomain("memoryReview"); section = null }
@@ -817,6 +870,12 @@ internal class PocketWebBridge(
                     JSONObject().put("requestId",it.request).put("draftKey",it.key).put("draftEpoch",it.epoch).put("sourceWindow",it.sourceWindow)
                         .put("file",PocketWebState.attachment(it.file)).put("checking",replyPickerChecking!=null))
             }
+            controller.chatFilePickFeedback?.takeIf { it.first == controller.chatAttachmentPickerRequest() }?.let {
+                projection?.getJSONObject("state")?.put("chatFilePickFeedback", it.second)
+            }
+            if (chatFilePickSurface()) controller.chatAttachmentPickerRequest()?.takeIf(controller::chatFilePickReady)?.let {
+                projection?.getJSONObject("state")?.put("chatFilePickReadyFor", it)
+            }
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
             }
@@ -862,6 +921,10 @@ internal class PocketWebBridge(
         }
         val snapshot = projection ?: return
         val projectedState = snapshot.getJSONObject("state")
+        if (reminderNotificationWindow()) reminderNotificationRead?.let { read ->
+            projectedState.put("reminderNotificationAccess", JSONObject().put("sequence", read.sequence)
+                .put("enabled", read.enabled ?: JSONObject.NULL).put("afterSettings", read.afterSettings))
+        }
         projectedState.put("modelSelectionBusy", modelSelectionBusy || controller.modelSelectionPending())
         projectedState.put("modelSelectionRevision", controller.modelSelectionRevision)
         projectedState.put("conversationModel", runCatching { controller.conversationModelPreference() }.getOrElse { JSONObject().put("available", false).put("message", it.message ?: "原对话模型偏好尚未准备") })
@@ -1252,7 +1315,7 @@ internal class PocketWebBridge(
             if(action=="attachments.toggle"&&replyPicker!=null){
                 toggleReplyPicker(id,args);return
             }
-            if(action in setOf("attachments.openPicker","attachments.pick","attachments.toggle")){
+            if(action in setOf("attachments.openPicker","attachments.pick","attachments.pickForDraft","attachments.toggle")){
                 check(replyPicker==null&&replyPickerOpening==null){"请先关闭这份原答复的附件选择"}
             }
             if (action == "attachments.open" || action == "conversation.reader.attachment") {
@@ -3315,12 +3378,14 @@ internal class PocketWebBridge(
                 val nextDocument = requiredString(args, "documentId")
                 require(nextDocument.length <= 120)
                 if (nextDocument != documentId) {
+                    clearReminderNotificationWindow()
                     retireReplyPicker()
                     controller.projectPackages.retireDirectViteExport()
                     controller.projectFileImports.retireSuppliedLock()
                     controller.closeOriginalReminderHistory()
                     documentId = nextDocument; background.clear(); remoteInbox.clear(); phoneViewer.clear(); phoneComposer.documentChanged(); taskHistory.clear(); controller.webChannels.clear(); controller.webSkills.clear(); reviews.clear(); phoneComposer.clearReviews(); voiceInput.clear(); modelReviews.clear(); automation.clear(); executionReviews.clear(); mcpImports.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.invalidateDraftReturn(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.invalidate(); composerModels.clear(); aiSources.clear(); conversationModels.clear()
                     controller.voiceInputTypeChanged(phoneComposer.intent)
+                    if (reminderNotificationWindow()) readReminderNotifications(afterSettings = false)
                 }
                 return JSONObject().put("ready", true).put("source", "library-web")
             }
@@ -3455,6 +3520,18 @@ internal class PocketWebBridge(
                 controller.switchFromConversationReader(page.window)
             }
             "attachments.pick" -> { requireComposer(args, optional = true); controller.pickAttachments() }
+            "attachments.pickForDraft" -> {
+                checkedPayload(args, setOf("key", "epoch", "revision", "pickerRequestId"))
+                requireComposer(args); requireAttachmentDraft(args)
+                val document = requireNotNull(documentId)
+                val picker = requiredString(args, "pickerRequestId")
+                // The system document chooser pauses the WebView. Keep only this
+                // ordinary picker's identity, never its old command window or a grant.
+                fun original() = documentId == document && chatFilePickSurface() && runCatching {
+                    requireComposer(args); requireAttachmentDraft(args)
+                }.isSuccess
+                controller.pickFilesForChatDraft(picker, ::original)
+            }
             "attachments.openPicker" -> {
                 val exact = args.has("revision")
                 requireComposer(args, optional = !exact)
@@ -3579,6 +3656,36 @@ internal class PocketWebBridge(
             "settings.saveLocalObservation" -> controller.saveLocalObservation(requiredBoolean(args, "capture"), requiredBoolean(args, "ocr"))
             "settings.openSystem" -> when (requiredString(args, "section")) {
                 "accessibility" -> controller.openAccessibility(); "notifications" -> controller.openNotifications()
+                "reminderNotifications" -> {
+                    checkedPayload(args, setOf("section", "sequence"))
+                    val activity = controller.webPresentationActivity()
+                    check(reminderNotificationWindow() && activity.hasWindowFocus() && reminderSettingsVisit == null) {
+                        "请返回原提醒页面，再打开系统通知设置。"
+                    }
+                    val prior = reminderNotificationRead
+                    check(prior != null && prior.enabled == false && prior.sequence == requiredLong(args, "sequence")) {
+                        "提醒的通知状态已变化，请在原页面核对。"
+                    }
+                    val enabled = notificationAvailability()
+                    if (enabled != false) {
+                        readReminderNotifications(afterSettings = false, enabled = enabled)
+                        return JSONObject().put("status", "notification_state_changed").put("grantVerified", false)
+                    }
+                    // Launch settings, never an Android runtime grant prompt.
+                    val settings = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                    val unavailable = "暂时无法打开系统通知设置。请在 Android 设置中找到 PocketWorld，再核对「私人提醒」。"
+                    val visit = ReminderSettingsVisit(requireNotNull(documentId))
+                    try {
+                        val target = activity.packageManager.resolveActivity(settings,
+                            PackageManager.MATCH_DEFAULT_ONLY or PackageManager.MATCH_SYSTEM_ONLY)?.activityInfo ?: error(unavailable)
+                        activity.startActivity(settings.setComponent(ComponentName(target.packageName, target.name)))
+                    } catch (_: ActivityNotFoundException) { error(unavailable) }
+                    catch (_: SecurityException) { error(unavailable) }
+                    // Only a successful launch can arm the actual pause/resume witness.
+                    reminderSettingsVisit = visit
+                    return JSONObject().put("status", "settings_opened").put("grantVerified", false)
+                }
                 "wireless" -> controller.openWirelessSettings(); "background" -> controller.openBackgroundSetup()
                 "wirelessAboutDevice" -> {
                     checkedPayload(args, setOf("section"))
@@ -3713,6 +3820,18 @@ internal class PocketWebBridge(
             "local.inspectRuntime", "local.readReceipts" -> {
                 requireSection("local"); checkedPayload(args, emptySet())
                 return accepted(controller.requestFeature("local", if (action == "local.inspectRuntime") "probe" else "listJobs"))
+            }
+            "automation.notificationStatus" -> {
+                checkedPayload(args, emptySet())
+                check(reminderNotificationWindow() && controller.webPresentationActivity().hasWindowFocus()) {
+                    "请返回原提醒页面，再核对通知状态。"
+                }
+                // In split screen an external Settings window may open without pausing this Activity.
+                // A focused, explicit retry can clear that visit, but cannot claim a Settings return.
+                if (reminderSettingsVisit?.paused == false) reminderSettingsVisit = null
+                readReminderNotifications(afterSettings = reminderNotificationRead?.afterSettings == true)
+                // The private window projection, not a replayable command acknowledgement, owns the observation.
+                return accepted()
             }
             in PocketWebAutomation.COMMANDS -> {
                 if (action in setOf("automation.list", "automation.receipts") && section == "profile") check(controller.webPrivateOwnerVisible())
@@ -4249,7 +4368,10 @@ internal class PocketWebBridge(
         if (next == "memory") controller.enterOwnerDomain("memoryReview") else if (next in ownerDomains) controller.enterOwnerDomain(next) else controller.refresh()
         if (next == "models") readModelSnapshot()
         when (next) {
-            "automation" -> { controller.requestFeature("automation", "list"); controller.requestFeature("automation", "receipts") }
+            "automation" -> {
+                if (reminderNotificationWindow()) readReminderNotifications(afterSettings = false)
+                controller.requestFeature("automation", "list"); controller.requestFeature("automation", "receipts")
+            }
             "commitments" -> controller.requestFeature("automation", "receipts")
             "channels" -> controller.requestFeature("channels", "inspect")
         }
@@ -4606,6 +4728,7 @@ internal class PocketWebBridge(
     private fun requireTask(id: String): UiTask = controller.state.tasks.firstOrNull { it.id == id } ?: error("原任务不在当前读取窗口，请刷新后重新打开")
     private fun leaveTask() { retireKeptStaticPages(); controller.projectPackages.retireDirectViteExport(); pythonOutput.clear();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;projectPreview?.retireLocalWork();projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();dependencyComparison=null;projectGoal=null; phoneViewer.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); composerModels.clear(); taskViewId = null; controller.closeWebTaskView(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.leave(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); commandFence.invalidate(); taskReviewGeneration++; taskPage?.let(controller::leaveGroupTask); taskPage = null }
     private fun leaveConnection() {
+        clearReminderNotificationWindow()
         retireKeptStaticPages()
         controller.closeOriginalReminderHistory()
         openedRetainedDraftCopy = null
@@ -4643,6 +4766,10 @@ internal class PocketWebBridge(
     }
 
     private fun requireSection(expected: String) { require(section == expected) { "原能力窗口已关闭，请重新进入" } }
+    private fun chatFilePickSurface() = !closed && documentId != null && section == null && taskViewId == null &&
+        !phoneComposer.intent && !controller.hasChannelPhoneOrigin && controller.queuedInputsPage == null &&
+        !controller.attachmentOutcomes.state.open && controller.state.filePath == null &&
+        replyPicker == null && replyPickerOpening == null
     private fun requireAttachmentDraft(args: JSONObject) {
         check(section == null && taskViewId == null && controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
             !controller.state.chatBusy && !controller.state.chatSubmitting && !controller.state.phoneSubmitting &&

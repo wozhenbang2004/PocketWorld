@@ -1,12 +1,26 @@
 package dev.pocketengine.ui
 
 import dev.pocketengine.store.TaskStore
+import dev.pocketengine.features.assistant.AttachmentRequestProjection
+import dev.pocketengine.features.attachments.AttachmentBook
 import org.json.JSONArray
 import org.json.JSONObject
 
 internal data class UiChatAttachment(val id:String,val sha256:String,val name:String,val mimeType:String,val size:Long){fun selection():JSONObject=JSONObject().put("id",id).put("sha256",sha256)}
 internal object ChatInputRules {
  fun attachment(row:JSONObject):UiChatAttachment?=try{val id=row.getString("id");val sha=row.getString("sha256");if(!id.matches(Regex("[a-fA-F0-9-]{36}"))||!sha.matches(Regex("[a-f0-9]{64}")))null else UiChatAttachment(id,sha,row.optString("name","附件"),row.getString("mimeType"),row.getLong("size"))}catch(_:Exception){null}
+ /** Same definite exclusions as the ordinary picker. Draft staging reads no file bytes;
+  * AttachmentRequestProjection still verifies the model, contents and aggregate budget on Send. */
+ fun pickedFileLimit(file:UiChatAttachment,model:JSONObject):String? = when {
+  file.size !in 1L..AttachmentBook.MAX_FILE_BYTES -> "空文件或超过20 MiB的文件不能加入这条消息。"
+  file.mimeType.startsWith("image/") && file.mimeType !in setOf("image/png","image/jpeg","image/webp") -> "普通对话只接收 PNG、JPEG 或 WebP 图片。"
+  file.mimeType.startsWith("image/") && file.size > AttachmentRequestProjection.MAX_IMAGE_BYTES -> "图片超过4 MiB，请选较小的版本。"
+  file.mimeType.startsWith("image/") && (model.optString("modelRoute")=="account" && model.opt("sendScreenshots")==false || model.opt("supportsImageInput")!=true) ->
+    "当前模型或账号连接没有确认接收图片，可从输入框核对。"
+  (file.mimeType.startsWith("audio/") || file.mimeType.startsWith("video/")) && file.size > AttachmentRequestProjection.MAX_DOCUMENT_BYTES ->
+    "普通对话无法分段读取音视频，可以改附文字稿或截图。"
+  else -> null
+ }
  fun fingerprint(text:String,conversation:String?,mode:String,files:List<UiChatAttachment>,sourceRefs:JSONArray=JSONArray(),previewRefs:JSONArray=JSONArray(),objectRefs:JSONArray=JSONArray(),firstPaused:Boolean=false,excludeThis:Boolean=false,lockDefaults:Boolean=false):String {
   val checked=dev.pocketengine.features.assistant.OwnerSourceReferences.checked(sourceRefs)
   val previews=dev.pocketengine.features.local.preview.PreviewElementRef.checked(previewRefs)

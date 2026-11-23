@@ -19,6 +19,8 @@ import java.io.File
 import android.net.Uri
 import dev.pocketengine.features.attachments.AttachmentsModule
 import dev.pocketengine.features.attachments.OwnerAttachmentImport
+import dev.pocketengine.features.attachments.AttachmentRepository
+import dev.pocketengine.features.assistant.AttachmentRequestProjection
 import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
 import dev.pocketengine.features.assistant.OwnerComposerStore
@@ -1013,6 +1015,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     private var attachmentComposerKey: String? = null
     private var attachmentComposerEpoch = -1
     private var attachmentPickerListRequest: String? = null
+    private data class AttachmentDraftModel(val scope: String, val preferenceRevision: Long, val globalRevision: Long)
+    private var attachmentDraftModel: AttachmentDraftModel? = null
+    // A restored OS picker may finish importing, but cannot adopt the next open draft.
+    private data class ChatFilePick(val request: String, val picker: String, val current: () -> Boolean)
+    private var chatFilePick: ChatFilePick? = null
+    internal var chatFilePickFeedback by mutableStateOf<Pair<String, String>?>(null)
+        private set
     private var attachmentPagingDeniedAt: Long? = null
     private data class OriginalSourceStage(val key:String,val revision:Long,val viewEpoch:Int,val conversation:String)
     private val originalSourceStages=mutableMapOf<String,OriginalSourceStage>()
@@ -1557,6 +1566,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             model.pending().none { it.draftKey == draft.key }
     }
 
+    private fun ordinaryAttachmentDraft(draft: OwnerComposerState.Draft): Boolean {
+        val conversation = state.conversationId ?: return ordinaryNewAttachmentDraft(draft)
+        val model = ownerComposer ?: return false
+        return model.active() === draft && draft.key == "conversation:$conversation" && draft.conversationId == conversation &&
+            model.independentReportFollowUpKey() != draft.key && model.pending().none { it.draftKey == draft.key }
+    }
+
     internal fun prepareIndependentReportFollowUp(task:String,proof:TaskStore.OwnerWorkReportQuote,
                                                   visible:()->Boolean,done:(JSONObject?,String?)->Unit) {
         val model=ownerComposer?:error("原草稿还在恢复")
@@ -1795,16 +1811,12 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     internal fun matchesComposerTeamReplacement(key:String, viewEpoch:Int, revision:Long, fromTeamId:String):Boolean {
         val model=ownerComposer?:return false
         val draft=model.active()
-        val conversation=state.conversationId
         if(!webPrivateOwnerVisible()||webTaskViewId!=null||conversationReader!=null||hasChannelPhoneOrigin||
             state.filePath!=null||attachmentOutcomes.state.open||state.chatAttachmentPickerOpen||queuedInputsPage!=null||
             state.chatBusy||state.chatSubmitting||state.phoneSubmitting||state.listening||voiceInput.active()||
             voiceInput.snapshot().optBoolean("reviewAvailable")||firstHostSave!=null||
             draft.key!=key||draft.revision!=revision||chatViewEpoch!=viewEpoch||draft.text.isBlank()||draft.voiceText.isNotEmpty())return false
-        val ordinary=if(conversation==null)ordinaryNewAttachmentDraft(draft) else
-            draft.key=="conversation:$conversation"&&draft.conversationId==conversation&&model.independentReportFollowUpKey()!=key&&
-                model.pending().none { it.draftKey==key }
-        if(!ordinary)return false
+        if(!ordinaryAttachmentDraft(draft))return false
         val refs=draft.objectRefs().objects()
         return refs.none { it.opt("kind")=="work" }&&refs.filter { it.opt("kind")=="team" }.singleOrNull()?.opt("id")==fromTeamId
     }
@@ -1867,20 +1879,35 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun setChatSendMode(mode:String,key:String,viewEpoch:Int) { if(composerDraft?.key==key&&chatViewEpoch==viewEpoch&&mode in setOf("queue","steer")) editComposerSelection(mode,state.selectedChatAttachments) }
     fun openChatAttachmentPicker(): String? = openChatAttachmentPicker(null)
     internal fun openOriginalReplyAttachmentPicker(closeOriginal: () -> Boolean): String? = openChatAttachmentPicker(closeOriginal)
+    private fun currentAttachmentDraftModel(scope: String): AttachmentDraftModel? {
+        val coordinator = app.settings.modelSelection()
+        val global = coordinator.status()
+        if (global.pending()) return null
+        return runCatching {
+            val revision = app.conversationModels().snapshot(scope).getLong("revision")
+            AttachmentDraftModel(scope, revision, global.revision()).takeIf { coordinator.status() == global }
+        }.getOrNull()
+    }
     private fun openChatAttachmentPicker(closeOriginal: (() -> Boolean)?): String? {
         val draft=composerDraft ?: run{state=state.copy(error="请等待原私聊草稿读取完成");return null}
         if(!refreshCurrentConversationTurn())return null
+        val scope = if(draft.conversationId.isNotBlank())
+            dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(draft.conversationId)
+            else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(draft.key)
+        // Compare both model revisions around the same local read that supplies picker metadata.
+        val before = if (closeOriginal == null && state.chatActiveTurn == null && ordinaryAttachmentDraft(draft))
+            currentAttachmentDraftModel(scope) else null
         val model=try {
             state.chatActiveTurn?.let { app.chatInputModel(it).also { current ->
                 check(current.optBoolean("available")) { "原回复正在收尾，请稍后重新选择附件" }
-            } } ?: app.conversationInputModel(if(draft.conversationId.isNotBlank())
-                dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(draft.conversationId)
-                else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(draft.key))
+            } } ?: app.conversationInputModel(scope)
         } catch(error:Exception) { state=state.copy(error=message(error));return null }
         // The exact original reader remains mounted on failure or stale draft. Only a
         // fully admitted same-source transition may open the single-row picker.
         if(closeOriginal!=null&&!closeOriginal())return null
         attachmentComposerKey=draft.key;attachmentComposerEpoch=chatViewEpoch
+        attachmentDraftModel = before?.takeIf { it == currentAttachmentDraftModel(scope) }
+        chatFilePickFeedback = null
         // Only a known saved prohibition for the next ordinary draft, never a verdict
         // about an active run's captured permissions or a grant to read this document.
         attachmentPagingDeniedAt = if (attachmentPagingDraftCurrent()) runCatching {
@@ -1913,8 +1940,18 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             runCatching { app.settings.permissionPolicyRevision() == revision }.getOrDefault(false)
     }
     internal fun chatAttachmentPickerRequest():String? = attachmentPickerListRequest.takeIf { state.chatAttachmentPickerOpen }
+    internal fun chatFilePickReady(picker: String): Boolean {
+        val model = attachmentDraftModel ?: return false
+        val draft = composerDraft ?: return false
+        return picker == chatAttachmentPickerRequest() && attachmentPagingDraftCurrent() && ordinaryAttachmentDraft(draft) &&
+            !state.phoneSubmitting && firstHostSave == null && !independentReportDraftBusy &&
+            model == currentAttachmentDraftModel(model.scope)
+    }
     fun closeChatAttachmentPicker(request: String? = null) {
         check(request == null || request == chatAttachmentPickerRequest()) { "原附件选择已关闭，没有关闭其他选择" }
+        if (chatFilePick?.picker == attachmentPickerListRequest) chatFilePick = null
+        chatFilePickFeedback = null
+        attachmentDraftModel = null
         attachmentPickerListRequest = null
         attachmentPagingDeniedAt = null
         state=state.copy(chatAttachmentPickerOpen=false)
@@ -3340,6 +3377,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             })
         voiceComposerKey=captureComposer
     }
+    internal fun finishSystemVoiceInput(phone:Boolean) {
+        voiceInput.requestFinal(voiceTarget(phone),voiceOwnerAuthority()) { owner -> activity.media.finishDraftListening(owner) }
+    }
     fun stopListening() { if(voiceInput.active())voiceInput.cancel(voiceInput.snapshot().optString("inputId")) else activity.media.stopListening() }
     fun canReviewVoiceDraft(phone:Boolean)=voiceInput.canReview(voiceTarget(phone))
     fun useVoiceDraft(inputId:String,text:String,phone:Boolean):String? = try {
@@ -3466,8 +3506,59 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun openBrowserResearch() { native("openBrowserResearch") }
     fun openBrowserResearch(taskId: String) { native("openBrowserResearch", JSONObject().put("taskId", taskId)) }
     fun pickAttachments(projectId: String? = null) { activity.pickAttachments(null, projectId) }
+    internal fun pickFilesForChatDraft(picker: String, current: () -> Boolean) {
+        check(current() && chatFilePickReady(picker)) { "原输入或模型已变化，请回输入框重新打开附件选择" }
+        check(state.selectedChatAttachments.size < AttachmentRequestProjection.MAX_ATTACHMENTS) { "每条消息最多选择4个附件" }
+        check(chatFilePick == null && !state.attachmentImporting) { "请先完成上一次文件选择" }
+        val target = OwnerAttachmentImport.Target(null, null)
+        val pick = ChatFilePick(target.requestId, picker, current)
+        chatFilePickFeedback = null
+        chatFilePick = pick
+        val launched = try { activity.pickAttachments(target) }
+        catch (error: Exception) { if (chatFilePick === pick) chatFilePick = null; throw error }
+        if (launched != AttachmentImportPicker.Launch.REQUESTED) {
+            if (launched != AttachmentImportPicker.Launch.UNKNOWN && chatFilePick === pick) chatFilePick = null
+            error(state.error ?: "尚未确认打开原文件选择")
+        }
+    }
+    private fun takeChatFilePick(original: OwnerAttachmentImport.Target?): ChatFilePick? =
+        chatFilePick?.takeIf { it.request == original?.requestId }?.also { chatFilePick = null }
+
+    private fun stagePickedChatFiles(pick: ChatFilePick, receipt: OwnerAttachmentImport.Receipt, files: List<UiChatAttachment>?) {
+        if (receipt.imported == 0) {
+            if (chatAttachmentPickerRequest() == pick.picker)
+                chatFilePickFeedback = pick.picker to "没有文件成功导入，草稿未改动。可检查文件权限后重新选择。"
+            return
+        }
+        fun keepOnly(reason: String) {
+            val notice = "已保存到附件库。$reason 草稿未改动。"
+            if (chatAttachmentPickerRequest() == pick.picker) chatFilePickFeedback = pick.picker to notice
+            state = state.copy(notice = notice)
+        }
+        if (!pick.current() || !chatFilePickReady(pick.picker)) {
+            keepOnly("原输入、模型或附件选择已变化，可回「添加附件」勾选，不必再导入。")
+            return
+        }
+        if (receipt.error != null) { keepOnly("有文件未能完整导入，可从清单逐个选择。"); return }
+        if (receipt.imported > AttachmentRequestProjection.MAX_ATTACHMENTS) { keepOnly("每条消息最多4个附件，可从清单选择。"); return }
+        if (files == null || files.size != receipt.imported) { keepOnly("原件版本未核对，可从清单重新选择。"); return }
+        val previous = state.selectedChatAttachments
+        val next = previous.toMutableList()
+        for (file in files) {
+            val held = next.firstOrNull { it.id == file.id }
+            if (held != null && held != file) { keepOnly("草稿中已有该附件的另一版本。"); return }
+            if (held == null) next.add(file)
+            val rejection = ChatInputRules.pickedFileLimit(file, state.chatAttachmentModel)
+            if (rejection != null) { keepOnly(rejection); return }
+        }
+        if (next.size > AttachmentRequestProjection.MAX_ATTACHMENTS) { keepOnly("加上已有附件会超过4个，可从清单选择。"); return }
+        if (next != previous) editComposerSelection(state.chatSendMode, next)
+        if (state.selectedChatAttachments != next) { keepOnly("没有确认加入这条输入，可从清单重新勾选。"); return }
+        closeChatAttachmentPicker(pick.picker)
+        state = state.copy(notice = "附件已加入这条草稿，尚未发送。")
+    }
     internal fun attachmentImportContextUnavailable() { attachmentOutcomes.libraryImportContextUnavailable(); state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
-    internal fun attachmentImportSelectionEnded(cancelled: Boolean, original: OwnerAttachmentImport.Target? = null) { attachmentOutcomes.libraryImportSelectionEnded(original,cancelled); state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
+    internal fun attachmentImportSelectionEnded(cancelled: Boolean, original: OwnerAttachmentImport.Target? = null) { takeChatFilePick(original); attachmentOutcomes.libraryImportSelectionEnded(original,cancelled); state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
     internal fun attachmentImportPickerStatus(status: AttachmentImportPicker.Launch) {
         state = when (status) {
             AttachmentImportPicker.Launch.REQUESTED -> state.copy(notice = null, error = null)
@@ -3480,6 +3571,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun importAttachments(intent: Intent, original: OwnerAttachmentImport.Target?) {
         if (closed) return
         val received = Intent(intent)
+        val draftPick = takeChatFilePick(original)
         attachmentOutcomes.libraryImportSelected(original)
         state = state.copy(attachmentImporting = true, notice = null, error = null)
         try { io.execute {
@@ -3488,10 +3580,23 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 val receipt = OwnerAttachmentImport.receive(module, received, original) { task, file ->
                     app.selectOutcomeForTask(task, file.getString("id"), file.getString("sha256"), dev.pocketengine.core.RunControl())
                 }
+                val files = if (draftPick != null && receipt.error == null && receipt.imported in 1..AttachmentRequestProjection.MAX_ATTACHMENTS) runCatching {
+                    val book = AttachmentRepository.get(app).book
+                    receipt.registration().getJSONArray("files").objects().map { ref ->
+                        val id = ref.getString("id")
+                        module.requireOwnerAttachment(id)
+                        val row = book.get(id)
+                        check(row.getString("sha256") == ref.getString("sha256") && row.getString("id") == id &&
+                            row.getString("principalId") == "owner" && row.getString("spaceId") == "private" &&
+                            !row.getJSONObject("source").has("groupSpaceId") && !row.optBoolean("outputSourceRetired"))
+                        requireNotNull(ChatInputRules.attachment(row))
+                    }
+                }.getOrNull() else null
                 main.post {
                     if (!closed) {
                         state = state.copy(attachmentImporting = false, notice = receipt.notice, error = receipt.error)
                         attachmentOutcomes.imported(original,receipt)
+                        if (draftPick != null) stagePickedChatFiles(draftPick, receipt, files)
                     }
                 }
                 // A display-refresh failure cannot turn already saved bytes into an import failure.

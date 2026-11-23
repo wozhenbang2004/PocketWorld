@@ -66,13 +66,18 @@ public final class AutomationModule implements EngineModule {
         restore(context.android,false);
     }
     @Override public String id(){return "automation";}
+    /** Reads app/channel state only. A missing channel is not a disabled one; the original delivery path creates it when needed. */
+    public static Boolean notificationAvailability(Context context){
+        NotificationManager manager=context.getSystemService(NotificationManager.class);
+        if(manager==null)return null;
+        NotificationChannel channel=manager.getNotificationChannel(CHANNEL);
+        return manager.areNotificationsEnabled()&&(channel==null||channel.getImportance()!=NotificationManager.IMPORTANCE_NONE);
+    }
     @Override public JSONObject snapshot()throws Exception {
         reconcileNativeScheduleSources();
         JSONObject projection=ruleProjection();
-        NotificationManager manager=context.android.getSystemService(NotificationManager.class);
-        NotificationChannel channel=manager==null?null:manager.getNotificationChannel(CHANNEL);
         return projection.put("available",true)
-                .put("notificationsEnabled",manager!=null&&manager.areNotificationsEnabled()&&(channel==null||channel.getImportance()!=NotificationManager.IMPORTANCE_NONE))
+                .put("notificationsEnabled",Boolean.TRUE.equals(notificationAvailability(context.android)))
                 .put("timing","inexact_best_effort").put("autonomousPhoneExecution",false)
                 .put("commitmentsSupported",true).put("commitmentFollowUpMode","read_only_candidates")
                 .put("completionEvidenceAvailable",commitments.completionEvidenceAvailable())

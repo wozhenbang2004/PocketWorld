@@ -93,6 +93,13 @@ public final class MediaController implements AutoCloseable,VoiceCompanionTurn.A
         }catch(RuntimeException unavailable){stopListeningInternal();speechFailure(result,"recognition_unavailable","语音识别暂时不可用，请检查系统语音服务。");emitState();}
     }
     public void stopListening(){onMain(this::stopListeningInternal);}
+    /** Finish speech for this exact dictation lease without canceling its final callback. */
+    public void finishDraftListening(String owner){
+        if(Looper.myLooper()!=Looper.getMainLooper())throw new IllegalStateException("听写收尾必须从原输入窗口发起");
+        if(!ownsRealtimeAudio(owner)||!owner.equals(recognitionOwner)||ownedRecognition==null||
+                ownedRecognition.isDone()||recognition==null||!listening)return;
+        recognition.stopListening();
+    }
     private boolean stopListeningInternal(){
         awaitingPermission=false;recognitionEpoch++;CompletableFuture<String> pending=ownedRecognition;ownedRecognition=null;String owner=recognitionOwner;recognitionOwner=null;SpeechRecognizer current=recognition;recognition=null;listening=false;boolean confirmed=true;
         if(current!=null){try{current.cancel();}catch(RuntimeException failure){confirmed=false;}try{current.destroy();}catch(RuntimeException failure){confirmed=false;}}

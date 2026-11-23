@@ -3,6 +3,7 @@ package dev.pocketengine.media.voice.input;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import org.json.JSONObject;
 
 /** One explicit system-ASR capture and one reviewed draft. No submission queue, TaskStore or Runner. */
@@ -62,6 +63,22 @@ public final class VoiceDraftInput implements AutoCloseable {
                 });
             }catch(Exception stopped){finish(capture,null);}
         });}catch(Exception unavailable){withoutLease(capture);}
+    }
+    /** Explicit Finish waits for the same recognizer's final result and existing cleanup/timeout. */
+    public void requestFinal(Target visible,Authority currentOwner,Consumer<String> endSpeech)throws Exception{
+        currentOwner.check();Capture capture;
+        synchronized(gate){
+            capture=current;
+            if(capture==null||capture.done||capture.cancelled||capture.cleaning||!"listening".equals(phase))return;
+            if(!capture.target.sameInput(visible)||capture.target.viewEpoch!=visible.viewEpoch)throw new IllegalStateException("原听写输入已变化");
+        }
+        capture.authority.check();
+        synchronized(gate){
+            if(current!=capture||capture.done||capture.cancelled||capture.cleaning||!"listening".equals(phase))return;
+            phase="finalizing";message="正在等待系统最终文字，尚未发送";
+        }
+        signal();
+        try{endSpeech.accept(capture.id);}catch(RuntimeException unavailable){finish(capture,null);}
     }
     /** Ends capture/observation only; nothing in this class has task cancellation authority. */
     public void cancel(String inputId){Capture capture;synchronized(gate){capture=current;if(capture==null||!capture.id.equals(inputId))throw new IllegalStateException("听写输入已变化");if(capture.done)return;capture.cancelled=true;phase="stopping";message="正在停止本次听写，原任务继续保留";}if(capture.leased)finish(capture,null);signal();}
