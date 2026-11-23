@@ -29,6 +29,7 @@ import dev.pocketengine.core.CapabilityPort;
 import dev.pocketengine.core.ExecutionPlan;
 import dev.pocketengine.core.ExecutionPlanning;
 import dev.pocketengine.features.web.WebSourceLedger;
+import dev.pocketengine.features.memory.TaskMemoryHistory;
 import dev.pocketengine.phone.observation.AdaptivePhonePort;
 import dev.pocketengine.phone.DeferredPhoneSession;
 import dev.pocketengine.runtime.context.ContextBudgetPolicy;
@@ -51,6 +52,17 @@ public final class AgentRunner {
     /** Local presentation only, never carried into a checkpoint, TaskStore outcome or model request. */
     public record MainAuthorizationFailure(String taskId,String runId,int epoch,int httpStatus) { }
     private boolean observeInitialChatFailure;
+    private TaskMemoryHistory.PlainInput firstPlainBookInput;
+    private TaskMemoryHistory.PlainHistory plainBookHistory;
+    /** Installs native-only witnesses before the runner starts. Neither can authorize a request. */
+    public void proveFirstPlainBookPause(TaskMemoryHistory.PlainInput input){
+        if(lifecycleBegun)throw new IllegalStateException("原对话已开始");
+        firstPlainBookInput=java.util.Objects.requireNonNull(input);
+    }
+    public void bindPlainBookPauseHistory(TaskMemoryHistory.PlainHistory history){
+        if(lifecycleBegun)throw new IllegalStateException("原对话已开始");
+        plainBookHistory=java.util.Objects.requireNonNull(history);
+    }
     private MainAuthorizationFailure initialChatAuthorizationFailure;
     public void observeInitialChatFailure(){if(lifecycleBegun)throw new IllegalStateException("原对话已开始");observeInitialChatFailure=true;}
     public MainAuthorizationFailure initialChatAuthorizationFailure(){return initialChatAuthorizationFailure;}
@@ -112,16 +124,19 @@ public final class AgentRunner {
         private final String memoryReference,memoryContext,projectConvention;
         private final RunControl producer;
         private final OriginalMemoryDraft memoryDraft;
+        private final TaskMemoryHistory.PlainReply plainBookPause;
         private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context){
             this(taskId,text,ids,producer,reference,context,null);
         }
         private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical){
-            this(taskId,text,ids,producer,reference,context,physical,false,null);
+            this(taskId,text,ids,producer,reference,context,physical,false,null,null);
         }
-        private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,String physical,boolean publicAnswerSources,OriginalMemoryDraft memoryDraft){
+        private OwnerReply(String taskId,String text,java.util.List<String> ids,RunControl producer,JSONObject reference,JSONObject context,
+                           String physical,boolean publicAnswerSources,OriginalMemoryDraft memoryDraft,TaskMemoryHistory.PlainReply plainBookPause){
             this.id=reference==null?java.util.UUID.randomUUID().toString():reference.optString("answerId");this.taskId=taskId;this.text=text;messageIds=immutableOwnerIds(ids);this.producer=java.util.Objects.requireNonNull(producer);
             this.publicAnswerSources=reference==null&&publicAnswerSources;
             this.memoryDraft=memoryDraft;
+            this.plainBookPause=reference==null&&context!=null?plainBookPause:null;
             memoryReference=reference==null?null:reference.toString();memoryContext=context==null?null:context.toString();
             String projected=null;try{JSONObject actual=dev.pocketengine.features.local.project.ProjectConventionDelivery.forReply(producer,taskId,physical,id,text);if(actual!=null)projected=actual.toString();}
             catch(Exception unavailable){/* No exact source evidence: the original answer still stands. */}projectConvention=projected;
@@ -131,6 +146,9 @@ public final class AgentRunner {
         public JSONObject memoryReference()throws Exception{return memoryReference==null?null:new JSONObject(memoryReference);}
         public JSONObject projectConvention()throws Exception{return projectConvention==null?null:new JSONObject(projectConvention);}
         public JSONObject memoryContext()throws Exception{return memoryContext==null?null:new JSONObject(memoryContext);}
+        public JSONObject originalPlainBookPausePin(String conversation,String run,int epoch,JSONObject checkpoint,JSONObject consumed)throws Exception{
+            return plainBookPause==null?null:plainBookPause.retainedFor(conversation,taskId,run,epoch,checkpoint,consumed);
+        }
         public JSONObject originalMemoryDraftPin(String conversation,String run,int epoch,String input,long revision)throws Exception{
             return memoryDraft!=null&&taskId.equals(memoryDraft.task)&&run.equals(memoryDraft.run)&&epoch==memoryDraft.epoch&&
                     conversation.equals(memoryDraft.conversation)&&input.equals(memoryDraft.input.sourceId)&&revision==memoryDraft.input.revision
@@ -721,6 +739,7 @@ public final class AgentRunner {
                     nativePlanningReference=clean(meaning+currentPlanning,config);
                 }
                 boolean boundedToolCatalog=false;long admittedPreferenceRevision=0L;
+                String pausedPlainScope=null;
                 JSONArray tools=phone==null||!control.phoneSurfaceActive()?new JSONArray():tools();
                 if(control.phoneSurfaceActive()&&DeferredPhoneSession.adaptive(phone))addTool(tools,"phone_observation_help","当前节点中找不到目标时请求新的观察；仅在本机允许且模型已配置图像输入能力时发送真实图片，不重试业务动作。",properties("observationId","string").put("reason",new JSONObject().put("type","string").put("enum",new JSONArray().put("target_missing"))),new String[]{"observationId","reason"});
                 JSONArray outcomeTools=RunOutcomeTools.tools();for(int i=0;i<outcomeTools.length();i++)tools.put(outcomeTools.getJSONObject(i));
@@ -736,7 +755,9 @@ public final class AgentRunner {
                     JSONObject validation=reference.optJSONObject("referenceValidation");
                     admittedPreferenceRevision=dev.pocketengine.features.memory.TaskMemoryHistory.admittedPreferenceRevision(validation);
                     memoryDependency=dev.pocketengine.features.memory.TaskMemoryHistory.dependency(validation);
-                    refreshReferenceHistory(history,validation);
+                    refreshReferenceHistory(history,validation,plainBookHistory);
+                    if(round==0&&firstPlainBookInput!=null&&firstPlainBookInput.isOnlyOriginalInput(history))
+                        pausedPlainScope=TaskMemoryHistory.pausedPlainScope(validation,firstPlainBookInput);
                     String context=clean(reference.optString("context"),config);
                     if(!context.isEmpty())nativeReference=context+(nativeReference.isEmpty()?"":"\n\n"+nativeReference);
                 }
@@ -775,6 +796,7 @@ public final class AgentRunner {
                 JSONArray nativeProvenance=requestHistory;
                 java.util.List<String> requestedOwnerIds=ownerMessageIds(requestHistory);
                 final String[] nativeRequest={""}, nativeTraceMember={""}, nativeTraceTurn={""};JSONObject response;
+                final TaskMemoryHistory.PlainReply[] settledPlainBook={null};
                 boolean nativeApprovedResponse=approvedCall!=null;
                 if(nativeApprovedResponse&&instructionProfile==NativeInstructionProfile.PAIRED_DEVICE_TEXT)throw new SecurityException("零工具原任务不能续接工具调用");
                 if(nativeApprovedResponse){response=approvedCall.take(history,control);approvedCall=null;}
@@ -845,6 +867,13 @@ public final class AgentRunner {
                     final ModelConfig requestConfig=chosenConfig;
                     if(stepRouting.enabled())emit(taskId,"model_route","running",stepRouting.selectedLight()?"本次已在原任务预算内选择轻量候选，仅接受明确只读步骤。":"本次使用原主候选。",null,stepRouting.diagnostics(),config,sink);
                     final JSONArray actualModelMessages=finalRequestMessages;
+                    // New first plain MAIN only: no repaired/compacted history, attached data, prior tools, or alternate route.
+                    final String plainCallScope=nativeRepair==null&&!contextRecoveryUsed&&
+                            (turnPlanning==null||!turnPlanning.planning()&&turnPlanning.planRevision==0)&&
+                            !stepRouting.selectedLight()&&projection.plan().removed.isEmpty()&&
+                            !projection.diagnostics().optBoolean("summaryProjectionUsed")&&plainTextWire(actualModelMessages)
+                            ?pausedPlainScope:null;
+                    final String[] armedPlainBookCall={null};
                     final InterruptedModelAttempt visibleAttempt=new InterruptedModelAttempt();
                     final InterruptedModelAttempt.Retention retainPrefix=(call,prefix)->retainInterruptedPrefix(taskId,call,prefix,requestConfig,sink);
                     RequestImageSources.prune(projectImages,history);
@@ -876,7 +905,7 @@ public final class AgentRunner {
                             terminalMain[0]=null;executionTrace.request(receipt.callId,nativeTraceSite[0],originalHistory,traceSteps);
                         }
                         public void finished(dev.pocketengine.runtime.usage.InferenceReceipt receipt){
-                            if(observeInitialChatFailure)terminalMain[0]=receipt; // the original durable sink has already committed it
+                            if(observeInitialChatFailure||plainCallScope!=null)terminalMain[0]=receipt; // native durable sink ran first
                         }
                     });
                     // Each physical call gets a fresh target/receipt and rechecks the original native
@@ -884,7 +913,11 @@ public final class AgentRunner {
                     try{response=ModelGateway.completeStreaming(requestConfig,actualModelMessages,tools,control,event->{
                         if(event.kind==ModelGateway.StreamKind.STARTED){
                             visibleAttempt.started(event.requestId,retainPrefix);
-                            nativeRequest[0]=event.requestId;if(capabilities!=null)capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);
+                            nativeRequest[0]=event.requestId;
+                            if(capabilities!=null){
+                                capabilities.beforeModelRequest(event.requestId,actualModelMessages,control);
+                                if(plainCallScope!=null)armedPlainBookCall[0]=event.requestId;
+                            }
                         }
                         emitStream(taskId,event,requestConfig,control,sink);
                         if(event.kind==ModelGateway.StreamKind.TEXT_DELTA)visibleAttempt.text(event.requestId,event.text);
@@ -904,7 +937,12 @@ public final class AgentRunner {
                             if(!materializedHistory.current(config,control))throw new ModelGateway.RequestRefreshRequired();
                             if(capabilities!=null&&!capabilities.responseCurrent(control))throw new ModelGateway.RequestRefreshRequired();
                         }
-                    },modelInputRevision);if(requestProjectImages.hasImages())RuntimeDiagnostics.event("tool_execution","succeeded","IMAGE_REQUEST_COMPLETED",control,null);if(stepRouting.selectedLight())response=safeJson(response,requestConfig,false);break;
+                    },modelInputRevision);
+                    if(plainCallScope!=null&&!requestProjectImages.hasImages())
+                        settledPlainBook[0]=TaskMemoryHistory.PlainReply.completed(firstPlainBookInput,plainCallScope,
+                                armedPlainBookCall[0],terminalMain[0],control);
+                    if(requestProjectImages.hasImages())RuntimeDiagnostics.event("tool_execution","succeeded","IMAGE_REQUEST_COMPLETED",control,null);
+                    if(stepRouting.selectedLight())response=safeJson(response,requestConfig,false);break;
                     }catch(Exception failed){
                         try {
                             if(capabilities!=null)capabilities.modelRequestAbandoned(nativeRequest[0]);
@@ -1060,7 +1098,8 @@ public final class AgentRunner {
                     OwnerReply savedOwnerReply=null;
                     if(ownerInputs!=null&&!requestedOwnerIds.isEmpty()){
                         savedOwnerReply=new OwnerReply(taskId,finalMessage.getString("content"),requestedOwnerIds,control,memoryReference,memoryDependency,nativeApprovedResponse?null:nativeRequest[0],
-                                memoryReference==null&&hasCurrentAnonymousWebResult(history,finalAnswerIndex,lastAnonymousWebResult),originalMemoryDraft);
+                                memoryReference==null&&hasCurrentAnonymousWebResult(history,finalAnswerIndex,lastAnonymousWebResult),
+                                originalMemoryDraft,settledPlainBook[0]);
                         ownerInputs.completed(savedOwnerReply,control);
                     }
                     // Queue means next owner turn, not cancellation of the current tool batch.
@@ -1902,8 +1941,22 @@ public final class AgentRunner {
     }
 
     /** Revalidate only host reference-read receipts; never rewrite user input or effect receipts. */
+    private static boolean plainTextWire(JSONArray messages){
+        if(messages.length()<2||messages.length()>8)return false;
+        for(int i=0;i<messages.length();i++){
+            JSONObject row=messages.optJSONObject(i);
+            if(row==null||!(row.opt("content") instanceof String)||
+                    !java.util.Set.of("system","user").contains(row.optString("role"))||
+                    row.has("tool_calls")||row.has("provider_data"))return false;
+        }
+        return true;
+    }
     static void refreshReferenceHistory(JSONArray history,JSONObject validation)throws Exception{
-        dev.pocketengine.features.memory.TaskMemoryHistory.retire(history,validation,false);
+        refreshReferenceHistory(history,validation,null);
+    }
+    private static void refreshReferenceHistory(JSONArray history,JSONObject validation,
+            TaskMemoryHistory.PlainHistory plainBookHistory)throws Exception{
+        TaskMemoryHistory.retire(history,validation,false,plainBookHistory);
         java.util.Map<String,String> calls=new java.util.HashMap<>();
         for(int i=0;i<history.length();i++){
             JSONObject row=history.getJSONObject(i);JSONArray tools=row.optJSONArray("tool_calls");

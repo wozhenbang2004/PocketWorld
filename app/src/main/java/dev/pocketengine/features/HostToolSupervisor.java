@@ -598,6 +598,19 @@ public final class HostToolSupervisor implements CapabilityPort {
             reference.append(guidance.getString("context"));snapshot.put("workProfileInstructionRefs",guidance.getJSONArray("references"));
         }
         if(admittedSkillScope!=null)((SkillsModule)skills).requireTaskScopeForHost(tasks.get(taskId,false),admittedSkillScope);
+        // Positive native assembly result, before the existing per-physical-call policy recheck.
+        JSONObject discovery=snapshot.optJSONObject("skillsDiscovery");
+        JSONArray discovered=discovery==null?null:discovery.optJSONArray("skills");
+        JSONArray notes=temporary==null?null:temporary.optJSONArray("notes");
+        JSONObject initialNote=notes!=null&&notes.length()==1?notes.optJSONObject(0):null;
+        if(ordinaryPrivateChat&&!personalReading&&Boolean.FALSE.equals(personalPolicy.opt("readingEnabled"))&&
+                Boolean.TRUE.equals(personalPolicy.opt("conversationEnabled"))&&projectMemory==null&&workProfile==null&&nativeDevicePort==null&&
+                memorySelection==null&&module instanceof dev.pocketengine.features.memory.MemoryModule&&
+                discovered!=null&&discovered.length()==0&&snapshot.optInt("ownerWorksIncluded")==0&&
+                ownerWorkReferences.isEmpty()&&workReads.length()==0&&workContexts.length()==0&&
+                snapshot.optInt("dueCommitmentsIncluded")==0&&snapshot.optInt("dueCommitmentsOmitted")==0&&
+                initialNote!=null&&temporary.optLong("revision")==2&&"plan".equals(initialNote.opt("kind")))
+            validation.put(dev.pocketengine.features.memory.TaskMemoryHistory.PLAIN_BOOK_PAUSED,true);
         referenceQuery=query;admittedReferences=TaskStore.capabilityFingerprint(validation);admittedMemoryRevision=host.memoryContextRevision();admittedPersonalMemory=TaskStore.capabilityFingerprint(personalPolicy);
         snapshot.remove("records");return snapshot.put("context",reference.toString()).put("authority","lower_priority_reference_data").put("executionAuthorized",false);
     }

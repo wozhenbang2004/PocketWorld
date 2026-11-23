@@ -4153,6 +4153,32 @@ internal class PocketWebBridge(
             "settings.saveLocalObservation" -> controller.saveLocalObservation(requiredBoolean(args, "capture"), requiredBoolean(args, "ocr"))
             "settings.openSystem" -> when (requiredString(args, "section")) {
                 "accessibility" -> controller.openAccessibility(); "notifications" -> controller.openNotifications()
+                "pairingTaskNotifications" -> {
+                    checkedPayload(args, setOf("section", "capturedAt", "resumeRevision", "deviceRevision"))
+                    requireSection("devices")
+                    val activity = controller.webPresentationActivity()
+                    check(documentId != null && taskViewId == null && controller.webPrivateOwnerVisible() &&
+                        activity.hasWindowFocus() && workspaceResumeRevision == requiredLong(args, "resumeRevision") &&
+                        controller.deviceWorkspaceRevision == requiredLong(args, "deviceRevision")) {
+                        "请回到原配对的本机邀请，重读本机状态。"
+                    }
+                    devicePages.checkPairingNotificationWindow(requiredLong(args, "capturedAt"))
+                    val notifications = controller.reviewedPhoneConditions().optJSONObject("taskNotificationsForStart")
+                    check(notifications?.let { it.opt("state") == "blocked" && it.opt("ready") == false } == true) {
+                        "本机任务通知状态已变化或暂不可核对，请重读本机状态。"
+                    }
+                    // Open only this app's notification settings; no permission request or receiver action.
+                    val settings = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                    val unavailable = "暂时无法打开系统通知设置。请在 Android 设置中找到口袋世界，再核对手机任务通知。"
+                    try {
+                        val target = activity.packageManager.resolveActivity(settings,
+                            PackageManager.MATCH_DEFAULT_ONLY or PackageManager.MATCH_SYSTEM_ONLY)?.activityInfo ?: error(unavailable)
+                        activity.startActivity(settings.setComponent(ComponentName(target.packageName, target.name)))
+                    } catch (_: ActivityNotFoundException) { error(unavailable) }
+                    catch (_: SecurityException) { error(unavailable) }
+                    return JSONObject().put("value", JSONObject().put("status", "settings_opened").put("grantVerified", false))
+                }
                 "reminderNotifications" -> {
                     checkedPayload(args, setOf("section", "sequence"))
                     val activity = controller.webPresentationActivity()

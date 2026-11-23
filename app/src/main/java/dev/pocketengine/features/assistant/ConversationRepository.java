@@ -382,6 +382,10 @@ public final class ConversationRepository {
         }
     }
     public JSONObject projectModelHistoryMessage(String conversation,JSONObject saved)throws Exception{
+        return projectModelHistoryMessage(conversation,saved,null);
+    }
+    JSONObject projectModelHistoryMessage(String conversation,JSONObject saved,
+            dev.pocketengine.features.memory.TaskMemoryHistory.PlainHistory.Reader plainReader)throws Exception{
         JSONObject result=new JSONObject(saved.toString());if(!"assistant".equals(result.optString("role")))return result;
         try{
             JSONObject state=source(saved.getString("id"));if(state==null)throw new SourceUnavailable("历史助手来源已不存在");
@@ -391,6 +395,7 @@ public final class ConversationRepository {
             if(!conversation.equals(pin.getString("sourceConversationId"))||saved.getLong("revision")!=pin.getJSONObject("sourceRef").getLong("revision")
                     ||!("sha256:"+shaBytes(saved.getString("content").getBytes(StandardCharsets.UTF_8))).equals(pin.getString("bodyFingerprint")))throw new SourceUnavailable("历史助手正文与原版本不一致");
             result.put("nativeAssistantSource",pin);
+            if(plainReader!=null)plainReader.observe(state,saved,pin);
         }catch(Exception unavailable){if(unavailable instanceof InterruptedException||Thread.currentThread().isInterrupted())throw unavailable;result.put("content",dev.pocketengine.features.memory.TaskMemoryHistory.RETIRED).put("memoryContextRetired",true);result.remove("nativeAssistantSource");result.remove("provider_data");result.remove("reasoning_content");}
         return result;
     }
@@ -1158,6 +1163,10 @@ public final class ConversationRepository {
         JSONObject state=new JSONObject().put("kind","message").put("sourceId",replyId).put("revision",1L).put("ownerId","owner").put("spaceId","private")
                 .put("conversationId",selected.conversationId).put("role","assistant").put("deleted",false).put("updatedAt",now)
                 .put("nativeReplyId",selected.completed.id).put("nativeReplyDigest",digest).put("nativeRunId",selected.runId).put("nativeEpoch",selected.epoch).put("nativeTaskId",selected.taskId);
+        // Private source metadata only, and only in the exact existing native reply transaction.
+        JSONObject plainBookPause=selected.originalPlainBookPause();
+        if(plainBookPause!=null&&text.equals(selected.completed.text))
+            state.put(dev.pocketengine.features.memory.TaskMemoryHistory.ORIGINAL_PLAIN_BOOK_PAUSE,plainBookPause);
         // Historical journal fact only; eligibility and the actual Book record are reread on the owner's click.
         String reminderOperation=selected.originalReminderOperation();
         if(reminderOperation!=null)state.put(ORIGINAL_REMINDER_OPERATION,reminderOperation);
@@ -1718,7 +1727,7 @@ public final class ConversationRepository {
     /** Staging is invisible and lives only in this original DB. Bodies/versions/times are not invented. */
     public JSONObject stageLegacy(String stage,JSONObject legacy,Callable<Void> beforeBatch)throws Exception{
         if(active())throw new IllegalStateException("已有DB原文权威，不能重导旧副本");JSONArray convs=legacy.getJSONArray("conversations"),sources=legacy.getJSONArray("sourceStates");if(integer(legacy,"version",1)!=2)throw new IllegalArgumentException("旧原文需已知原生version2来源，未补造旧修订");
-        Set<String> ids=new HashSet<>();for(int start=0;start<sources.length();start+=100){final int a=start,b=Math.min(start+100,sources.length());stageTransaction(()->{beforeBatch.call();for(int i=a;i<b;i++){JSONObject source=new JSONObject(sources.getJSONObject(i).toString());source.remove("nativeContext");source.remove("nativeProjectConventionReceipt");source.remove(ORIGINAL_REPLY_DOCUMENT);if("assistant".equals(source.optString("role")))source.put("nativeProvenanceImported",true);if(!ids.add(source.getString("sourceId")))throw new IllegalArgumentException("旧来源编号重复");saveSource(stage,source);}return null;});}
+        Set<String> ids=new HashSet<>();for(int start=0;start<sources.length();start+=100){final int a=start,b=Math.min(start+100,sources.length());stageTransaction(()->{beforeBatch.call();for(int i=a;i<b;i++){JSONObject source=new JSONObject(sources.getJSONObject(i).toString());source.remove("nativeContext");source.remove("nativeProjectConventionReceipt");source.remove(ORIGINAL_REPLY_DOCUMENT);source.remove(dev.pocketengine.features.memory.TaskMemoryHistory.ORIGINAL_PLAIN_BOOK_PAUSE);if("assistant".equals(source.optString("role")))source.put("nativeProvenanceImported",true);if(!ids.add(source.getString("sourceId")))throw new IllegalArgumentException("旧来源编号重复");saveSource(stage,source);}return null;});}
         int count=0;Set<String> conversationIds=new HashSet<>(),messageIds=new HashSet<>();for(int i=0;i<convs.length();i++){JSONObject conversation=convs.getJSONObject(i);if(!conversationIds.add(conversation.getString("conversationId")))throw new IllegalArgumentException("旧会话编号重复");final JSONObject current=conversation;stageTransaction(()->{beforeBatch.call();saveConversation(stage,current);return null;});JSONArray messages=conversation.getJSONArray("messages");for(int start=0;start<messages.length();start+=40){final int a=start,b=Math.min(start+40,messages.length());stageTransaction(()->{beforeBatch.call();for(int j=a;j<b;j++){JSONObject message=new JSONObject(messages.getJSONObject(j).toString());message.remove("nativeContext");message.remove("nativeAssistantSource");if(!messageIds.add(message.getString("id")))throw new IllegalArgumentException("旧消息编号重复");saveMessage(stage,current.getString("conversationId"),message,j+1);}return null;});}count+=messages.length();}
         try(Cursor missing=db.rawQuery("SELECT 1 FROM assistant_sources s LEFT JOIN assistant_messages m ON m.generation=s.generation AND m.source_id=s.source_id LEFT JOIN assistant_conversations c ON c.generation=s.generation AND c.conversation_id=s.conversation_id WHERE s.generation=? AND s.deleted=0 AND (m.source_id IS NULL OR c.conversation_id IS NULL OR m.conversation_id<>s.conversation_id OR m.revision<>s.revision) LIMIT 1",new String[]{stage})){if(missing.moveToFirst())throw new IllegalArgumentException("旧活动来源缺真实原文/容器，未激活不完整副本");}
         // Tombstones whose old container was already trimmed/deleted still keep their true source

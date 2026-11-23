@@ -883,7 +883,27 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     const reason = checks.find(check => check.state === group?.state && check.state !== 'ready' && check.message) || checks.find(check => check.state !== 'ready' && check.message);
     return reason ? phoneStatus(id) + ' · ' + reason.message : phoneStatus(id);
   };
-  const openPhoneSetup = (section: 'accessibility' | 'notifications') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
+  const openPhoneSetup = (section: 'accessibility') => { if (busy) return; clearSensitive(true, form === 'invite'); void run('settings.openSystem', { section }).catch(async failure => { await invoke('devices.snapshot'); if (alive.current && document.visibilityState === 'visible') setError(failure instanceof Error ? failure.message : String(failure)); }); };
+  const inviterWindow = form === 'invite' && !sourceFocus && !review && localRead?.originalWindow &&
+    localReadCurrent && localRead.window === waitingGoalWindow() ? localRead.window : '';
+  const currentInviter = () => {
+    const live = bridge.getState();
+    return !!inviterWindow && waitingGoalWindow() === inviterWindow && live.host?.ready === true &&
+      live.state.deviceWorkspaceRevision === localRead?.revision;
+  };
+  const pairingNotificationsBlocked = !!inviterWindow && local.receiverEnabled === false &&
+    actions.enable?.available === false && actions.invite?.available === false &&
+    localPhone.some(group => group.id === 'taskNotificationsForStart' && group.state === 'blocked');
+  const openPairingNotificationSettings = () => {
+    const view = bridge.getState().view as Data | undefined, resume = view?.resumeRevision;
+    if (busy || !snapshot || !pairingNotificationsBlocked || !currentInviter() ||
+        typeof resume !== 'number' || !Number.isSafeInteger(resume) ||
+        !Number.isSafeInteger(state.deviceWorkspaceRevision)) return;
+    void invoke('settings.openSystem', { section: 'pairingTaskNotifications', capturedAt: snapshot.capturedAt,
+      resumeRevision: resume, deviceRevision: state.deviceWorkspaceRevision }, value => {
+      if (value.status !== 'settings_opened' || value.grantVerified !== false) throw new Error('未能核对系统设置入口，请从原配对重试。');
+    });
+  };
   const actionReview = (operation: string, extra: Data = {}) => { void invoke('devices.reviewAction', { operation, ...extra }, acceptReview, operation.startsWith('task.') ? 'control' : 'work'); };
   const reviewPeerConnection = (target: Data) => {
     if (busy || retired(target) || !available(target.actions?.connect) || !supported('devices.reviewAction')) return;
@@ -2121,7 +2141,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     </SettingsDialog>
     <PhoneControlPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'manual'} run={run} onClose={() => setForm('')} />
     <DeviceTaskPreparation phone={workPhone} onPendingChange={setPreparingDeviceWork} open={form === 'work'} run={run} onClose={() => setForm('')} />
-    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || !!snapshot) &&
+    <SettingsDialog isOpen={!!form && !review && form !== 'work' && form !== 'manual' && (!pairingEntry || form === 'invite' || !!snapshot) &&
       (!sourceFocus || form === 'connection' && originalAddressCurrent)}
       onClose={() => { if (addressRepair.current?.originalPhone) closeOriginalAddressForm(); else { clearSensitive(true); refresh(); } }} title={form === 'relay' ? '临时中继租约' : form === 'connection' ? '更新原设备连接地址' : form.startsWith('recovery') ? '核对原配对结果' : '配对另一台设备'}><div className="pw-collaboration-dialog" data-collaboration-kind="DevicesWorkspace">
       <div className="pw-device-form">
@@ -2158,23 +2178,24 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
           {form === 'add' && !available(actions.join) && actions.join?.reason && <p>{actions.join.reason}</p>}
         </section>}
         {form === 'invite' && <section className="pw-device-form-step">
-          <h3>{receiverLabel}</h3>
-          {!available(actions.invite) ? <>
-            <p>{local.receiverEnabled ? local.receiverReason || actions.invite?.reason || '尚未取得可用的邀请地址。' : actions.enable?.reason || '先核对并开启接收，才能生成本机邀请。开启接收不会授予对方屏幕或执行权限。'}</p>
+          <h3>{inviterWindow ? receiverLabel : '本机接收'}</h3>
+          {!inviterWindow || !available(actions.invite) ? <>
+            {!inviterWindow ? <p role="status">尚未核对到本机接收状态，请重读后继续原邀请。</p>
+              : <p>{local.receiverEnabled ? local.receiverReason || actions.invite?.reason || '尚未取得可用的邀请地址。' : actions.enable?.reason || '先核对并开启接收，才能生成本机邀请。开启接收不会授予对方屏幕或执行权限。'}</p>}
             <div className="pw-form-actions">
-              {local.receiverEnabled === false && available(actions.enable) && <Button disabled={busy || !supported('devices.reviewAction')} onClick={() => { void invoke('devices.reviewAction', { operation: 'receiver.enable' }, value => {
+              {inviterWindow && local.receiverEnabled === false && available(actions.enable) && <Button disabled={busy || !supported('devices.reviewAction')} onClick={() => { if (!currentInviter()) return; void invoke('devices.reviewAction', { operation: 'receiver.enable' }, value => {
                 const actual = deviceReview(value);
                 if (actual.kind !== 'action' || actual.view.operation !== 'receiver.enable') { void run('devices.discard', { viewHandle: actual.viewHandle }).catch(() => {}); throw new Error('接收服务审阅不匹配，请重新读取。'); }
                 acceptReview(actual); setForm('invite');
               }); }}>核对并启用本机接收</Button>}
-              {local.receiverEnabled === false && !available(actions.enable) && localPhone.some(group => group.id === 'taskNotificationsForStart' && group.state === 'blocked') && supported('settings.openSystem') &&
-                <Button variant="secondary" disabled={busy} onClick={() => openPhoneSetup('notifications')}>在系统中设置任务通知</Button>}
+              {pairingNotificationsBlocked && supported('settings.openSystem') &&
+                <Button variant="secondary" disabled={busy} onClick={openPairingNotificationSettings}>打开系统任务通知设置</Button>}
               <Button variant="ghost" disabled={busy} onClick={refresh}>重读本机状态</Button>
             </div>
           </> : <>
             {inviteAddresses.length === 1 ? <p className="pw-source-copy">本次邀请使用 <bdi>{inviteAddresses[0]}</bdi></p>
               : <SelectField label="本机地址或已配置中继" value={inviteAddress} onChange={setAddress} options={inviteAddresses.map(value => ({ id: value, label: value }))} isDisabled={busy} />}
-            <Button disabled={busy || !inviteAddress || !supported('devices.createInvitation')} onClick={() => { void invoke('devices.createInvitation', { address: inviteAddress }, value => { setInvitation(shownPairingInvitation(value,local)); setRaw(''); setForm(''); }); }}>创建短时邀请</Button>
+            <Button disabled={busy || !inviteAddress || !supported('devices.createInvitation')} onClick={() => { if (!currentInviter()) return; void invoke('devices.createInvitation', { address: inviteAddress }, value => { setInvitation(shownPairingInvitation(value,local)); setRaw(''); setForm(''); }); }}>创建短时邀请</Button>
           </>}
         </section>}
         {pairingEntry && <Accordion className="pw-device-form-alternatives">

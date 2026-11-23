@@ -14823,16 +14823,17 @@ public final class TaskStore {
     public static final class QueuedOwnerReplySelection {
         private final TaskStore issuer;
         private final String inputs,originalReminderOperation;
-        private final JSONObject originalMemoryDraft;
+        private final JSONObject originalMemoryDraft,originalPlainBookPause;
         private final List<OriginalReplyDocument> originalDocuments;
         private final OriginalReplyText originalText;
         private boolean active=true;
         public final String taskId,conversationId,runId;
         public final int epoch;
         public final dev.pocketengine.runtime.AgentRunner.OwnerReply completed;
-        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft,List<OriginalReplyDocument> originalDocuments,OriginalReplyText originalText)throws Exception{
+        private QueuedOwnerReplySelection(TaskStore issuer,JSONObject task,dev.pocketengine.runtime.AgentRunner.OwnerReply completed,JSONArray inputs,String originalReminderOperation,JSONObject originalMemoryDraft,List<OriginalReplyDocument> originalDocuments,OriginalReplyText originalText,JSONObject originalPlainBookPause)throws Exception{
             this.issuer=issuer;taskId=task.getString("id");conversationId=task.getString("conversationId");runId=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.completed=completed;this.inputs=inputs.toString();this.originalReminderOperation=originalReminderOperation;
             this.originalMemoryDraft=originalMemoryDraft;this.originalDocuments=List.copyOf(originalDocuments);this.originalText=originalText;
+            this.originalPlainBookPause=originalPlainBookPause;
         }
         public void requireMutationScope(TaskStore original){
             if(!active||issuer!=original||!Thread.holdsLock(original)||!original.db.inTransaction())throw new SecurityException("采用回执不在原任务的同一消息事务内");
@@ -14840,6 +14841,7 @@ public final class TaskStore {
         public JSONArray inputs()throws Exception{requireMutationScope(issuer);return new JSONArray(inputs);}
         public String originalReminderOperation(){requireMutationScope(issuer);return originalReminderOperation;}
         public JSONObject originalMemoryDraft(){requireMutationScope(issuer);return originalMemoryDraft;}
+        public JSONObject originalPlainBookPause(){requireMutationScope(issuer);return originalPlainBookPause;}
         public List<OriginalReplyDocument> originalDocuments(){requireMutationScope(issuer);return originalDocuments;}
         public OriginalReplyText originalText(){requireMutationScope(issuer);return originalText;}
     }
@@ -14930,7 +14932,11 @@ public final class TaskStore {
                 if(!hasUnresolvedOperations(completed.taskId,null)&&textInAnswer.equals(originalReplyTextReceipt(completed.taskId,run,textInAnswer.operationId())))
                     originalText=textInAnswer;
             }catch(Exception unavailable){/* An optional file handoff cannot interfere with saving the answer. */}
-            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft,originalDocuments,originalText);JSONObject result;
+            JSONObject plainBookPause=null;
+            if(selectedRows.length()==1&&requested.size()==1&&OwnerWorkTask.isButlerSource(task)&&!original.isCancelled()&&!task.optBoolean("cancelRequested"))
+                try{plainBookPause=completed.originalPlainBookPausePin(task.getString("conversationId"),run,epoch,lastAssistant,selectedRows.getJSONObject(0));}
+                catch(Exception unavailable){/* Optional fact; never affect the original reply commit. */}
+            QueuedOwnerReplySelection selected=new QueuedOwnerReplySelection(this,task,completed,selectedRows,reminderOperation,originalMemoryDraft,originalDocuments,originalText,plainBookPause);JSONObject result;
             try{result=mutation.apply(selected);}finally{selected.active=false;}
             if(task.has("ownerWorkPreparation")){
                 JSONObject saved=result==null?null:result.optJSONObject("message");if(saved==null||!completed.taskId.equals(saved.optString("taskId"))||!run.equals(saved.optString("nativeRunId"))||epoch!=saved.optInt("nativeEpoch")

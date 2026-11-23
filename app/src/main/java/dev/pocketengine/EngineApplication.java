@@ -1402,7 +1402,7 @@ public final class EngineApplication extends Application implements dev.pocketen
         remoteAttentionNotifications=new dev.pocketengine.features.remote.RemoteAttentionNotifications(this,tasks,dev.pocketengine.ui.ComposeActivity.class);
         EngineModule memory=addModule("memory",()->new dev.pocketengine.features.memory.MemoryModule(context,memorySources.assertionResolver(),dev.pocketengine.features.memory.SQLiteMemoryRetrievalBackend.create()));
         if(memory instanceof dev.pocketengine.features.memory.MemoryModule originalMemoryDrafts)features.setConversationMemoryDrafts(new dev.pocketengine.features.memory.NativeConversationMemoryDraftHost(tasks,originalMemoryDrafts,memorySources));
-        EngineModule assistant=addModule("assistant",()->new dev.pocketengine.features.assistant.AssistantModule(context,memory,this::runAssistantTurn,tasks));
+        EngineModule assistant=addModule("assistant",()->new dev.pocketengine.features.assistant.AssistantModule(context,memory,(dev.pocketengine.features.assistant.AssistantModule.NativeTurnExecutor)this::runAssistantTurn,tasks));
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule)memorySources.bindAssistant((dev.pocketengine.features.assistant.AssistantModule)assistant);
         if(assistant instanceof dev.pocketengine.features.assistant.AssistantModule)((dev.pocketengine.features.assistant.AssistantModule)assistant).setSourceSynchronizer(()->memorySources.synchronize(json("ownerId","owner","spaceId","private")));
         installAutomaticUserLearningHost();
@@ -3977,7 +3977,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     private static boolean hasAttachments(JSONObject message){JSONArray refs=message.optJSONArray("attachments");return refs!=null&&refs.length()>0;}
     private static boolean hasTaskAttachments(JSONObject task){return dev.pocketengine.store.TaskAttachmentInputs.hasAny(task);}
     private static boolean hasInitialOwnerWorkAttachments(JSONObject task){return dev.pocketengine.store.TaskAttachmentInputs.hasInitialOwnerWork(task);}
-    private JSONObject runAssistantTurn(String conversation,String goal,JSONArray history,ModelConfig config,RunControl control)throws Exception{
+    private JSONObject runAssistantTurn(String conversation,String goal,JSONArray history,ModelConfig config,RunControl control,
+            dev.pocketengine.features.memory.TaskMemoryHistory.PlainHistory plainHistory)throws Exception{
         if(control.hasHostRun()){
             AssistantInputBinding binding=assistantInputs.get(control);
             RetainedDevelopmentRun held=binding==null?null:retainedDevelopmentRuns.get(binding.task);if(held!=null&&held.control==control&&conversation.equals(held.conversation))return held.resume();
@@ -3999,7 +4000,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                 catch(Exception failure){closeAssistantInputReservation(binding,"原项目续接未完成，请核对原记录；没有自动重试");throw failure;}
             }
             if(binding==null||!conversation.equals(binding.conversation)||!binding.phase.compareAndSet(0,1)||capabilityControls.get(binding.task)!=control)throw new SecurityException("聊天执行器不能更换或重复领取原输入任务");
-            try{return runCapabilityAttempt(binding.task,history,config,control);}
+            try{return runCapabilityAttempt(binding.task,history,config,control,null,null,null,null,plainHistory);}
             // Preflight can throw before runCapabilityAttempt assigns its local attempt.
             // Settle only this captured reservation, even if its finally released the binding.
             catch(Exception failure){closeAssistantInputReservation(binding,"原聊天执行未完成，请核对原记录；没有自动重试");throw failure;}
@@ -4352,6 +4353,13 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         return runCapabilityAttempt(id,initial,config,control,selectedProfile,project,ownerSkill,null);
     }
     private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control,dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selectedProfile,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project,dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation ownerSkill,CapabilityApprovalContinuation approval)throws Exception{
+        return runCapabilityAttempt(id,initial,config,control,selectedProfile,project,ownerSkill,approval,null);
+    }
+    private JSONObject runCapabilityAttempt(String id,JSONArray initial,ModelConfig config,RunControl control,
+            dev.pocketengine.features.controlplane.NativeWorkProfileHost.Selection selectedProfile,
+            dev.pocketengine.features.local.project.ProjectOwnerWorkflows.ProfileProjectSelection project,
+            dev.pocketengine.features.skills.NativeSkillExecutionHost.OwnerInvocation ownerSkill,CapabilityApprovalContinuation approval,
+            dev.pocketengine.features.memory.TaskMemoryHistory.PlainHistory plainHistory)throws Exception{
         if(approval!=null)synchronized(tasks){approval.requireCurrent(tasks);}
         if(selectedProfile!=null)nativeWorkProfiles().requireOwnedSelection(selectedProfile,control);RunControl existing=capabilityControls.putIfAbsent(id,control);if(existing!=null&&existing!=control)throw new IllegalStateException("该任务仍在执行");
         capabilityInferenceModels.put(control,config);JSONObject attempt=null;boolean settlementStarted=false,settlementCommitted=false,capabilityPortPrepared=false;
@@ -4470,6 +4478,18 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                     selectedProfile==null&&project==null&&ownerSkill==null&&approval==null&&ordinaryDirectTask(attempt);
             boolean initialChatFailure=ordinaryFailure&&originalInput.ordinaryFirst;
             if(initialChatFailure)runner.observeInitialChatFailure();
+            boolean plainOrdinaryRun=ownerMailbox&&originalInput!=null&&originalInput.control==control&&!originalInput.continuation&&
+                    originalInput.phase.get()==1&&control.matchesHostRun(id,admittedRun,admittedEpoch)&&
+                    originalInput.conversation.equals(attempt.optString("conversationId"))&&
+                    selectedProfile==null&&project==null&&ownerSkill==null&&approval==null&&ordinaryDirectTask(attempt)&&
+                    dev.pocketengine.store.OwnerWorkTask.isButlerSource(attempt);
+            if(plainOrdinaryRun&&initialChatFailure&&admitted!=null&&admitted.length()==1){
+                var plain=dev.pocketengine.features.memory.TaskMemoryHistory.PlainInput.original(originalInput.conversation,
+                        firstMessage,firstInput.optLong("ownerMessageRevision",-1));
+                if(plain!=null)runner.proveFirstPlainBookPause(plain);
+            }
+            if(plainOrdinaryRun&&direct!=null&&plainHistory!=null&&plainHistory.belongsTo(originalInput.conversation))
+                runner.bindPlainBookPauseHistory(plainHistory);
             if(independentBuild&&(ownerSkill!=null||approval!=null&&approval.attachmentCall))throw new SecurityException("首次构建不能接管其他技能或附件调用");
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
             RetainedDevelopmentRun development=ownerMailbox&&!selectedRevision&&!independentBuild&&assistantInputs.containsKey(control)?new RetainedDevelopmentRun(attempt,config,control,runner,journal,sourceProjection):null;

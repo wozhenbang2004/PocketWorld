@@ -116,6 +116,21 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         }
         return value.put("taskActions", actions)
     }
+    /** Local inviter preparation only. A current blocked snapshot is not permission to enable reception. */
+    fun checkPairingNotificationWindow(capturedAt: Long) {
+        val original = requireNotNull(window())
+        current(original, generation.get())
+        val snapshot = latest
+        val actions = snapshot.optJSONObject("actions") ?: JSONObject()
+        check(capturedAt > 0 && snapshot.optLong("capturedAt", -1) == capturedAt && review == null &&
+            snapshot.optJSONObject("local")?.opt("receiverEnabled") == false &&
+            actions.optJSONObject("enable")?.opt("available") == false &&
+            actions.optJSONObject("invite")?.opt("available") == false &&
+            !original.receiverAvailability(false).available) {
+            "原配对的本机接收状态已变化，请重读本机状态。"
+        }
+    }
+
     /** Match the original private peer view; this only limits a new LOCAL draft. No route lookup. */
     fun originalPhoneForPreparation(hint: JSONObject): JSONObject {
         fields(hint,"deviceId","instanceId","certificateFingerprint")
