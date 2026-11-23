@@ -6,6 +6,7 @@ import android.os.SystemClock
 import dev.pocketengine.features.local.LocalModule
 import dev.pocketengine.features.local.OwnerSourceCheckpoints
 import dev.pocketengine.ui.PocketWorldController
+import dev.pocketengine.ui.SourceCheckpointZipDelivery
 import java.util.Locale
 import java.util.UUID
 import java.util.WeakHashMap
@@ -19,6 +20,7 @@ internal class PocketWebSourceCheckpoints(
     private val document: () -> String?,
     private val captureFiles: (JSONObject) -> SourceCheckpointFilesPin,
     private val continueEnabled: Boolean = false,
+    private val captureZipRoute: (String) -> (() -> Boolean),
     private val changed: () -> Unit,
 ) {
     companion object {
@@ -34,7 +36,12 @@ internal class PocketWebSourceCheckpoints(
         private const val PENDING_REVIEW = PREFIX + "pending.review"
         private const val PENDING_CLEAR = PREFIX + "pending.clear"
         private const val PENDING_DISMISS = PREFIX + "pending.dismiss"
-        val COMMANDS = setOf(OPEN, LIST, REVIEW, SAVE, DISMISS, READ, COMPARE, CLOSE, PENDING_REVIEW, PENDING_CLEAR, PENDING_DISMISS)
+        private const val ZIP_REVIEW = PREFIX + "zip.review"
+        private const val ZIP_CHOOSE = PREFIX + "zip.choose"
+        const val ZIP_WRITE = PREFIX + "zip.write"
+        private const val ZIP_DISMISS = PREFIX + "zip.dismiss"
+        private val zipCommands = setOf(ZIP_REVIEW, ZIP_CHOOSE, ZIP_WRITE, ZIP_DISMISS)
+        val COMMANDS = setOf(OPEN, LIST, REVIEW, SAVE, DISMISS, READ, COMPARE, CLOSE, PENDING_REVIEW, PENDING_CLEAR, PENDING_DISMISS) + zipCommands
         private val uuid = Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
         private val sha = Regex("[a-f0-9]{64}")
         private val originFields = setOf("viewHandle", "filesHandle", "visitId")
@@ -55,6 +62,7 @@ internal class PocketWebSourceCheckpoints(
     private data class Offered(val native: OwnerSourceCheckpoints.Review, val pin: Pin, val view: JSONObject)
     private data class Catalog(val id: String, val native: OwnerSourceCheckpoints.Catalog)
     private data class PendingPin(val catalog: String, val review: String)
+    private data class ZipReview(val id: String, val catalog: Catalog, val source: LocalModule.SourceCheckpointZipPin, val expires: Long)
     private class Flight(val until: Long, val done: (JSONObject?, String?) -> Unit, val save: Pin?, val pendingClear: PendingPin?) {
         lateinit var timeout: Runnable
     }
@@ -63,6 +71,11 @@ internal class PocketWebSourceCheckpoints(
     private val commitFence = KeptStaticMainFence(main)
     @Volatile private var visit: Visit? = null
     private val retired = LinkedHashMap<Origin, String>()
+    private val zip = lazy { SourceCheckpointZipDelivery(controller.webPresentationActivity(), changed) }
+    fun zipBackground() { if (zip.isInitialized()) zip.value.background() }
+    fun retireZip() { if (zip.isInitialized()) zip.value.retire() }
+    fun closeZip() { if (zip.isInitialized()) zip.value.close() }
+    fun zipSnapshot(): JSONObject? = if (controller.webPrivateOwnerVisible() && zip.isInitialized()) zip.value.snapshot() else null
 
     private inner class Visit(val origin: Origin, val files: SourceCheckpointFilesPin, val name: String): OwnerSourceCheckpoints.Window {
         val handle = UUID.randomUUID().toString()
@@ -71,6 +84,7 @@ internal class PocketWebSourceCheckpoints(
         @Volatile var review: ReviewWindow? = null
         @Volatile var pendingReview: PendingWindow? = null
         var catalog: Catalog? = null
+        var zipReview: ZipReview? = null
         override fun projectId() = files.project
         override fun checkoutId() = files.checkout
         override fun requireCurrent() { check(fast(this) && !Thread.currentThread().isInterrupted) { LOST } }
@@ -176,6 +190,7 @@ internal class PocketWebSourceCheckpoints(
         clearReview(old)
         old.pendingReview = null
         old.catalog = null
+        old.zipReview = null
         old.flight?.let { end(old, it); lostFlight(old, it, LOST) }
     }
     fun retireLostOwner() { if (visit?.let { !live(it) } == true) clear() }
@@ -258,6 +273,10 @@ internal class PocketWebSourceCheckpoints(
         }
         val value = visit?.takeIf { it.origin == origin && it.handle == id(args, "shelfHandle") && live(it) } ?: error(LOST)
         val local = value.local ?: error(LOST)
+        if (action in zipCommands) {
+            zipCommand(action, value, local, args, done)
+            return
+        }
         if (continueEnabled) continueShown = null // A new read or comparison must prove its own selection.
 
         if (action == DISMISS) {
@@ -363,6 +382,65 @@ internal class PocketWebSourceCheckpoints(
                         output
                     })
                 }
+            }
+        }
+    }
+
+    private fun zipCommand(action: String, value: Visit, local: LocalModule, args: JSONObject,
+                           done: (JSONObject?, String?) -> Unit) {
+        fields(args, heldFields + setOf("catalogId", "version") + when (action) {
+            ZIP_REVIEW -> emptySet()
+            ZIP_WRITE -> setOf("requestId", "confirmed")
+            else -> setOf("requestId")
+        })
+        val shown = value.catalog?.takeIf { it.id == id(args, "catalogId") }
+            ?: error("请从原副本的新目录选择同一版源码")
+        val version = exact(shown, args.getJSONObject("version"))
+        check(value.flight == null && value.review == null && value.pendingReview == null) { "请先退出原副本正在进行的核对" }
+        if (action == ZIP_DISMISS) {
+            val id = id(args, "requestId")
+            if (value.zipReview?.let { it.id == id && it.catalog === shown && it.source.version() == version } == true)
+                value.zipReview = null
+            else {
+                check(zip.isInitialized()) { "原 ZIP 保存定位已变化" }
+                zip.value.dismiss(id, version)
+            }
+            done(bind(value, JSONObject().put("requestId", id).put("dismissed", true)), null)
+            return
+        }
+        check(!shown.native.pending() && recovery(value) == null) { "请先核对原副本未完成的保留" }
+        if (action == ZIP_REVIEW) {
+            check(zip.value.idle()) { "请先核对原 ZIP 定位或等待结束" }
+            value.zipReview = null
+            // Uses only the already listed committed header and exact checkout registration.
+            work(value, done, read = { local.prepareSourceCheckpointZipForOwner(value, version) }, show = { pin ->
+                check(value.catalog === shown && pin.version() == version && recovery(value) == null && zip.value.idle())
+                val review = ZipReview(UUID.randomUUID().toString(), shown, pin, SystemClock.elapsedRealtime() + REVIEW_MS)
+                value.zipReview = review
+                JSONObject().put("requestId", review.id).put("version", this.version(version))
+                    .put("suggestedName", SourceCheckpointZipDelivery.name(version))
+            })
+            return
+        }
+        val id = id(args, "requestId")
+        if (action == ZIP_CHOOSE) {
+            val offered = value.zipReview?.takeIf { it.id == id && it.catalog === shown && it.source.version() == version &&
+                SystemClock.elapsedRealtime() < it.expires } ?: error("原 ZIP 核对已到期或变化")
+            value.zipReview = null
+            // Never read an archive or write anything as a consequence of this choice.
+            val route = captureZipRoute(value.projectId())
+            val status = zip.value.arm(id, value.handle, offered.source, route)
+            done(bind(value, status), null)
+        } else {
+            check(action == ZIP_WRITE && args.opt("confirmed") == true && value.zipReview == null) {
+                "请在新打开的原副本窗口明确确认写入"
+            }
+            fun freshMain() = live(value) && value.catalog === shown && value.flight == null &&
+                value.review == null && value.pendingReview == null && recovery(value) == null
+            zip.value.write(id, version, value.handle, { fast(value) && value.flight == null }, ::freshMain,
+                { pin, permitted -> local.readSourceCheckpointZipForOwner(value, shown.native, pin) { permitted() } }) { result, error ->
+                if (freshMain()) done(result?.let { bind(value, it) }, error)
+                else done(null, "原写入窗口已离开，请核对原位置；不会再次写入")
             }
         }
     }

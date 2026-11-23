@@ -50,13 +50,18 @@ internal class PocketWebAiGroups(
             else -> fields(args, "groupId", "expectedRevision")
         }
         val expected = version(args)
+        if (action == "models.groups.save") {
+            // This ordinary Web editor makes a new group. Existing versioned
+            // references in conversations and Work need not be enumerated.
+            require(args.opt("id") == "" && expected == 0L) { "请另存为新模型组；没有改动原组。" }
+        }
         controller.runModelSelectionWrite({
             check(current()) { "原模型管理窗口已关闭，未保存排队操作" }
             val result = when (action) {
                 "models.groups.save" -> {
                     val definition = args.getJSONObject("definition")
                     require(definition.keys().asSequence().all { it in setOf("allowedAccounts", "candidates", "attemptPolicy") }) { "模型组定义只能包含候选、用途和重试范围" }
-                    service.saveGroup(args.optString("id"), expected, args.getString("name"), definition)
+                    service.saveGroup("", 0L, args.getString("name"), definition)
                 }
                 "models.groups.select" -> service.selectPurpose("MAIN", ModelTargetRef.group(args.getString("groupId"), expected))
                 "models.groups.delete" -> service.deleteGroup(args.getString("groupId"), expected)

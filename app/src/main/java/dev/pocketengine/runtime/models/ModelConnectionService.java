@@ -541,7 +541,13 @@ public final class ModelConnectionService {
         JSONObject saved=settings.setApiConnectionEnabled(id,revision,enabled);
         return new JSONObject().put("status","saved").put("savedConnection",saved).put("snapshot",snapshot()).put("selectionChanged",false);
     }}
-    public JSONObject saveGroup(String id,long revision,String name,JSONObject definition)throws Exception{synchronized(settings){settings.saveModelGroup(id,revision,name,definition);return snapshot();}}
+    public JSONObject saveGroup(String id,long revision,String name,JSONObject definition)throws Exception{
+        synchronized(settings){
+            JSONObject saved=settings.saveModelGroup(id,revision,name,definition);
+            // Exact native identity, not a guessed match by the model group's name.
+            return snapshot().put("savedGroup",new JSONObject().put("groupId",saved.getString("groupId")).put("revision",saved.getLong("revision")));
+        }
+    }
     public JSONObject deleteGroup(String id,long revision)throws Exception{synchronized(settings){settings.deleteModelGroup(id,revision);return snapshot();}}
     public JSONObject selectPurpose(String purpose,ModelTargetRef target)throws Exception{synchronized(settings){settings.selectModelPurpose(purpose,target);return snapshot();}}
     public ModelConfig captureTarget(ModelTargetRef target,String purpose,String audience,ModelConfig capturedGlobal)throws Exception{return settings.captureModelTarget(target,purpose,audience,capturedGlobal);}

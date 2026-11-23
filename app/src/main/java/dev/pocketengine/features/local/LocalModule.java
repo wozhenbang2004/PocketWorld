@@ -595,6 +595,38 @@ public final class LocalModule implements EngineModule {
             OwnerSourceCheckpoints.Version version)throws Exception{
         return ownerSourceCheckpoints.readReceipt(shown,version);
     }
+    /** Metadata-only admission before the system picker. Holds no shelf lease or archive bytes. */
+    public static final class SourceCheckpointZipPin {
+        private final LocalModule issuer;
+        private final OwnerSourceCheckpoints.CheckoutProof original;
+        private final OwnerSourceCheckpoints.Version selected;
+        private SourceCheckpointZipPin(LocalModule issuer,OwnerSourceCheckpoints.CheckoutProof original,
+                                       OwnerSourceCheckpoints.Version selected){
+            this.issuer=issuer;this.original=original;this.selected=selected;
+        }
+        public OwnerSourceCheckpoints.Version version(){return selected;}
+    }
+    public SourceCheckpointZipPin prepareSourceCheckpointZipForOwner(OwnerSourceCheckpoints.Window window,
+            OwnerSourceCheckpoints.Version selected)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        if(selected==null||!selected.projectId().equals(window.projectId())||!selected.checkoutId().equals(window.checkoutId()))
+            throw new SecurityException("不是原私人副本的所选源码版本");
+        return new SourceCheckpointZipPin(this,requireCheckpointCheckout(window),selected);
+    }
+    /** Fresh original owner Files visit and immutable native catalogue, not the picker callback. */
+    public byte[] readSourceCheckpointZipForOwner(OwnerSourceCheckpoints.Window fresh,OwnerSourceCheckpoints.Catalog shown,
+            SourceCheckpointZipPin pin,java.util.function.BooleanSupplier current)throws Exception{
+        OwnerSourceCheckpoints.requireWorker();
+        if(pin==null||pin.issuer!=this||!current.getAsBoolean()||!pin.original.equals(requireCheckpointCheckout(fresh)))
+            throw new SecurityException("原私人副本登记已变化，未复用其他 ZIP");
+        byte[] bytes=ownerSourceCheckpoints.readPortableZip(fresh,shown,pin.selected,current);
+        boolean verified=false;
+        try{
+            if(!current.getAsBoolean()||!pin.original.equals(requireCheckpointCheckout(fresh)))
+                throw new SecurityException("原私人副本登记已变化，未写入 ZIP");
+            verified=true;return bytes;
+        }finally{if(!verified)java.util.Arrays.fill(bytes,(byte)0);}
+    }
     /** This native catalog was admitted against the exact checkout during its visit.
      * Compare only consumes that live visit and its selected retained archives. */
     public OwnerSourceCheckpoints.Comparison compareSourceCheckpointsForOwner(OwnerSourceCheckpoints.Catalog shown,

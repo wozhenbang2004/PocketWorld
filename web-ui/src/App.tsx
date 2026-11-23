@@ -112,7 +112,7 @@ import type {ReturnToAdoptedSource} from './ProjectFormalFileDelivery';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ModelSettingsWorkDraft,type ModelSettingsWorkDraftRead,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalOrdinarySourceDirectory,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ModelSettingsWorkDraft,type ModelSettingsWorkDraftRead,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import {ProjectKeptStaticPages,supportsKeptStaticPages,type KeptStaticShelfNavigation} from './ProjectKeptStaticPages';
@@ -1210,6 +1210,8 @@ export default function App(){
  useEffect(()=>{if(route!=='projects'||state.projectId!==projectDraftReturn?.projectId)setProjectDraftReturn(null);},[route,state.projectId,projectDraftReturn?.projectId]);
  const [projectWorkPresentations,setProjectWorkPresentations]=useState<Record<string,ProjectWorkPresentation>>({});
  const [projectImportedEditor,setProjectImportedEditor]=useState<ProjectImportedEditor|null>(null);
+ const importedFilesReturnNow=useRef<ProjectImportedEditor['filesReturn']>(undefined);
+ const importedFilesBackPlace=useRef<(projectId:string,presentation:ProjectWorkPresentation)=>boolean>(()=>false);
  const phoneImportFilesQuiet=useRef<(project:string)=>boolean>(()=>false);
  const handledImportedEditor=useCallback((target:ProjectImportedEditor)=>setProjectImportedEditor(value=>value===target?null:value),[]);
  const [projectLocalFilesIntent,setProjectLocalFilesIntent]=useState<ProjectLocalFilesIntent|null>(null);
@@ -11469,6 +11471,7 @@ export default function App(){
   setProjectWorkPresentations(previous=>({...previous,[original.projectId]:{open:false,mode:'default'}}));
  };
  const showProjectSection=(section:'work'|'files'|'preview')=>{
+  importedFilesReturnNow.current=undefined;
   if(section!=='work'&&leaveProjectModelReturnForAction(()=>showProjectSection(section)))return;
   if(section!=='work'){projectQuestionRequest.current++;dismissModelWorkArrival();}
   const commit=()=>{
@@ -11616,7 +11619,10 @@ export default function App(){
   retainedVisit.key===openedRetainedDraftCopyKey(snapshot));
  const importedWorkTarget=importedCopy&&projectSection==='work'&&!importedPresentation?.open&&
   !projectWorkDrafts[importedCopy.projectId]?.expanded?importedCopy:null;
- const importedFileTarget=importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
+ // The source entry does not disappear on a formal-file search, list refresh, or display menu.
+ const exactFilesLanding=ready&&currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&
+  canOpenImported&&can('projects.development.files.close')?originalOrdinarySourceDirectory(currentProject.id):null;
+ const importedFileTarget=!exactFilesLanding&&importedCopy&&projectSection==='files'&&projectListInput.projectId===importedCopy.projectId&&
   !projectListBusy&&!projectListError&&!files.length&&!fileQuery?importedCopy:null;
  const projectStartDraft=currentProject?projectWorkDrafts[currentProject.id]:undefined;
  const projectStartPresentation:ProjectWorkPresentation=(currentProject?projectWorkPresentations[currentProject.id]:undefined)??{
@@ -11646,7 +11652,7 @@ export default function App(){
   !previewBlocked&&!projectPreview.expanded&&!projectListBusy&&!projectListError&&!projectImportedEditor&&!projectDraftReturn&&!projectBuildReturn&&
   !projectWorkDrafts[currentProject.id]?.operation&&!projectWorkDrafts[currentProject.id]?.expanded&&
   firstProjectFilesCurrent(bridge.getState(),currentProject.id)?currentProject.id:'';
- const firstLocalFilesProject=projectSection==='files'&&!fileQuery&&!importedFileTarget&&!preparedLocalFilesTab?emptyCreatedProject:'';
+ const firstLocalFilesProject=projectSection==='files'&&!fileQuery&&!importedFileTarget&&!exactFilesLanding&&!preparedLocalFilesTab?emptyCreatedProject:'';
  const openLocalProjectFiles=(from:'files'|'work',originalCopy?:ProjectPreparedLocalCopy)=>{
   if(route!=='projects'||projectSection!==from||originalCopy&&originalCopy!==(from==='work'?preparedLocalFilesWork:preparedLocalFilesTab))return;
   const projectId=originalCopy?.projectId||(from==='work'?firstLocalFilesWorkProject:firstLocalFilesProject);
@@ -11668,10 +11674,57 @@ export default function App(){
   setProjectWorkPresentations(previous=>({...previous,[projectId]:{open:true,mode:'default'}}));
  };
  const fixedTaskCopy=importedCopy?.sourceKind==='task_source_package';
- const showImportedEditor=(target:ProjectImportedEditor)=>{
+ const showImportedEditor=(target:ProjectImportedEditor,presentation:ProjectWorkPresentation={open:true,mode:'default'})=>{
   setProjectImportedEditor(target);
   setProjectSections(previous=>({...previous,[target.projectId]:'work'}));
-  setProjectWorkPresentations(previous=>({...previous,[target.projectId]:{open:true,mode:'default'}}));
+  setProjectWorkPresentations(previous=>({...previous,[target.projectId]:presentation}));
+ };
+ const importedFilesQuiet=(projectId:string)=>route==='projects'&&state.projectId===projectId&&
+  !previewBlocked&&!projectPreview.expanded&&!packageOpening&&!taskOpening&&!projectDraftReturn&&!projectBuildReturn&&
+  !projectLocalFilesIntent&&!pythonSetupReturn&&!dependencyBuildReturn&&!viteToolsReturn&&!viteResultLookup&&!modelWorkArrival&&
+  !terminalSavedFileArrival.current&&!projectWorkDrafts[projectId]?.operation&&!projectWorkDrafts[projectId]?.expanded;
+ importedFilesBackPlace.current=(projectId,presentation)=>projectSection==='work'&&importedFilesQuiet(projectId)&&
+  projectWorkPresentations[projectId]===presentation;
+ const canEnterFilesLanding=!!exactFilesLanding&&!projectImportedEditor&&importedFilesQuiet(exactFilesLanding.projectId);
+ const openFilesLanding=(target:ProjectImportedEditor)=>{
+  if(!canEnterFilesLanding||target!==exactFilesLanding||projectSection!=='files')return;
+  const {projectId}=target, initial=bridge.getState(), resume=obj(initial.view).resumeRevision;
+  const documentEpoch=bridge.getDocumentEpoch(), navigation=navigationWindow.current, taskRequest=reviewRequest.current;
+  const questionRequest=projectQuestionRequest.current, revision=initial.state.requestedProjectRevision;
+  const owner=()=>{
+   const live=bridge.getState(), state=live.state, place=obj(live.view);
+   return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation&&
+    reviewRequest.current===taskRequest&&projectQuestionRequest.current===questionRequest&&live.host?.ready===true&&
+    place.section===null&&place.taskId===null&&Number.isSafeInteger(resume)&&place.resumeRevision===resume&&
+    Number.isSafeInteger(revision)&&state.requestedProjectRevision===revision&&
+    state.projectId===projectId&&!state.filePath&&!state.fileLoading&&!state.fileSaving&&!state.conversationReader&&
+    !state.localSourceIntake?.window&&!state.projectGitImport?.open&&!state.attachmentWorkspace?.open&&!state.chatAttachmentPickerOpen&&
+    canEditImportedCheckout(action=>live.capabilities.commands.includes(action))&&live.capabilities.commands.includes('projects.development.files.close')&&
+    sameImportedEditor(target,originalOrdinarySourceDirectory(projectId));
+  };
+  if(!owner()){setLocalError('原项目或本机副本已变化，没有打开其他文件。');return;}
+  const before=projectWorkPresentations[projectId], temporary:ProjectWorkPresentation={open:true,mode:'default'};
+  const filesReturn:NonNullable<ProjectImportedEditor['filesReturn']>={
+   current:()=>importedFilesReturnNow.current===filesReturn&&owner()&&importedFilesBackPlace.current(projectId,temporary),
+   closed:()=>{
+    if(!filesReturn.current())return;
+    importedFilesReturnNow.current=undefined;
+    setProjectSections(previous=>previous[projectId]==='work'?{...previous,[projectId]:'files'}:previous);
+    setProjectWorkPresentations(previous=>{
+     if(previous[projectId]!==temporary)return previous;
+     if(before)return {...previous,[projectId]:before};
+     const restored={...previous};delete restored[projectId];return restored;
+    });
+   },
+   unconfirmed:()=>{
+    if(!filesReturn.current())return;
+    importedFilesReturnNow.current=undefined;
+    setLocalError('未确认关闭原本机文件窗口。可从项目页手动返回「文件」。');
+   },
+  };
+  setLocalError('');
+  importedFilesReturnNow.current=filesReturn;
+  showImportedEditor({...target,openDirectory:true,filesReturn},temporary);
  };
  const openOriginalImportedFiles=(target:ProjectImportedEditor,from:'work'|'files')=>{
   const live=bridge.getState().state,list=obj(obj(live.moduleResultInputs)['workspace.list']);
@@ -11728,23 +11781,24 @@ export default function App(){
  const starterFiles=importedFileTarget?.sourceKind==='builtin_vite_starter';
  const starterWork=importedWorkTarget?.sourceKind==='builtin_vite_starter';
  const projectFilesEmpty=<div className="pw-empty pw-project-empty"><IconFolder size={26} aria-hidden="true"/>
-  <h3>{fileQuery?'没有匹配的文件':starterFiles?'网页源码在本机副本':importedFileTarget?fixedTaskCopy?'源码在新工作副本':'导入源码在本机副本':firstLocalFilesProject||preparedLocalFilesTab?'还没有正式文件':'暂无列出的文件'}</h3>
+  <h3>{fileQuery?'没有匹配的文件':starterFiles?'网页源码在本机副本':importedFileTarget?fixedTaskCopy?'源码在新工作副本':'导入源码在本机副本':exactFilesLanding||firstLocalFilesProject||preparedLocalFilesTab?'还没有正式文件':'暂无列出的文件'}</h3>
   <p>{fileQuery?'换个关键词，或清空搜索返回文件列表。':starterFiles?'在这份本机副本编辑网页，改完再构建。':importedFileTarget?fixedTaskCopy?
     '这里还没有正式文件。可编辑新副本中的源码，原固定包保持不变。':'这里还没有正式文件。编辑和后续本机构建都用这份导入副本。':
+    exactFilesLanding?'编辑本机副本不会改动这里的正式文件。':
     preparedLocalFilesTab?'正式文件与本机副本分开。打开本机源码可查看这份副本的文件。':
     firstLocalFilesProject?'要在手机上运行，请在工作副本里添加源码。新建正式文件不会改动已有副本。':'从一个新文件开始，也可以重新读取当前项目。'}</p>
   {fileQuery?<Button variant="secondary" onClick={()=>setFileQuery('')}>清空搜索</Button>:<div className="pw-action-row">
    {importedFileTarget&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openOriginalImportedFiles(importedFileTarget,'files')}>{starterFiles?'打开网页源码':fixedTaskCopy?'编辑新副本源码':'编辑导入的本机源码'}</Button>}
    {preparedLocalFilesTab&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openLocalProjectFiles('files',preparedLocalFilesTab)}>打开本机源码</Button>}
    {firstLocalFilesProject&&<Button variant="primary" leadingIcon={IconFolder} onClick={()=>openLocalProjectFiles('files')}>在本机副本里编辑</Button>}
-   {can('projects.newFile')&&<Button variant={importedFileTarget||firstLocalFilesProject||preparedLocalFilesTab?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{importedFileTarget||firstLocalFilesProject||preparedLocalFilesTab?'新建正式文件':'新建文件'}</Button>}
+   {can('projects.newFile')&&<Button variant={exactFilesLanding||importedFileTarget||firstLocalFilesProject||preparedLocalFilesTab?'ghost':'primary'} leadingIcon={IconAdd} onClick={()=>openCreate('file')}>{exactFilesLanding||importedFileTarget||firstLocalFilesProject||preparedLocalFilesTab?'新建正式文件':'新建文件'}</Button>}
    {can('projects.refresh')&&<Button variant="ghost" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}
   </div>}
  </div>;
  useCollectionMotion(projectScroll,JSON.stringify(['projects',state.projectId]),JSON.stringify(projects.map(project=>[project.id,project.name])),{selector:'.pw-project-library-row',active:route==='projects'&&ready&&!state.filePath&&!projectPreview.expanded&&!packageOpening});
- const projectFiles=<>{(files.length>0||!!fileQuery)&&<><div className="pw-project-tools"><SearchField value={fileQuery} onChange={setFileQuery} aria-label="搜索当前项目文件" placeholder="搜索文件"/><PopoverTrigger isOpen={fileDisplayOpen} onOpenChange={setFileDisplayOpen}><IconButton icon={fileView==='tree'?IconFolder:IconGrid} aria-label="文件显示方式" title="文件显示方式"/><Popover aria-label="文件显示方式"><PopoverHeader title="文件显示"/><RadioOptions label="显示方式" value={fileView} onChange={value=>{setFileView(value as 'files'|'tree'|'grid');setFileDisplayOpen(false)}} options={[{id:'files',label:'文件列表'},{id:'tree',label:'目录层级'},{id:'grid',label:'网格'}]}/></Popover></PopoverTrigger>{can('projects.newFile')&&<IconButton icon={IconAdd} aria-label="新文件" title="新文件" onClick={()=>openCreate('file')}/>}</div>
+ const projectFiles=<>{(files.length>0||!!fileQuery)&&<><div className="pw-project-tools"><SearchField value={fileQuery} onChange={setFileQuery} aria-label={exactFilesLanding?'搜索正式文件':'搜索当前项目文件'} placeholder={exactFilesLanding?'搜索正式文件':'搜索文件'}/><PopoverTrigger isOpen={fileDisplayOpen} onOpenChange={setFileDisplayOpen}><IconButton icon={fileView==='tree'?IconFolder:IconGrid} aria-label="文件显示方式" title="文件显示方式"/><Popover aria-label="文件显示方式"><PopoverHeader title="文件显示"/><RadioOptions label="显示方式" value={fileView} onChange={value=>{setFileView(value as 'files'|'tree'|'grid');setFileDisplayOpen(false)}} options={[{id:'files',label:'文件列表'},{id:'tree',label:'目录层级'},{id:'grid',label:'网格'}]}/></Popover></PopoverTrigger>{can('projects.newFile')&&<IconButton icon={IconAdd} aria-label={exactFilesLanding?'新建正式文件':'新文件'} title={exactFilesLanding?'新建正式文件':'新文件'} onClick={()=>openCreate('file')}/>}</div>
       <div className="pw-project-list-caption"><MotionFeedback as="span" identity={`${projectListBusy}:${fileQuery}:${shownFiles.length}`} initial={false} role="status">{projectListBusy?'正在刷新 · ':''}{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</MotionFeedback>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={IconRefresh} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
-      </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?projectFilesEmpty:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div>
+      </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?projectFilesEmpty:fileView==='tree'?<TreeView aria-label={exactFilesLanding?'正式文件':'项目文件'} key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div>
       {currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&!taskOpen&&can('projects.removedFiles.list')&&<ProjectRemovedFiles key={currentProject.id} project={currentProject.id}/>}</>;
  // A cold, ordinary Home can offer the already-published local catalogue.
  // Keep its draft and leave project/file choice to the existing directory.
@@ -11880,6 +11934,7 @@ export default function App(){
           retainedDraftCopy={retainedCopyFirst}
           presentation={projectStartPresentation}
           onPresentationChange={presentation=>{
+           importedFilesReturnNow.current=undefined;
            if(!presentation.open||presentation.mode!=='default')dismissModelWorkArrival();
            setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}));
           }}
@@ -11924,7 +11979,18 @@ export default function App(){
           />:undefined}
         />:undefined}/>
       </TabPanel>
-      <TabPanel id="files">{can('projects.keptDrafts.list')&&<ProjectKeptDraftIndex key={currentProject.id} project={currentProject.id}/>} {projectFiles}</TabPanel>
+      <TabPanel id="files">
+        {exactFilesLanding&&<section className="pw-form-flow" aria-label="本机工作副本">
+          <h3>本机工作副本</h3>
+          <p className="pw-field-hint">继续编辑原副本里的源码。下面的正式文件另行保存。</p>
+          <Button variant="primary" leadingIcon={IconFolder} disabled={!canEnterFilesLanding} onClick={()=>openFilesLanding(exactFilesLanding)}>
+            {exactFilesLanding.exactStarterSource?'打开网页源码':'打开本机源码'}
+          </Button>
+        </section>}
+        {can('projects.keptDrafts.list')&&<ProjectKeptDraftIndex key={currentProject.id} project={currentProject.id}/>}
+        {exactFilesLanding&&<h3>正式文件</h3>}
+        {projectFiles}
+      </TabPanel>
       <TabPanel id="preview" className="pw-project-preview-panel" style={{translate:'none',opacity:1,transition:'none'}}>
         {!projectPreview.expanded?<section className="pw-preview-entry" aria-label="选择项目预览来源">
           <h3>项目预览</h3>

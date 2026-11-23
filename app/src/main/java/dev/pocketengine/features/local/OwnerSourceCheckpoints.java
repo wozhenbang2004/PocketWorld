@@ -350,6 +350,56 @@ public final class OwnerSourceCheckpoints {
         }
     }
 
+    /** The selected, already committed canonical ZIP. Called only inside the
+     * original owner's affirmative Write. No body goes to Web or to a provider until
+     * these exact compressed bytes have been proved and detached from private storage. */
+    byte[] readPortableZip(Window fresh,Catalog shown,Version selected,BooleanSupplier current)throws Exception{
+        requireWorker();
+        if(shown==null||shown.issuer!=this||shown.window!=fresh||shown.pending||selected==null||!shown.versions.contains(selected))
+            throw new SecurityException("请选择本次原副本已登记的那一版源码");
+        Scope scope=shown.scope;
+        var gate=(ProjectPackageArchive.CopyCurrent)()->{
+            current(fresh,scope);
+            if(!current.getAsBoolean())throw new SecurityException("原源码 ZIP 写入已离开");
+        };
+        synchronized(LOCK){
+            gate.check();
+            Path root=lineage(scope,false);
+            if(root==null)throw new SecurityException("原源码 ZIP 不可核对");
+            ArchivePin stock=pinArchive(fresh,scope,slot(root,selected.storageSlot),selected);
+            ArchivePin pin=new ArchivePin(stock.directory,stock.archive,stock.identity,gate);
+            JSONObject index=ProjectPackageArchive.readManifestIndex(pin.archive.toFile(),gate);
+            requireVerifiedManifest(pin,scope,selected,index,ProjectSources.digest(index));
+            JSONArray files=index.getJSONArray("files");
+            for(int i=0;i<files.length();i++){
+                gate.check();
+                if(files.getJSONObject(i).getString("path").split("/",-1).length>
+                        dev.pocketengine.features.local.project.ProjectSourceImport.MAX_DEPTH)
+                    throw new IllegalArgumentException("原 ZIP 含超过导入深度的文件，未写入");
+            }
+            var before=regular(pin.archive,ProjectPackageArchive.MAX_ARCHIVE_BYTES);
+            if(before.size()!=selected.archiveBytes)throw new IOException("原快照包大小已变化");
+            byte[] raw=new byte[Math.toIntExact(selected.archiveBytes)];
+            boolean verified=false;
+            try{
+                var hash=java.security.MessageDigest.getInstance("SHA-256");
+                try(var in=Files.newInputStream(pin.archive,LinkOption.NOFOLLOW_LINKS)){
+                    for(int off=0;off<raw.length;){
+                        gate.check();int n=in.read(raw,off,Math.min(65536,raw.length-off));
+                        if(n<=0)throw new IOException("未读完原源码 ZIP");
+                        hash.update(raw,off,n);off+=n;
+                    }
+                    if(in.read()!=-1)throw new IOException("原源码 ZIP 大小已变化");
+                }
+                if(!selected.archiveSha256.equals(hex(hash.digest()))||
+                        !sameFile(before,regular(pin.archive,ProjectPackageArchive.MAX_ARCHIVE_BYTES))||
+                        !sameDirectory(pin.identity,requireDirectory(pin.directory))||!selected.equals(readHeader(pin.directory,scope)))
+                    throw new SecurityException("原源码 ZIP 字节或登记已变化");
+                gate.check();verified=true;return raw;
+            }finally{if(!verified)java.util.Arrays.fill(raw,(byte)0);}
+        }
+    }
+
     /** Ordered owner selection, not latest, the live checkout, a text diff, or restore permission. */
     Comparison compare(Catalog shown,Version before,Version after)throws Exception{
         requireWorker();

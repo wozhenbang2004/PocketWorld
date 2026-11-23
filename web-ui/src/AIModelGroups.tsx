@@ -56,13 +56,25 @@ export function AIModelGroups({ state, data, supported, run, registerTransientBa
     try {
       const value = object(await run(action, args));
       if (value.status !== 'saved' && value.status !== 'deleted') throw new Error('操作回执待核对，请重新读取模型组。');
-      if (alive.current && current === generation.current) { update(value); setEditor(null); setRemoving(null); setNotice(message); }
+      if (alive.current && current === generation.current) {
+        if (action === 'models.groups.save') {
+          const receipt = object(value.snapshot), made = object(receipt.savedGroup), id = text(made.groupId);
+          const matches = rows(object(receipt.modelGroups).groups).filter(group => group.groupId === id);
+          if (value.status !== 'saved' || !/^group-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id) ||
+              made.revision !== 1 || groups.some(group => group.groupId === id) || matches.length !== 1 ||
+              matches[0].revision !== made.revision || matches[0].name !== args.name)
+            throw new Error('尚未核对到这次另存的新组。');
+        }
+        update(value); setEditor(null); setRemoving(null); setNotice(message);
+      }
     } catch (failure) { if (alive.current && current === generation.current) { setUnknown(true); setError(`${failure instanceof Error ? failure.message : '原操作结果待核对。'} 请重新读取，没有自动重试。`); } }
     finally { if (current === generation.current) { pending.current = false; if (alive.current) setBusy(false); } }
   };
   const nameFor = (candidate: Data) => connections.find(row => row.id === candidate.target?.connectionId)?.name || candidate.target?.connectionId || '原来源';
   const selected = available.find(row => JSON.stringify([row.connectionId, row.modelId]) === next);
   const existing = editor?.groupId ? groups.find(row => row.groupId === editor.groupId) : null;
+  const copying = !!text(editor?.groupId);
+  const duplicateCopyName = copying && groups.some(group => text(group.name).trim() === name.trim());
   const stale = Boolean(editor && (editorSelectionRevision !== state.modelSelectionRevision || editor.groupId && (!existing || existing.revision !== editor.revision)));
   const invalidCandidates = candidates.some(candidate => !connections.some(connection => connection.id === candidate.target.connectionId && connection.provider !== 'bedrock_anthropic') || candidate.target.kind !== 'exact' || candidate.target.connectionId.startsWith('account:'));
   // Saving grants this group only the sources of its current enabled candidates.
@@ -71,8 +83,10 @@ export function AIModelGroups({ state, data, supported, run, registerTransientBa
   const boundPurposes = removing ? Object.entries(bindings).filter(([, ref]) => object(ref).groupId === removing.groupId).map(([purpose]) => purpose) : [];
   return <section className="pw-ai-groups">
     {editor ? <>
-      <header className="pw-ai-detail-heading"><h2>{editor.groupId ? '编辑模型组' : '新建模型组'}</h2></header>
-      <TextField label="模型组名称" value={name} maxLength={100} onChange={setName} isDisabled={busy} placeholder="例如：日常任务" />
+      <header className="pw-ai-detail-heading"><h2>{copying ? '编辑副本' : '新建模型组'}</h2></header>
+      {copying && <p className="pw-ai-muted">另存不会改动原组，也不会切换已经选用它的对话或工作。</p>}
+      <TextField label="模型组名称" value={name} maxLength={100} onChange={setName} isDisabled={busy} placeholder="例如：日常任务"
+        hint={copying ? '请为新组起一个不同的名称。' : undefined} />
       <section className="pw-ai-candidates"><header className="pw-ai-section-heading"><h3>候选顺序</h3><span>API 来源</span></header>
         {candidates.length ? <SortableList items={candidates} onItemsChange={setCandidates} getItemLabel={item => item.target.modelId} label="模型候选顺序" disabled={busy} className="pw-ai-candidate-order" itemClassName="pw-ai-candidate-row" renderItem={(candidate, index) => <><span className="pw-ai-candidate-index">{index + 1}</span><span className="pw-ai-row-copy"><strong>{candidate.target.modelId}</strong><small>{nameFor(candidate)}</small></span><Button variant="ghost" iconOnly leadingIcon={IconTrash} aria-label={`移除候选 ${candidate.target.modelId}`} disabled={busy} onClick={() => setCandidates(old => old.filter(row => row.id !== candidate.id))} /></>} /> : <p className="pw-ai-muted">先添加一个已配置的 API 模型。</p>}
         <div className="pw-ai-add-candidate"><SelectField label="添加候选模型" value={next} onChange={setNext} isDisabled={busy || candidates.length >= 8} options={available.filter(row => !candidates.some(candidate => candidate.target.connectionId === row.connectionId && candidate.target.modelId === row.modelId)).map(row => ({ id: JSON.stringify([row.connectionId, row.modelId]), label: row.modelId, description: row.connectionName || row.connectionId }))} placeholder="选择 API 模型" /><Button variant="secondary" leadingIcon={IconAdd} disabled={busy || !selected || candidates.length >= 8} onClick={() => {
@@ -84,10 +98,10 @@ export function AIModelGroups({ state, data, supported, run, registerTransientBa
       <Accordion><AccordionItem id="attempt-policy" title="高级调度"><SelectField label="本次调用最多尝试" options={[{ id: '1', label: '1 次' }, { id: '2', label: '2 次' }, { id: '3', label: '3 次' }]} value={switching ? attempts : '1'} isDisabled={busy || !switching} onChange={setAttempts} /><p className="pw-ai-muted">最多切换一次来源；不会重放已经发生的工具操作。</p></AccordionItem></Accordion>
       {invalidCandidates && <p className="pw-field-error" role="alert">此组含本界面暂不支持编辑的账号或 Bedrock 来源。保留原配置，请先核对用途。</p>}
       {stale && <p className="pw-field-error" role="alert">服务或模型组已在其他位置变化，请返回重新打开。</p>}
-      <div className="pw-ai-picker-actions"><Button variant="ghost" disabled={busy} onClick={() => setEditor(null)}>取消</Button><Button disabled={busy || unknown || stale || invalidCandidates || !name.trim() || !candidates.length || !supported('models.groups.save')} onClick={() => void mutate('models.groups.save', {
-        id: text(editor.groupId), expectedRevision: Number(editor.revision || 0), name: name.trim(), definition: { allowedAccounts: { mode: 'EXPLICIT', refs: allowedSources },
+      <div className="pw-ai-picker-actions"><Button variant="ghost" disabled={busy} onClick={() => setEditor(null)}>取消</Button><Button disabled={busy || unknown || stale || invalidCandidates || duplicateCopyName || !name.trim() || !candidates.length || !supported('models.groups.save')} onClick={() => void mutate('models.groups.save', {
+        id: '', expectedRevision: 0, name: name.trim(), definition: { allowedAccounts: { mode: 'EXPLICIT', refs: allowedSources },
           candidates: candidates.map(({ id: _id, ...row }) => row), attemptPolicy: { maxAttempts: switching ? Number(attempts) : 1, maxRouteSwitches: switching ? 1 : 0 } },
-      }, '模型组已保存，尚未更改默认模型。')}>保存模型组</Button></div>
+      }, copying ? '已另存为新模型组。本次未改动原组，也未更改默认模型。' : '模型组已保存，尚未更改默认模型。')}>{copying ? '另存为新模型组' : '保存模型组'}</Button></div>
     </> : <>
       <header className="pw-ai-section-heading"><h2>模型组</h2>{groups.length > 0 && <Button leadingIcon={IconAdd} disabled={busy || unknown || !supported('models.groups.save')} onClick={() => void open({})}>新建</Button>}</header>
       <p className="pw-ai-muted">按候选顺序处理新任务，可单独开启失败切换。</p>

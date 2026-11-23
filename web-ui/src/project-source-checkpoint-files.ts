@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
-import { checkedCheckpointComparison, recoveryHere, sameVersion, type Catalog, type Comparison, type PendingCheckpointReview,
+import { checkedCheckpointComparison, checkedCheckpointZip, recoveryHere, sameVersion, type Catalog, type Comparison, type PendingCheckpointReview,
   type ProjectSourceCheckpointVisit, type Recovery, type Review, type Save, type Scope, type Version } from './ProjectSourceCheckpointScreen';
 import { comparisonBase, selectedVersion, singleSelection, targetFor, type CheckpointContinuationSource,
   type Observation, type Published, type Review as ContinueReview, type SourceCheckpointContinuation, type Target }
@@ -11,6 +11,8 @@ import { checkedSiblingFiles, checkpointContinuePrefix, hasCheckpointContinue, t
 const prefix = 'projects.development.files.checkpoints.';
 const actions = ['open', 'list', 'review', 'save', 'dismiss', 'read', 'compare', 'close'] as const;
 const pendingActions = ['pending.review', 'pending.clear', 'pending.dismiss'] as const;
+const zipActions = ['zip.review', 'zip.choose', 'zip.write', 'zip.dismiss'] as const;
+type ZipAction = typeof zipActions[number];
 type Action = typeof actions[number] | typeof pendingActions[number];
 const PENDING_REVIEW_MS = 120_000, MAX_PENDING_BYTES = 20 * 1024 * 1024 + 2048;
 type Data = Record<string, unknown>;
@@ -260,10 +262,59 @@ export function useSourceCheckpointFiles() {
     } : undefined;
     const supportsSelect = () => bridge.getState().capabilities.commands.includes(checkpointContinuePrefix + 'select');
     const canSelect = () => mayContinue() && !v.moving && supportsSelect();
+    type ZipReview = Awaited<ReturnType<NonNullable<ProjectSourceCheckpointVisit['zip']>['review']>>;
+    let zipOffer: { catalog: Catalog; value: ZipReview } | undefined;
+    let launchedZip = '';
+    const zipSnapshot = () => bridge.getState().state.sourceCheckpointZip;
+    const zipCall = async (name: ZipAction, list: Catalog, row: Version, extra: Data = {}) => {
+      if (!current() || v.moving || review || pendingReview || !bridge.getState().capabilities.commands.includes(prefix + name)) throw Error();
+      const catalogId = shown(list, row);
+      const result = data(await bridge.command(prefix + name, { ...held, catalogId, version: versionPin(row), ...extra }));
+      if (!current() || shown(list, row) !== catalogId || !samePin(pin, result)) throw Error();
+      return result;
+    };
     return {
       scope, recovery: v.recovery ?? null, isCurrent: current, canReviewSavedSource: () => current() && !recovery && !review && !pendingReview,
       onRetired(listener) { v.listeners.add(listener); return () => { v.listeners.delete(listener); }; },
       continuation,
+      zip: zipActions.every(name => bridge.getState().capabilities.commands.includes(prefix + name)) ? {
+        subscribe: bridge.subscribe,
+        snapshot: zipSnapshot,
+        async review(list, row) {
+          if (list.pending || recovery || zipSnapshot() !== null) throw Error();
+          const value = await zipCall('zip.review', list, row);
+          const name = `pocketworld-source-${row.checkpointId.slice(0,8)}.zip`;
+          if (!uuid(value.requestId) || !value.version || !sameVersion(row, value.version as Version) || value.suggestedName !== name) throw Error();
+          const offer = Object.freeze({ requestId: value.requestId, version: row, suggestedName: name });
+          zipOffer = { catalog: list, value: offer };
+          return offer;
+        },
+        async choose(list, offer) {
+          if (zipOffer?.catalog !== list || zipOffer.value !== offer || list.pending || recovery || zipSnapshot() !== null) throw Error();
+          zipOffer = undefined; launchedZip = offer.requestId;
+          const value = await zipCall('zip.choose', list, offer.version, { requestId: offer.requestId });
+          if (checkedCheckpointZip(value, scope.projectId, offer.version)?.requestId !== offer.requestId) throw Error();
+        },
+        async write(list, row, target) {
+          const active = checkedCheckpointZip(zipSnapshot(), scope.projectId, row);
+          if (list.pending || recovery || !active || active.phase !== 'target_selected' || target.phase !== 'target_selected' ||
+              active.requestId !== target.requestId || active.requestId === launchedZip ||
+              active.destinationName !== target.destinationName) throw Error();
+          const result = checkedCheckpointZip(await zipCall('zip.write', list, row,
+            { requestId: target.requestId, confirmed: true }), scope.projectId, row);
+          if (!result || result.requestId !== target.requestId || result.destinationName !== target.destinationName ||
+              !['verified', 'not_written', 'unknown'].includes(result.phase)) throw Error();
+          return result;
+        },
+        async dismiss(list, row, requestId) {
+          const offered = zipOffer;
+          const delivery = checkedCheckpointZip(zipSnapshot(), scope.projectId, row);
+          if (offered?.catalog === list && offered.value.version === row && offered.value.requestId === requestId) zipOffer = undefined;
+          else if (!delivery || delivery.requestId !== requestId || ['choosing','chooser_unconfirmed','checking_target','writing'].includes(delivery.phase)) throw Error();
+          const value = await zipCall('zip.dismiss', list, row, { requestId });
+          if (value.requestId !== requestId || value.dismissed !== true) throw Error();
+        },
+      } : undefined,
       selectForContinue: continuation && supportsSelect() ? async (value, row) => {
         if (value.pending || !canSelect() || continuationReview) throw Error();
         const id = shown(value, row), epoch = clearSelection();

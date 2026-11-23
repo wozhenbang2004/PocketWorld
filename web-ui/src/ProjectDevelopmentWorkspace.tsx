@@ -1,7 +1,7 @@
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import type {LocalTerminalCheckout} from './LocalWorkspace';
 import { checkedHostFiles, checkedHostText, ProjectHostComparedFiles, ProjectHostDiff, type HostComparedFile, type HostComparison, type HostDiff, type HostEditorFile } from './ProjectHostFileComparison';
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog, TextAreaField } from './forms-library';
 import {ProjectTaskPackageOrigin,type TaskPackageOriginalWork} from './ProjectTaskPackageOrigin';
 import { bridge } from './bridge';
@@ -11,6 +11,7 @@ import type {DirectNodeDependencyPin} from './project-execution';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
 import type { KeptPageTextSelection } from './ProjectOfflinePageFields';
 import { hasCheckpointContinue, type CheckpointFilesArrival } from './project-source-checkpoint-continue-files';
+import { checkedCheckpointZip } from './ProjectSourceCheckpointScreen';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import type { ProjectViteResultTarget } from './FirstNodeWebOutput';
 import { CheckoutGuide, checkoutFirstWebTools, checkoutKindSummary, checkoutNodeToolObservation } from './ProjectWorkBinding';
@@ -35,7 +36,10 @@ export type ProjectBuildEditorResume = CheckoutBuildEditorResume & { taskId:stri
 export type ProjectBuildCopy = { taskId:string; runId:string; epoch:number; projectId:string; checkoutId:string; sourceDigest:string; editorResume?:ProjectBuildEditorResume; pythonEditor?:OriginalPythonRun };
 const builtinViteStarter='builtin_vite_starter';
 type ImportedEditorSource = 'external_zip'|'saf_tree'|'task_source_package'|'git_https'|typeof builtinViteStarter;
-export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; exactStarterSource?:true; exactSavedPageStarter?:true; openDirectory?:true};
+type ImportedFilesReturn = { current:()=>boolean; closed:()=>void; unconfirmed:()=>void };
+export type ProjectImportedEditor = {projectId:string; checkoutId:string; importIdentity:string; sourceKind:ImportedEditorSource; window:string; exactPhoneSource?:true; exactStarterSource?:true; exactSavedPageStarter?:true; openDirectory?:true; filesReturn?:ImportedFilesReturn};
+type PendingImportedFilesClose = { viewHandle:string; draftRevision:number; issued:boolean };
+type ImportedFilesClose = { visit:ImportedFilesReturn; opened?:string; pending?:PendingImportedFilesClose };
 export type ProjectPreparedLocalCopy = {projectId:string;checkoutId:string;requestId:string};
 export type ProjectLocalFilesIntent = {projectId:string; current:()=>boolean; originalCopy?:ProjectPreparedLocalCopy};
 type FirstLocalFilesPreparation = {intent:ProjectLocalFilesIntent;viewHandle:string};
@@ -353,6 +357,10 @@ function soleRegisteredSource(projectId:string,original:ProjectImportedEditor):P
   const copies=rows(bridge.getState().state.features?.local?.checkouts).filter(row=>row?.projectId===projectId);
   return copies.length===1&&copies[0].id===original.checkoutId?original:null;
 }
+export function originalOrdinarySourceDirectory(projectId:string):ProjectImportedEditor|null {
+  const original=originalImportedEditor(projectId);
+  return original&&(original.exactPhoneSource===true||original.exactStarterSource===true)?soleRegisteredSource(projectId,original):null;
+}
 function soleRegisteredSafFolder(projectId:string,original:ProjectImportedEditor|null):ProjectImportedEditor|null {
   return original?.sourceKind==='saf_tree'&&original.exactPhoneSource===true?soleRegisteredSource(projectId,original):null;
 }
@@ -430,6 +438,8 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
  * approved here, and reopening never repeats a submission or copy creation. */
 export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, modelSettingsReturn, onOpenWorkModelSettings, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, viteToolsReturn, viteResultLookup, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
+  const zipSnapshot = useSyncExternalStore(bridge.subscribe, () => bridge.getState().state.sourceCheckpointZip);
+  const pendingCheckpointZip = active && !document.hidden ? checkedCheckpointZip(zipSnapshot, projectId) : null;
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
   const [deliveryOpen,setDeliveryOpen]=useState(false);
@@ -446,8 +456,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false), [copyResult, setCopyResult] = useState<Data | null>(null);
   const [fileWindow,setFileWindow]=useState<{checkoutId:string;resumeSaved?:CheckoutSavedPosition;firstEntry?:CheckoutWebEntry;buildResume?:CheckoutBuildEditorResume;pythonResume?:OriginalPythonRun;
     pythonSetupResume?:CheckoutSavedPosition;originalImport?:ProjectImportedEditor;unselectedImport?:ProjectImportedEditor;reopenedFiles?:true;staticFilesVisit?:ProjectPhoneFolderVisit;
-    checkpointArrival?:CheckpointFilesArrival}|null>(null);
+    checkpointArrival?:CheckpointFilesArrival; importedFilesClose?:ImportedFilesClose}|null>(null);
   const currentFileWindow = useRef(fileWindow); currentFileWindow.current = fileWindow;
+  const [pendingImportedFilesClose,setPendingImportedFilesClose]=useState<ImportedFilesClose|null>(null);
   const [lastSavedFile,setLastSavedFile]=useState<CheckoutSavedPosition|null>(null);
   // A UI correlation so a new mount cannot adopt a system picker choice. This never grants a file read or write.
   const [lockVisit,setLockVisit]=useState<string|null>(null);
@@ -476,6 +487,54 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
   latest.current = { run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup, modelSettingsReturn }; activeReview.current = review;
   const runReopenedFiles=useCallback((action:string,args:Data={})=>
     action==='projects.development.files.open'?bridge.command(action,args):run(action,args),[run]);
+  const ordinaryFilesRun=fileWindow?.reopenedFiles?runReopenedFiles:run;
+  const importedDepartureCurrent=useCallback((returning:ImportedFilesClose,pin:PendingImportedFilesClose)=>
+    returning.pending===pin&&alive.current&&latest.current.active&&handle.current===pin.viewHandle&&
+    draftRevision.current===pin.draftRevision&&!entered.current&&!activeReview.current&&!previewOpen.current&&
+    !currentFileWindow.current&&returning.visit.current(),[]);
+  const settleImportedDeparture=useCallback((returning:ImportedFilesClose,pin:PendingImportedFilesClose)=>{
+    if(returning.pending!==pin)return;
+    returning.pending=undefined;
+    if(alive.current)setPendingImportedFilesClose(previous=>previous===returning?null:previous);
+  },[]);
+  useEffect(()=>{
+    const returning=pendingImportedFilesClose, pin=returning?.pending;
+    if(!returning||!pin||pin.issued)return;
+    // Normally the child's cleanup dispatches immediately. A nested close may
+    // never dispatch; don't keep passive Work inspection paused indefinitely.
+    const timer=window.setTimeout(()=>{
+      if(returning.pending!==pin||pin.issued)return;
+      if(importedDepartureCurrent(returning,pin))returning.visit.unconfirmed();
+      settleImportedDeparture(returning,pin);
+    },30_000);
+    return()=>window.clearTimeout(timer);
+  },[pendingImportedFilesClose,importedDepartureCurrent,settleImportedDeparture]);
+  const filesWithLandingReceipt=async(action:string,args:Data={})=>{
+    const returning=fileWindow?.importedFilesClose;
+    if(!returning||!view||args.viewHandle!==view.viewHandle)return ordinaryFilesRun(action,args);
+    const opening=action==='projects.development.files.open'&&args.checkoutId===fileCheckout;
+    const closing=returning.pending&&!returning.pending.issued&&returning.pending.viewHandle===view.viewHandle&&
+      action==='projects.development.files.close'&&!!returning.opened&&args.filesHandle===returning.opened?returning.pending:undefined;
+    if(!opening&&!closing)return ordinaryFilesRun(action,args);
+    if(opening)returning.opened=undefined; // A new native open may retire the previous list.
+    if(closing)closing.issued=true; // The stock bridge already bounds a posted request.
+    try{
+      const value=await ordinaryFilesRun(action,args);
+      if(opening&&returning.visit.current()&&currentFileWindow.current===fileWindow&&value?.readOnly===true&&
+        value.projectId===projectId&&value.checkoutId===fileCheckout&&copyIdentity(value.filesHandle))returning.opened=value.filesHandle;
+      // Observe only the existing cleanup close, only after this matching child's terminal Close/Back.
+      if(closing&&importedDepartureCurrent(returning,closing)){
+        if(value?.closed===true&&value.taskStopped===false)returning.visit.closed();
+        else returning.visit.unconfirmed();
+      }
+      return value;
+    }catch(failure){
+      if(closing&&importedDepartureCurrent(returning,closing))returning.visit.unconfirmed();
+      throw failure;
+    }finally{
+      if(closing)settleImportedDeparture(returning,closing);
+    }
+  };
   const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
   const firstFilesPreparation = useRef<FirstLocalFilesPreparation|null>(null);
   const preview=active&&buildPreview&&view?.viewHandle===buildPreview.viewHandle&&handle.current===buildPreview.viewHandle&&
@@ -565,6 +624,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
     const starter=importedEditor?.openDirectory&&importedEditor.exactStarterSource===true?importedEditor:null;
     const scopedOwner=modelReturn?modelReturn.current:previewVisit?.projectId===projectId&&previewVisit.current()?previewVisit.current:
       openLocalFiles?.originalCopy?()=>latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current():
+      importedEditor?.filesReturn?()=>latest.current.importedEditor===importedEditor&&importedEditor.filesReturn?.current()===true:
       starter?()=>latest.current.importedEditor===starter&&sameImportedEditor(starter,originalImportedEditor(projectId)):undefined;
     const reading=invoke('projects.development.read', {projectId,...(modelReturn?
       {draftReturnHandle:modelReturn.proof.handle,returnPurpose:modelSettingsWorkDraftPurpose}:pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
@@ -811,6 +871,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
     // For a source handoff this hold remains live until Preview has been restored,
     // including native refusal, Android visibility changes and editor exit.
     if (!active || !view || !checkout || busy || review || filesOpen || buildReturn || importedEditor || differentBuildCopy || unresolved(submission) || viteResultLookup) return;
+    const leaving=pendingImportedFilesClose, close=leaving?.pending;
+    // Avoid queuing our own automatic reselection while the exact requested Back awaits its close.
+    if(leaving&&close&&close.viewHandle===view.viewHandle&&close.draftRevision===draftRevision.current&&leaving.visit.current())return;
     const viewHandle=view.viewHandle, key = `${viewHandle}|${projectId}|${checkout}`;
     if (sourceAttempt.current === key) return;
     sourceAttempt.current = key; setSource(null);
@@ -827,7 +890,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
         return {...current,checkouts:checkouts.map(row=>row===match[0]?{...row,retainedOriginalLinked:true}:row)};
       });
     });
-  }, [active, view, checkout, busy, review, filesOpen, buildReturn, importedEditor, differentBuildCopy, submission, projectId, viteResultLookup]);
+  }, [active, view, checkout, busy, review, filesOpen, buildReturn, importedEditor, differentBuildCopy, submission, projectId, viteResultLookup, pendingImportedFilesClose]);
   useEffect(() => {
     setExpired(false); if (!review) return;
     const remaining = Number(review.expiresAt) - Date.now();
@@ -927,6 +990,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
   const closeFiles = (saved?:CheckoutSavedPosition) => {
     const original=fileWindow?.unselectedImport;
     const sameSave=saved?.projectId===projectId&&saved.checkoutId===fileCheckout&&active&&!document.hidden&&bridge.getState().state.projectId===projectId;
+    const returning=currentFileWindow.current===fileWindow?fileWindow?.importedFilesClose:undefined;
+    if(returning?.visit.current()){
+      if(returning.opened&&view&&handle.current===view.viewHandle){
+        returning.pending={viewHandle:view.viewHandle,draftRevision:draftRevision.current,issued:false};
+        setPendingImportedFilesClose(returning);
+      }else returning.visit.unconfirmed();
+    }
     buildAfterSave.current=null;
     if(sameSave)setLastSavedFile(saved);
     // The saved file can identify a suggested selection, never make one on return.
@@ -978,14 +1048,16 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
     if(ownerWindow()!==importedEditor.window||document.hidden)return;
     const checkoutId=importedEditor.checkoutId;
     const sequence=generation.current;
+    const filesReturn=importedEditor.filesReturn;
     const originalIsCurrent=()=>alive.current&&latest.current.active&&generation.current===sequence&&handle.current===view.viewHandle&&
-      sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
-    const nativeCopies=rows(view.checkouts).filter(copy=>copy?.projectId===projectId&&copy.checkoutId===checkoutId);
+      (!filesReturn||filesReturn.current())&&sameImportedEditor(importedEditor,originalImportedEditor(projectId))&&canEditImportedCheckout(latest.current.can);
+    const available=rows(view.checkouts),nativeCopies=available.filter(copy=>copy?.projectId===projectId&&copy.checkoutId===checkoutId);
     const gitImport=importedEditor.sourceKind==='git_https', starter=importedEditor.sourceKind===builtinViteStarter;
     const directory=importedEditor.openDirectory===true;
     const admitted=gitImport||starter||directory?nativeCopies.length===1&&nativeCopies[0].draftWorkingCopy===false&&view.commandsAuthorized===false:
       nativeCopies.some(copy=>importedEditor.sourceKind!=='task_source_package'||copy.taskPackageSource===true);
-    if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||!admitted){
+    if(!originalIsCurrent()||view.projectId!==projectId||view.executionAuthorized!==false||!admitted||
+       filesReturn&&(available.length!==1||nativeCopies[0]?.taskPackageSource!==false||nativeCopies[0]?.hostSource!==false)){
       setImportEditorNotice('原导入副本已不能核对，没有打开其他文件。');return;
     }
     const hasDifferentCopy=()=>[draft.current.checkoutId,view.draft?.checkoutId].some(id=>id&&id!==checkoutId);
@@ -1005,6 +1077,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
       if(inspection?.projectId===projectId&&inspection.checkoutId===draft.current.checkoutId&&inspection.checkoutId===checkoutId&&sourceHash(inspection.sourceDigest))
         setSource(inspection); // Existing observation can name a destination, not authorize a build after an edit.
       setFileWindow({checkoutId,firstEntry:firstEntry??undefined,originalImport:importedEditor,...(starter&&directory?{reopenedFiles:true as const}:{}),
+        ...(filesReturn?{importedFilesClose:{visit:filesReturn}}:{}),
         unselectedImport:!draft.current.checkoutId&&!view.draft?.checkoutId?importedEditor:undefined});
     };
     // These original-source actions show the directory before choosing a file.
@@ -1747,6 +1820,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
     </header>
     {error && <p className="pw-local-inline-notice" role="alert">{error}</p>}
     {importEditorNotice && <p className="pw-local-inline-notice" role="status">{importEditorNotice}</p>}
+    {pendingCheckpointZip?.phase === 'target_selected' && !filesOpen && <p className="pw-local-inline-notice" role="status">
+      ZIP 保存位置已选，尚未写入。请打开原副本的文件，在「源码版本」选择带有「ZIP 待写入」的那一版，再确认。
+    </p>}
+    {pendingCheckpointZip?.phase === 'unknown' && !filesOpen && <p className="pw-local-inline-notice" role="status">
+      上次源码 ZIP 尚未确认写入。请在原保存位置核对；不会重写。
+    </p>}
     {active&&view&&localFilesDraftNotice&&localFilesDraftNotice.viewHandle===view.viewHandle&&handle.current===view.viewHandle&&
       localFilesDraftNotice.window===ownerWindow()&&goal===view.draft?.goal&&!checkout&&!available.length&&!copyResult&&!review&&!pending&&
       can('projects.development.prepare')&&canEditImportedCheckout(can)&&<p className="pw-local-inline-notice" role="status">
@@ -1981,7 +2060,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, mod
       const { path, evidenceDigest, originalSha256, phoneSha256 } = hostDiff; setHostEditor({ path, evidenceDigest, originalSha256, phoneSha256 });
       closeHostDiff(); setFileWindow({checkoutId:checkout});
     } : undefined}/>}
-    {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={fileWindow.reopenedFiles?runReopenedFiles:run} hostFile={hostEditor || undefined}
+    {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={fileWindow.importedFilesClose?filesWithLandingReceipt:ordinaryFilesRun} hostFile={hostEditor || undefined}
       reopenedProjectDirectory={fileWindow.reopenedFiles===true || fileWindow.originalImport?.openDirectory===true && fileWindow.originalImport.exactPhoneSource===true}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
       pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit}

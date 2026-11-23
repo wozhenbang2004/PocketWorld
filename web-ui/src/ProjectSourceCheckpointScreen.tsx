@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Accordion, AccordionItem, Button, SelectField } from './forms-library';
 import { ProjectSourceCheckpointContinue, type SingleCheckpointSelection, type SourceCheckpointContinuation,
   type SourceCheckpointContinuationMemory } from './ProjectSourceCheckpointContinue';
@@ -13,6 +13,20 @@ export type SavePin = Readonly<{ reviewId: string; manifestIdentity: string }>;
 export type Recovery = SavePin & Readonly<{ expected: Version }>;
 export type Catalog = Readonly<{ scope: Scope; versions: readonly Version[]; pending: boolean; storedBytes: number; recovery: Recovery | null }>;
 export type PendingCheckpointReview = Readonly<{ scope: Scope; id: string; deadline: number }>;
+const zipPhases = ['choosing', 'chooser_unconfirmed', 'checking_target', 'target_selected', 'writing', 'verified', 'not_written', 'unknown', 'cancelled'] as const;
+export type CheckpointZipDelivery = Readonly<{
+  requestId: string; projectId: string; checkoutId: string; checkpointId: string; manifestIdentity: string;
+  archiveSha256: string; archiveBytes: number; capturedAt: number; phase: typeof zipPhases[number]; destinationName: string | null;
+}>;
+type ZipReview = Readonly<{ requestId: string; version: Version; suggestedName: string }>;
+type ZipAccess = Readonly<{
+  subscribe: (changed: () => void) => () => void;
+  snapshot: () => unknown;
+  review: (catalog: Catalog, version: Version) => Promise<ZipReview>;
+  choose: (catalog: Catalog, review: ZipReview) => Promise<void>;
+  write: (catalog: Catalog, version: Version, delivery: CheckpointZipDelivery) => Promise<CheckpointZipDelivery>;
+  dismiss: (catalog: Catalog, version: Version, requestId: string) => Promise<void>;
+}>;
 type OmissionKind = 'DEPENDENCY_ENVIRONMENT_OR_PRIVATE_DIRECTORY' | 'GENERATED_ROOT_NOT_SELECTED' | 'CREDENTIAL_OR_PRIVATE_CONFIGURATION';
 export type Review = Readonly<{
   scope: Scope; id: string; manifestIdentity: string; filteredSourceDigest: string; expandedBytes: number;
@@ -59,6 +73,7 @@ export type ProjectSourceCheckpointVisit = Readonly<{
     dismiss: (review: PendingCheckpointReview) => Promise<void>;
   }>;
   continuation?: SourceCheckpointContinuation;
+  zip?: ZipAccess;
 }>;
 
 const MIB = 1024 * 1024;
@@ -96,6 +111,27 @@ export function sameVersion(a: Version, b: Version) {
     a.archiveSha256 === b.archiveSha256 && a.archiveBytes === b.archiveBytes && a.capturedAt === b.capturedAt &&
     a.fileCount === b.fileCount && a.omittedCount === b.omittedCount && a.expandedBytes === b.expandedBytes;
 }
+function zipName(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 5 && value.length <= 240 && value.trim() === value &&
+    /\.zip$/i.test(value) && !/[/\\:\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value);
+}
+export function checkedCheckpointZip(value: unknown, project: string, version?: Version): CheckpointZipDelivery | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (row.kind !== 'owner_source_checkpoint_zip' || row.projectId !== project || !uuid(row.checkoutId) ||
+      !uuid(row.requestId) || !uuid(row.checkpointId) || !sha(row.manifestIdentity) || !sha(row.archiveSha256) ||
+      !range(row.archiveBytes, 22, 20 * MIB) || !range(row.capturedAt, 1, 8_640_000_000_000_000) ||
+      !zipPhases.some(phase => phase === row.phase) ||
+      (['target_selected','writing','verified'].some(phase => phase === row.phase) ?
+        !zipName(row.destinationName) : row.destinationName !== null && !zipName(row.destinationName))) return null;
+  if (version && (row.projectId !== version.projectId || row.checkoutId !== version.checkoutId ||
+      row.checkpointId !== version.checkpointId || row.manifestIdentity !== version.manifestIdentity ||
+      row.archiveSha256 !== version.archiveSha256 || row.archiveBytes !== version.archiveBytes || row.capturedAt !== version.capturedAt)) return null;
+  return row as CheckpointZipDelivery;
+}
+const noZip = () => null;
+const noZipSubscription = () => () => {};
+
 export function recoveryHere(scope: Scope, value: Recovery | null | undefined): value is Recovery {
   return !!value && uuid(value.reviewId) && sha(value.manifestIdentity) && versionHere(scope, value.expected) &&
     value.expected.checkpointId === value.reviewId && value.expected.manifestIdentity === value.manifestIdentity;
@@ -227,11 +263,12 @@ export function ReturnedSourceCheckpointComparison({ comparison, onExit }: { com
 
 type Staging = { kind: 'review'; offer: PendingCheckpointReview } | { kind: 'refresh'; retired?: true } | { kind: 'exit' };
 type Shelf = { kind: 'shelf'; catalog?: Catalog; knownSaved?: Version; restore?: string; notice?: string; staging?: Staging };
-type Pick = { kind: 'pick'; shelf: Shelf; catalog: Catalog; after: Version; before?: Version; notice?: string };
+type Pick = { kind: 'pick'; shelf: Shelf; catalog: Catalog; after: Version; before?: Version; notice?: string; zipReview?: ZipReview };
 type ReviewPage = { kind: 'review'; shelf: Shelf; review: Review; leaveUnknown?: true };
 type Page = Shelf | ReviewPage | Pick | { kind: 'comparison'; pick: Pick; comparison: Comparison } |
   { kind: 'single'; pick: Pick; selection: SingleCheckpointSelection };
-type Operation = 'catalog' | 'review' | 'save' | 'dismiss' | 'read' | 'compare' | 'select' | 'pendingReview' | 'pendingClear' | 'pendingDismiss';
+type Operation = 'catalog' | 'review' | 'save' | 'dismiss' | 'read' | 'compare' | 'select' | 'pendingReview' | 'pendingClear' | 'pendingDismiss' |
+  'zipReview' | 'zipChoose' | 'zipWrite' | 'zipDismiss';
 type Session = {
   visit: ProjectSourceCheckpointVisit; scope: Scope; projectId: string; checkoutId: string;
   stage?: Review; flight?: { kind: Operation }; unconfirmed?: SavePin; expected?: Version; saveBlocked?: 'capacity' | 'pending';
@@ -257,6 +294,7 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
   onExit?: () => void;
 }) {
   const [view, setView] = useState<View>();
+  const rawZip = useSyncExternalStore(visit?.zip?.subscribe ?? noZipSubscription, visit?.zip?.snapshot ?? noZip);
   const [pendingExpired, setPendingExpired] = useState(false);
   const owner = useRef<Session | undefined>(undefined);
   const heading = useRef<HTMLHeadingElement>(null), rowFocus = useRef<HTMLButtonElement>(null);
@@ -336,7 +374,10 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
     if (!showing || owner.current !== showing.session || !isCurrent(showing.session)) return false;
     const { page, session } = showing;
     if ((page.kind === 'comparison' || page.kind === 'single') && continuationBack.current?.()) return true;
-    if (session.flight?.kind === 'dismiss' || session.flight?.kind === 'pendingDismiss') return true;
+    if (session.flight?.kind === 'dismiss' || session.flight?.kind === 'pendingDismiss' ||
+        session.flight?.kind === 'zipReview' || session.flight?.kind === 'zipChoose' || session.flight?.kind === 'zipDismiss') return true;
+    if (session.flight?.kind === 'zipWrite') return false; // Physical Back retires the original Files visit; no replay.
+    if (page.kind === 'pick' && page.zipReview) { dismissZip(page, page.zipReview.requestId); return true; }
     if (session.flight?.kind === 'save' || session.flight?.kind === 'pendingClear') return false; // Close the exact native visit first.
     if (page.kind === 'shelf' && page.staging?.kind === 'review') { settlePending(page, false); return true; }
     if (page.kind === 'review') {
@@ -531,6 +572,37 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
     }, () => ({ ...pick, notice: '未核对到这份已保留的源码。没有另建副本，也没有使用其他版本。' }));
   };
 
+  const zipAccess = session.visit.zip;
+  const zipInProject = checkedCheckpointZip(rawZip, scope.projectId);
+  const zipForPick = page.kind === 'pick' && zipAccess ? checkedCheckpointZip(rawZip, scope.projectId, page.after) : null;
+  const mayReviewZip = (pick: Pick) => !!zipAccess && !zipInProject && !pick.catalog.pending &&
+    !session.unconfirmed && !pick.shelf.knownSaved && !pick.zipReview;
+  const beginZip = (pick: Pick) => {
+    if (!zipAccess || !mayReviewZip(pick)) return;
+    void inspect('zipReview', () => zipAccess.review(pick.catalog, pick.after), zipReview =>
+      ({ ...pick, zipReview, notice: undefined }), () => ({ ...pick, notice: '原版本暂不能准备 ZIP，没有写入。' }));
+  };
+  const chooseZip = (pick: Pick) => {
+    const offer = pick.zipReview;
+    if (!zipAccess || !offer) return;
+    void inspect('zipChoose', () => zipAccess.choose(pick.catalog, offer), () =>
+      ({ ...pick, zipReview: undefined, notice: undefined }), () =>
+      ({ ...pick, zipReview: undefined, notice: '原系统选择未确认。请回到同一版核对，没有自动写入。' }));
+  };
+  const writeZip = (pick: Pick, selected: CheckpointZipDelivery) => {
+    if (!zipAccess || selected.phase !== 'target_selected' || zipForPick?.requestId !== selected.requestId || pick.catalog.pending || session.unconfirmed) return;
+    void inspect('zipWrite', () => zipAccess.write(pick.catalog, pick.after, selected), () =>
+      ({ ...pick, notice: undefined }), () =>
+      ({ ...pick, notice: '这次写入尚未确认。请核对原保存位置；不会重写。' }));
+  };
+  function dismissZip(pick: Pick, requestId: string) {
+    const access = session.visit.zip;
+    if (!access) return;
+    void inspect('zipDismiss', () => access.dismiss(pick.catalog, pick.after, requestId), () =>
+      ({ ...pick, zipReview: undefined, notice: undefined }), () =>
+      ({ ...pick, zipReview: undefined, notice: '原 ZIP 定位已变化；没有提交写入。' }));
+  }
+
   const label = page.kind === 'review' ? '核对当前已保存源码' : page.kind === 'pick' ? canSelect(page) ? '所选源码版本' : '选择对照版' :
     page.kind === 'comparison' ? '两版源码的收录差异' : page.kind === 'single' ? '这版保留源码' : '源码版本';
   const canReview = page.kind === 'shelf' && !page.staging && !page.knownSaved && !page.catalog?.pending &&
@@ -567,6 +639,7 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
               onClick={() => { if (!session.flight && isCurrent(session) && !stagingHeld && !catalogRetired && page.catalog) show(session,
                 { kind: 'pick', shelf: page, catalog: page.catalog, after: version }); }}>
               {versionName(version, page.catalog)}
+              {zipAccess && checkedCheckpointZip(rawZip, scope.projectId, version)?.phase === 'target_selected' && ' · ZIP 待写入'}
             </Button>
             <p className="pw-field-hint">{version.fileCount} 个收录文件 · {version.omittedCount} 项排除记录</p>
           </li>)}</ul>}
@@ -603,17 +676,47 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
     </>}
     {page.kind === 'pick' && <>
       <p>所选版：{versionName(page.after, page.catalog)}</p>
-      {canSelect(page) && <div className="pw-form-actions">
-        <Button disabled={!!busy} onClick={() => select(page)}>核对这版并继续</Button>
-      </div>}
-      {page.catalog.versions.length >= 2 ? <>
-        <SelectField label="对照版" value={page.before?.checkpointId ?? ''} placeholder="选择另一份已保留版本"
-          isDisabled={!!busy} options={page.catalog.versions.filter(row => row !== page.after).map(row =>
-            ({ id: row.checkpointId, label: versionName(row, page.catalog) }))}
-          onChange={id => { if (!session.flight) show(session, { ...page,
-            before: page.catalog.versions.find(row => row !== page.after && row.checkpointId === id), notice: undefined }); }} />
-        <div className="pw-form-actions"><Button disabled={!page.before || !!busy} onClick={() => compare(page)}>比较两版</Button></div>
-      </> : !canSelect(page) && <p className="pw-field-hint">目前只有一版，暂无对照版。</p>}
+      {page.zipReview ? <section className="pw-form-flow" aria-label="核对源码 ZIP">
+        <h4>把这版已保留的源码存为 ZIP</h4>
+        <p>收录 {page.after.fileCount} 个文件 · {page.after.omittedCount} 项排除记录 · {page.after.archiveBytes.toLocaleString()} 字节</p>
+        <p className="pw-field-hint">包含已保留的源码和项目名，不含当前草稿、项目历史、工具环境或执行权限。若选择云盘，是否同步由所选提供方决定。</p>
+        <p className="pw-field-hint">建议文件名：<bdi>{page.zipReview.suggestedName}</bdi> · SHA-256 <code style={{overflowWrap:'anywhere'}}>{page.after.archiveSha256}</code></p>
+        <p className="pw-field-hint">选择位置时不会写入源码。回到原副本的文件，重新打开「源码版本」和这版，再确认写入。</p>
+        <div className="pw-form-actions"><Button disabled={!!busy} onClick={() => chooseZip(page)}>选择保存位置</Button>
+          <Button variant="ghost" disabled={!!busy} onClick={() => dismissZip(page, page.zipReview!.requestId)}>先不保存</Button></div>
+      </section> : <>
+        {mayReviewZip(page) && <Button variant="secondary" disabled={!!busy} onClick={() => beginZip(page)}>保存这版源码 ZIP</Button>}
+        {zipAccess && zipInProject?.phase === 'target_selected' && !zipForPick &&
+          <p className="pw-field-hint">上次选择的位置只用于原版本，不能用来保存这一版。</p>}
+        {zipForPick && <section className="pw-form-flow" aria-label="原源码 ZIP 保存">
+          {zipForPick.phase === 'target_selected' ? <>
+            <p>目标：<bdi>{zipForPick.destinationName}</bdi>。系统可能已创建空文档；PocketWorld 尚未写入。</p>
+            <div className="pw-form-actions"><Button disabled={!!busy || page.catalog.pending || !!session.unconfirmed}
+              onClick={() => writeZip(page, zipForPick)}>写入这个 ZIP</Button>
+              <Button variant="ghost" disabled={!!busy} onClick={() => dismissZip(page, zipForPick.requestId)}>不写入</Button></div>
+          </> : <>
+            <p role="status">{zipForPick.phase === 'verified' ? <>已回读核对 <bdi>{zipForPick.destinationName}</bdi> · {zipForPick.archiveBytes.toLocaleString()} 字节。可在另一台手机选择此 ZIP，核对后另建项目。</> :
+              zipForPick.phase === 'unknown' ? '未确认写入。请在原保存位置手动核对；不会重写。' :
+              zipForPick.phase === 'cancelled' ? '已取消，PocketWorld 没有写入。' :
+              zipForPick.phase === 'not_written' ? 'PocketWorld 没有写入。原 ZIP 或所选位置未能通过核对，系统可能留下空文档。' :
+              zipForPick.phase === 'writing' ? '正在写入并回读。退出不会撤销已发生的写入。' :
+              '正在核对原保存位置，没有写入源码。'}</p>
+            {['verified', 'unknown', 'cancelled', 'not_written'].includes(zipForPick.phase) &&
+              <Button variant="ghost" disabled={!!busy} onClick={() => dismissZip(page, zipForPick.requestId)}>关闭这次保存提示</Button>}
+          </>}
+        </section>}
+        {canSelect(page) && <div className="pw-form-actions">
+          <Button disabled={!!busy} onClick={() => select(page)}>核对这版并继续</Button>
+        </div>}
+        {page.catalog.versions.length >= 2 ? <>
+          <SelectField label="对照版" value={page.before?.checkpointId ?? ''} placeholder="选择另一份已保留版本"
+            isDisabled={!!busy} options={page.catalog.versions.filter(row => row !== page.after).map(row =>
+              ({ id: row.checkpointId, label: versionName(row, page.catalog) }))}
+            onChange={id => { if (!session.flight) show(session, { ...page,
+              before: page.catalog.versions.find(row => row !== page.after && row.checkpointId === id), notice: undefined }); }} />
+          <div className="pw-form-actions"><Button disabled={!page.before || !!busy} onClick={() => compare(page)}>比较两版</Button></div>
+        </> : !canSelect(page) && <p className="pw-field-hint">目前只有一版，暂无对照版。</p>}
+      </>}
       {page.notice && <p role="status">{page.notice}</p>}
     </>}
     {page.kind === 'comparison' && <ProjectSourceCheckpointContinue authority={session.visit.continuation} scope={scope}
@@ -632,7 +735,9 @@ export function ProjectSourceCheckpointScreen({ visit, registerBack, onExit }: {
     {!!busy && busy !== 'save' && <p role="status">{({catalog:'正在核对本机版本…',review:'正在核对这份副本的已保存源码…',
       dismiss:'正在结束这次原核对…',read:'正在核对本机原记录…',compare:'正在核对选中的两版…',select:'正在核对这版保留的源码…',
       pendingReview:'正在核对未完成暂存…',pendingDismiss:'正在退出暂存核对…',
-      pendingClear:'正在核对这次清除。返回不代表撤销已发生的清除。'})[busy]}</p>}
+      pendingClear:'正在核对这次清除。返回不代表撤销已发生的清除。',
+      zipReview:'正在核对原保留版本的登记…', zipChoose:'正在打开系统保存位置…',
+      zipWrite:'正在核对、写入并回读原源码 ZIP…', zipDismiss:'正在关闭这次 ZIP 定位…'})[busy]}</p>}
     {page.kind !== 'shelf' && page.kind !== 'comparison' && page.kind !== 'single' && busy !== 'save' &&
       !(page.kind === 'review' && page.leaveUnknown) && <div className="pw-form-actions">
       <Button variant="ghost" onClick={back}>返回版本列表</Button>

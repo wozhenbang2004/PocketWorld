@@ -508,7 +508,8 @@ internal class PocketWebBridge(
             ::captureKeptPortableRoute,::captureKeptFieldsEditor){publishState()}
     }
     private val sourceCheckpoints=lazy {
-        PocketWebSourceCheckpoints(controller,{documentId},::captureSourceCheckpointFiles,SOURCE_CHECKPOINT_CONTINUE_ENABLED){publishState()}
+        PocketWebSourceCheckpoints(controller,{documentId},::captureSourceCheckpointFiles,SOURCE_CHECKPOINT_CONTINUE_ENABLED,
+            ::captureKeptPortableRoute){publishState()}
     }
     private val sourceCheckpointContinue=lazy {
         PocketWebSourceCheckpointContinue(controller,sourceCheckpoints.value){ source, published ->
@@ -693,6 +694,7 @@ internal class PocketWebBridge(
             if(projectModelReturnVisit?.opened==null)projectModelReturnVisit=null
         }
         if(!value&&keptStaticPages.isInitialized())keptStaticPages.value.portableBackground()
+        if(!value&&sourceCheckpoints.isInitialized())sourceCheckpoints.value.zipBackground()
         reminderNotificationForeground(value); if (!value) { retireChatDefaults(); observeOrdinaryFirstFailure(null); retireKeptStaticPages();retireSourceCheckpoints();retireReplyPicker();receivedTextResult.clear();sentPhoneResult.clear();reportDraftOffer=null;reportDraftHandoff=null;connectionPages.hostGoalOrigins.closeSaved(); projectDraftDifference.clearWorkCopy();firstNodeWebOutput.clear();nodeCompilerOutput.clear();pythonOutput.clear();projectGoal=null; projectWorkPages.clear() }; projectPreview?.foreground(value); projectLivePreview?.foreground(value); phoneViewer.foreground(value); attachmentPages.foreground(value); remoteTasks.foreground(value); taskCapabilities.foreground(value); deviceTaskScope.foreground(value); phoneControl.foreground(value)
     }
     fun resource(uri: android.net.Uri, method: String, headers: Map<String, String>): android.webkit.WebResourceResponse? = attachmentPages.response(uri, method, headers)
@@ -707,6 +709,7 @@ internal class PocketWebBridge(
         observeOrdinaryFirstFailure(null)
         retireKeptStaticPages()
         if(keptStaticPages.isInitialized())keptStaticPages.value.closePortable()
+        if(sourceCheckpoints.isInitialized())sourceCheckpoints.value.closeZip()
         retireSourceCheckpoints()
         retireReplyPicker()
         controller.closeOwnerWorkRequestHistory()
@@ -1040,6 +1043,7 @@ internal class PocketWebBridge(
         retireChatDefaults()
         retireKeptStaticPages()
         if(documentReplaced&&keptStaticPages.isInitialized())keptStaticPages.value.retirePortable()
+        if(documentReplaced&&sourceCheckpoints.isInitialized())sourceCheckpoints.value.retireZip()
         retireSourceCheckpoints()
         retireReplyPicker()
         originalSavedPdfVisit?.let { retireSavedPdfVisit(it,closeWindow=false) }
@@ -1221,6 +1225,8 @@ internal class PocketWebBridge(
                 if(sourceCheckpointContinue.isInitialized())sourceCheckpointContinue.value.retireLostOwner()
                 projection?.getJSONObject("state")?.put("sourceCheckpointVisit",
                     sourceCheckpoints.takeIf{it.isInitialized()}?.value?.snapshot() ?: JSONObject.NULL)
+                    ?.put("sourceCheckpointZip",
+                        sourceCheckpoints.takeIf{it.isInitialized()}?.value?.zipSnapshot() ?: JSONObject.NULL)
             }
             projection?.getJSONObject("state")?.put("projectPreview", projectPreview?.snapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("directVitePackageExport", controller.projectPackages.directViteExportSnapshot() ?: JSONObject.NULL)
@@ -1391,7 +1397,8 @@ internal class PocketWebBridge(
             }
             if (SOURCE_CHECKPOINTS_ENABLED && action in PocketWebSourceCheckpoints.COMMANDS) {
                 sourceCheckpoints.value.dispatch(action,args){result,error->
-                    complete(id,result,error,errorCode=if(action==PocketWebSourceCheckpoints.SAVE)"outcome_unknown" else "not_accepted",
+                    complete(id,result,error,errorCode=if(action in setOf(PocketWebSourceCheckpoints.SAVE,PocketWebSourceCheckpoints.ZIP_WRITE))
+                        "outcome_unknown" else "not_accepted",
                         retainValue=false,replayHint="只从原副本查看版本，不重放保存")
                     publishState()
                 }
@@ -3956,6 +3963,7 @@ internal class PocketWebBridge(
                     projectModelReturnVisit?.let(::retireProjectModelReturn)
                     projectModelReturnWatermark=0L
                     if(keptStaticPages.isInitialized())keptStaticPages.value.retirePortable()
+                    if(sourceCheckpoints.isInitialized())sourceCheckpoints.value.retireZip()
                     retireActiveSpanSend()
                     retireChatDefaults()
                     clearReminderNotificationWindow()
