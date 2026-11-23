@@ -65,7 +65,8 @@ type MutationOperation = 'create' | 'correct' | MemoryReview['operation'];
 type Removal = 'forget' | 'reject';
 type MemoryDirectory = 'memories' | 'memory-history';
 type ConfirmedManualSave = { id: string; revision: 1 };
-type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave };
+type CorrectionSubmission = { beforeRevision: number; draft: string };
+type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave; correction?: CorrectionSubmission };
 type MemoryOpenPin = { kind: 'answer'; revision: number; conversation: string; originalAnswer?: OriginalMemoryEntry }
   | { kind: 'receipt'; revision: number; feedback: MemoryFeedback };
 type AvatarPicker = { id: string; editor: number };
@@ -214,6 +215,14 @@ function confirmedManualSave(feedback: MemoryFeedback | null): ConfirmedManualSa
   const pin = memoryReceiptPin(feedback);
   return pin && !pin.candidate && pin.revision === 1 && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pin.id)
     ? { id: pin.id, revision: 1 } : null;
+}
+function recoveredCorrectionPin(feedback: MemoryFeedback | null) {
+  const submitted = feedback?.correction;
+  if (!submitted || feedback?.operation !== 'correct' || feedback.value.status !== 'saved' ||
+      feedback.value.undoAvailable !== false || !Number.isSafeInteger(submitted.beforeRevision) || submitted.beforeRevision < 1 ||
+      !feedback.submittedText || submitted.draft.trim() !== feedback.submittedText || feedback.value.record?.text !== feedback.submittedText) return null;
+  const pin = memoryReceiptPin(feedback);
+  return pin && !pin.candidate && pin.revision === submitted.beforeRevision + 1 ? pin : null;
 }
 function feedbackLabel(feedback: MemoryFeedback): string {
   if (feedback.priorSave) return '这条记忆先前已保存';
@@ -429,9 +438,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     if (alive.current) { setPolicy(controls); setControlsError(''); }
     return controls;
   };
-  const rememberReceipt = (value: Data, operation: MutationOperation, needsQuery = false, targetId?: string, submittedText?: string) => {
+  const rememberReceipt = (value: Data, operation: MutationOperation, needsQuery = false, targetId?: string, submittedText?: string, correction?: CorrectionSubmission) => {
     if (!alive.current || !string(value.receiptHandle)) return;
-    setFeedback({ value, operation, needsQuery, targetId, submittedText });
+    setFeedback({ value, operation, needsQuery, targetId, submittedText, correction });
   };
   const settlePreferenceReceipt = (value: Data, receiptHandle: string, operation: MutationOperation, targetId?: string, submittedText?: string) => {
     if (value.status !== 'settings_required') return false;
@@ -611,7 +620,11 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     if (busy.current) { setNotice('正在保存或读取，请稍候。'); return true; }
     closeAvatar();
     if (current.current.review) { clearReview(); current.current = { ...current.current, review: null }; }
-    if (profileDirty(current.current.editor) || memoryDirty(current.current.selection) || current.current.newMemoryText.trim() || current.current.newMemoryExpiry !== 'none') { pendingLeave.current = next; setLeaveOpen(true); return true; }
+    const { selection: currentSelection, feedback: currentFeedback } = current.current;
+    const recovered = recoveredCorrectionPin(currentFeedback);
+    const alreadySavedDraft = !!recovered && !!currentSelection && currentSelection.id === recovered.id && !currentSelection.candidate &&
+      currentSelection.record.revision === currentFeedback?.correction?.beforeRevision && currentSelection.draft === currentFeedback?.correction?.draft;
+    if (profileDirty(current.current.editor) || (memoryDirty(currentSelection) && !alreadySavedDraft) || current.current.newMemoryText.trim() || current.current.newMemoryExpiry !== 'none') { pendingLeave.current = next; setLeaveOpen(true); return true; }
     return false;
   };
   const guarded = (next: () => void) => { if (!beforeLeave(next)) next(); };
@@ -964,7 +977,8 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         const prepared = await checkedReview('correct', frozen, { text });
         if (typeof prepared.value.afterText === 'string' && prepared.value.afterText !== text) { closeHandle(prepared.handle); throw new Error('待保存内容与当前输入不同，请重新读取这条记忆。'); }
         if (!alive.current) { closeHandle(prepared.handle); return; }
-        rememberReceipt({ receiptHandle: prepared.value.receiptHandle, undoAvailable: false }, 'correct', true, frozen.id, text);
+        rememberReceipt({ receiptHandle: prepared.value.receiptHandle, undoAvailable: false }, 'correct', true, frozen.id, text,
+          { beforeRevision: frozen.record.revision, draft: frozen.draft });
         sent = true;
         const receipt = object(await call('profile.memory.confirm', { reviewHandle: prepared.handle }));
         if (settlePreferenceReceipt(receipt, prepared.value.receiptHandle, 'correct', frozen.id, text)) return;
@@ -1205,14 +1219,25 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const readReceipt = (undo = false) => {
     const frozen = current.current.feedback;
     if (!frozen || !string(frozen.value.receiptHandle) || (undo && (frozen.needsQuery || frozen.value.status !== 'saved' || frozen.value.undoAvailable !== true || !['create', 'accept'].includes(frozen.operation)))) return;
+    const submission = !undo && frozen.operation === 'correct' ? frozen.correction : undefined;
+    const origin = current.current, presentation = livePresentation.current, doc = bridge.getDocumentEpoch();
+    const correctionCurrent = () => alive.current && !!privateProfileReadWindow() && bridge.getDocumentEpoch() === doc &&
+      previousPresentation.current === presentation && livePresentation.current === presentation && current.current.view === origin.view &&
+      current.current.conversation === origin.conversation && current.current.feedback?.value.receiptHandle === frozen.value.receiptHandle;
+    if (submission && !correctionCurrent()) {
+      if (!document.hidden) setError('请回原个人记忆窗口核对，这次结果仍待确认。');
+      return;
+    }
     void action(undo ? '正在撤销这次保存' : '正在核对这次修改', async () => {
       if (undo) setFeedback({ ...frozen, needsQuery: true });
       let settled = false;
       try {
         let result = object(await call(undo ? 'profile.memory.undo' : 'profile.memory.query', { receiptHandle: frozen.value.receiptHandle }));
+        if (submission && !correctionCurrent()) return;
         if (result.receiptHandle === frozen.value.receiptHandle && result.status === 'not_submitted') {
           const closed = object(await call('profile.memory.close', { handle: frozen.value.receiptHandle }));
           if (closed.closed !== true) throw new Error('尚未提交的审阅未确认关闭，请继续核对原操作。');
+          if (submission && !correctionCurrent()) return;
           // Re-read after retiring the original review so a delayed confirm cannot
           // arrive after the editor has been unlocked for a new explicit save.
           result = object(await call('profile.memory.query', { receiptHandle: frozen.value.receiptHandle }));
@@ -1223,10 +1248,40 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           ? !Number.isSafeInteger(result.deleted) || result.deleted < 1
           : result.candidate?.id !== frozen.targetId || result.candidate?.status !== 'rejected'))) throw new Error('这条记录的原处理回执尚未完整核对。');
         if (frozen.operation === 'core' && result.status === 'saved' && !validPriorityReceipt(result, frozen)) throw new Error('原记忆的参考优先级尚未确认。');
-        if (!alive.current) return;
-        settled = true;
+        if (!alive.current || submission && !correctionCurrent()) return;
         const checked = { ...frozen, value: result, needsQuery: false };
+        const recovered = submission && result.status === 'saved' ? recoveredCorrectionPin(checked) : null;
+        if (submission && result.status === 'saved' && !recovered) throw new Error('尚未核对到这次修改的原保存版本。');
+        settled = true;
         setFeedback(checked);
+        if (submission && recovered) {
+          hideObsoleteMemory(recovered.id, recovered.revision);
+          const original = origin.selection;
+          const sameEditor = () => correctionCurrent() && origin.view === 'memory' && current.current.selection === original;
+          // A saved receipt is history, not proof that this version is still active.
+          if (!original || original.candidate || original.historical || original.id !== recovered.id ||
+              original.record.revision !== submission.beforeRevision || !sameEditor()) return;
+          const prior = readHandle.current; readHandle.current = ''; closeHandle(prior);
+          setMemoryUnknown(false); setMemoryConflict(true); setLatestMemory(null);
+          const evidence = privateProfileReadWindow();
+          if (!evidence) return;
+          const found = await readMemory(recovered.id, false).catch(() => null);
+          if (!sameEditor()) { if (found) closeHandle(found.handle); return; }
+          if (!found || privateProfileReadWindow() !== evidence || found.row.revision !== recovered.revision ||
+              found.row.text !== frozen.submittedText || found.row.active !== true || historicalMemory(found.row) ||
+              found.row.archiveOnly === true || found.row.assertionStatus !== 'current') {
+            if (found) closeHandle(found.handle);
+            setNotice('已确认这次修改保存过，当前未核对到原版本。没有打开其他版本。');
+            return;
+          }
+          const text = string(found.row.text), laterDraft = original.draft !== submission.draft && original.draft !== text;
+          readHandle.current = found.handle;
+          setSelection({ ...original, value: found.value, record: found.row, originalText: text, draft: laterDraft ? original.draft : text });
+          setFeedback({ ...checked, correction: undefined });
+          setMemoryConflict(false);
+          setNotice(`已核对这次保存的第 ${recovered.revision} 版${laterDraft ? '。后续输入仍保留，尚未保存。' : '。'}`);
+          return;
+        }
         if (result.status === 'saved' && removesFromList(frozen.operation) && frozen.targetId) dropHandledEntry(frozen.operation, frozen.targetId);
         if (frozen.operation === 'correct') {
           const pin = memoryReceiptPin(checked);

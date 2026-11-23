@@ -83,6 +83,20 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
   const photoSlotsFull = photoAllowance.accountSlots === 0 && Number.isSafeInteger(photoAllowance.accountMax);
   const rows = files.filter(file => !needle || normalizedFileName(file.name).includes(needle))
     .map(file => ({ file, use: fileUse(file, model) }));
+  // Keep a way to clear a selection without replacing the current search. These
+  // controls only use removable originals from this ordinary picker's exact list.
+  const hiddenChoices = !focused && listPhase === 'ready' && needle && onToggle ? choices.flatMap(choice => {
+    const target = exactFileTarget(choice);
+    if (!target) return [];
+    const matches = files.filter(file => file.id === target.fileId && file.sha256 === target.sha256);
+    const file = matches[0];
+    if (!file || matches.length !== 1 || !exactFileTarget(file) || file.principalId !== 'owner' || file.spaceId !== 'private' ||
+        file.outputSourceRetired === true || Object.hasOwn(fileObject(file.source), 'groupSpaceId') ||
+        normalizedFileName(file.name).includes(needle)) return [];
+    const name = typeof file.name === 'string' && file.name ? file.name : '未命名附件';
+    const origin = origins?.get(exactFileKey(file));
+    return [{ target, name: origin ? `${name} · ${origin}` : name }];
+  }) : [];
   const incomplete = fileObject(catalog.indexDiagnostics).incomplete === true;
   return <Drawer.Root open={open} onOpenChange={next => { if (!next) onClose(); }} shouldScaleBackground={false}>
     <Drawer.Portal>
@@ -103,11 +117,19 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
           {changed && <p className="pw-muted" role="status">这次选择已不可用。关闭后，可在当前输入重新点「添加附件」。</p>}
           {photoSlotsFull && <p className="pw-muted" role="status">当前账号每条最多加入 {photoAllowance.accountMax} 张图；可移除一张后替换，文档不计入这个上限。</p>}
           {listPhase === 'loading' && <p className="pw-muted" role="status">正在读取本机附件…</p>}
-          {listPhase === 'failed' && <p className="pw-error" role="alert">未能读取本机附件清单。草稿不变，可关闭后重新打开附件选择。</p>}
+          {listPhase === 'failed' && <p className="pw-error" role="alert">未能读取本机附件清单，草稿未改动。要从清单勾选，请关闭后在原输入点「添加附件」重新读取。已保存到附件库的文件不用重新导入。</p>}
           {incomplete && <p className="pw-error" role="alert">部分附件尚未核对完整，可读文件仍可选择。未确认的原件已保留，请核对后再备份。</p>}
           {!changed && !focused && (files.length > 0 || query !== '') && <div role="search" aria-label="在当前附件清单中查找">
             <TextField label="文件名" leadingIcon={IconSearch} type="search" placeholder="查找当前清单" value={query}
               onChange={value => setQuery(value.slice(0, 180))}/>
+          </div>}
+          {hiddenChoices.length > 0 && <div className="flex flex-wrap items-center gap-x-2 gap-y-1" role="group" aria-label="未匹配搜索的已选附件">
+            <small className="pw-muted">已选</small>
+            {hiddenChoices.map(({ target, name }) => <span key={target.fileId} className="flex min-w-0 max-w-full items-center">
+              <bdi className="truncate text-sm" title={name}>{name}</bdi>
+              <Button variant="ghost" size="small" iconOnly leadingIcon={IconClose} className="shrink-0"
+                aria-label={`从草稿移除「${name}」`} onClick={() => onToggle?.(target.fileId, target.sha256, false)}/>
+            </span>)}
           </div>}
           {!original && pagingDenied && !!onReviewPagingRule && files.some(file => fileUse(file, model).paged) &&
             <div className="pw-form-actions"><Button variant="ghost" leadingIcon={IconShieldCheck}

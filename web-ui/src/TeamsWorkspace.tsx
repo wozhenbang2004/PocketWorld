@@ -72,7 +72,8 @@ function memberAuditWindow(original:MemberDeliveryReturn,live:ReturnType<typeof 
 }
 type PlanWorkLocator = {teamRunId:string;generation:number;planId:string;workItemId:string;assignmentId:string;runId:string;epoch:number;
   memberId:string;itemRevision:number;ownerGeneration:number;targetProjectId:string;parentTaskId:string;parentRunId:string;parentEpoch:number};
-type PlanWorkReturn = {source:PlanWorkLocator;sourceHandle:string;document:number;resume:number;request:number;seen?:true;receipt?:true};
+type PlanWorkReturn = {source:PlanWorkLocator;sourceHandle:string;document:number;resume:number;request:number;seen?:true;receipt?:true;
+  savedTeam?:SavedTeamRunReturn};
 function planWorkTask(live:ReturnType<typeof bridge.getState>, id:string) {
   const matches=rows(live.state.tasks).filter(row=>row.id===id);
   return matches.length===1?object(matches[0].raw):{};
@@ -655,6 +656,8 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         if(currentReading.current?.viewHandle!==place.sourceHandle||planWorkWindow(place,bridge.getState())!=='team'){
           setError('原分工已变化，未打开其他工作。');return;
         }
+        const savedTeam = verifiedSavedTeamReturn();
+        if (savedTeam) place.savedTeam = savedTeam;
         planWorkReturn.current=place;
       }
       void run('tasks.open',place?{id,teamPlanView:place.sourceHandle,expectedRunId:place.source.runId,expectedEpoch:place.source.epoch}:{id})
@@ -704,6 +707,7 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
   useEffect(() => { alive.current = true; return () => { alive.current = false; requestGeneration.current++; retireWorkResult(); release(currentReading.current); release(currentReview.current, 'reviewHandle'); release(currentPhoneSelection.current, 'phoneHandle'); }; }, []);
   const restoreWorkspace = () => {
     if (backgrounded.current || !ownsNativeWindow()) return;
+    const previousSavedTeam = savedTeamRunReturn.current;
     savedTeamRunReturn.current = null;
     // A retired read did not consume its notification; a fresh owner window may locate it again.
     handledAttention.current = '';
@@ -753,6 +757,12 @@ export function TeamsWorkspace({ state, run, registerTransientBack, registerBefo
         if(returned&&next?.kind==='run'&&label(next.viewHandle)&&next.viewHandle!==restorePlan.sourceHandle&&
            selected.length===1&&dequal(planWorkLocator(planWorkSource(next.run,selected[0]),live),source)&&
            !newerTeamReading(next.run,object(object(live.state.teamRuns)[source.teamRunId]))) {
+          // Renew only the saved origin paired with this native assignment return.
+          if (previousSavedTeam && restorePlan.savedTeam === previousSavedTeam && next.run.id === previousSavedTeam.runId &&
+              next.run.teamId === previousSavedTeam.teamId && next.run.definitionKind !== 'one_time') {
+            const inWindow = captureTeamWindow();
+            if (inWindow()) savedTeamRunReturn.current = { ...previousSavedTeam, inWindow };
+          }
           acceptReading(next);
           showDecisionTarget(source.teamRunId,next.viewHandle,{kind:'workItem',workItemId:source.workItemId,taskId:source.assignmentId});
           return;

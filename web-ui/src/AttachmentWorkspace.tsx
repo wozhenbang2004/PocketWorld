@@ -1086,6 +1086,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const matchesFile=(row:Json)=>(!needle||normalizedFileName(row.name).includes(needle))&&
   (formatFilter==='all'||attachmentFileFormat(row.mimeType,row.name).category===formatFilter);
  const updateFilter=(name:string,format:string)=>workSourcePicker?setSourceName({scope:sourceScope,name}):setCatalogFilter({scope:listScope,name,format});
+ const relinquishLibraryRowReturn=()=>{
+  // Back can still be rereading this list. Deliberate search use takes priority
+  // over pending row scroll/focus; passive focus and scrolling do not.
+  if(!privateLibrary||mode!=='list'||!privateLibraryWindow(view)||displayedFile.current?.scope!==listScope)return;
+  const native=bridge.getState(),live=obj(native.state.attachmentWorkspace);
+  if(!ordinaryLibraryOwner(native)||live.windowId!==view.windowId||!standaloneLibrarySurface(live)||!privateLibraryWindow(live))return;
+  displayedFile.current=null;listOrigin.current=null;
+ };
+ const trustedSearchControl=(event:{nativeEvent:Event;target:EventTarget})=>event.nativeEvent.isTrusted&&
+  event.target instanceof Element&&!!event.target.closest('input:not([type="hidden"]), label, button.pw-select-trigger, [role="option"], [role="listbox"]');
  const libraryImport=privateLibrary?obj(view.libraryImport):{},registration=obj(libraryImport.registration);
  const importPhase=typeof libraryImport.phase==='string'?libraryImport.phase:'';
  const selectionPending=['selecting','selection_unconfirmed','registering'].includes(importPhase);
@@ -1377,11 +1387,17 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {shareMessage&&<p role="status" className="pw-field-hint">{shareMessage}
    {confirmedShare&&!busy&&shareRegistered>sharedSources.length&&' 当前清单未核对到全部已登记版本，可重新读取，不必再导入。'}</p>}
  </>}
- {filterable&&((workSourcePicker?fileCount>1:hasLibraryFiles)||filterActive)&&<div role="search" aria-label="查找当前清单中的文件" className="pw-file-search">
+ {filterable&&((workSourcePicker?fileCount>1:hasLibraryFiles)||filterActive)&&<div role="search" aria-label="查找当前清单中的文件" className="pw-file-search"
+  onClickCapture={event=>{if(trustedSearchControl(event))relinquishLibraryRowReturn()}}
+  onInputCapture={event=>{if(event.nativeEvent.isTrusted&&event.target instanceof HTMLInputElement&&event.target.type!=='hidden')relinquishLibraryRowReturn()}}
+  onChangeCapture={event=>{if(event.nativeEvent.isTrusted&&event.target instanceof HTMLSelectElement)relinquishLibraryRowReturn()}}
+  onKeyDownCapture={event=>{if(trustedSearchControl(event)&&(event.key.length===1||event.nativeEvent.isComposing||
+   ['Enter','ArrowDown','ArrowUp','Backspace','Delete','Process'].includes(event.key)))relinquishLibraryRowReturn()}}>
   <TextField label="文件名" placeholder="在当前清单查找" leadingIcon={IconSearch} value={nameFilter} onChange={name=>updateFilter(name.slice(0,180),formatFilter)}/>
   {!workSourcePicker&&<SelectField label="文件类别" compactValue options={catalogFormats} value={formatFilter} onChange={format=>updateFilter(nameFilter,format)}/>}
  </div>}
- {filterActive&&!busy&&<div className="pw-action-row"><p className="pw-muted" role="status">{matchingCount?`已读取的文件中有 ${matchingCount} 项匹配。`:'当前已读取的文件没有匹配项。'}{catalogIncomplete&&' 文件清单尚未读全。'}</p><Button variant="ghost" onClick={()=>updateFilter('','all')}>清除筛选</Button></div>}
+ {filterActive&&!busy&&<div className="pw-action-row"><p className="pw-muted" role="status">{matchingCount?`已读取的文件中有 ${matchingCount} 项匹配。`:'当前已读取的文件没有匹配项。'}{catalogIncomplete&&' 文件清单尚未读全。'}</p>
+  <Button variant="ghost" onClick={event=>{if(event.nativeEvent.isTrusted)relinquishLibraryRowReturn();updateFilter('','all')}}>清除筛选</Button></div>}
  {recentPdf&&fileList('继续上次阅读',[recentPdf],true,true)}
  {privateLibrary&&recentSourcesList}
  {privateLibrary&&sharedSourcesList}
