@@ -4,11 +4,24 @@ import {ShimmerText} from './library';
 import {bridge} from './bridge';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
 
-export type ConversationMemoryControls={conversationId:string;enabled:boolean;excludeNewInputs?:boolean;revision:number};
+type GlobalMemoryPolicy={readingEnabled:boolean;learningEnabled:boolean};
+export type ConversationMemoryControls={conversationId:string;enabled:boolean;excludeNewInputs?:boolean;revision:number;globalMemoryPolicy?:GlobalMemoryPolicy};
 function controlsOf(value:unknown,conversationId:string):ConversationMemoryControls {
   const row=value as Partial<ConversationMemoryControls>;
   if(!row||row.conversationId!==conversationId||typeof row.enabled!=='boolean'||('excludeNewInputs'in row&&typeof row.excludeNewInputs!=='boolean')||!Number.isSafeInteger(row.revision)||Number(row.revision)<0)throw new Error('没有收到此对话的真实记忆设置，请重新读取。');
-  return row as ConversationMemoryControls;
+  const policy=row.globalMemoryPolicy;
+  const globalMemoryPolicy=typeof policy?.readingEnabled==='boolean'&&typeof policy?.learningEnabled==='boolean'
+    ? {readingEnabled:policy.readingEnabled,learningEnabled:policy.learningEnabled}:undefined;
+  return {conversationId,enabled:row.enabled,revision:Number(row.revision),excludeNewInputs:row.excludeNewInputs,globalMemoryPolicy};
+}
+function memoryScope(controls:ConversationMemoryControls) {
+  if(!controls.enabled)return '本对话已暂停参考个人背景，也不从本对话整理记忆候选。';
+  const policy=controls.globalMemoryPolicy;
+  const reading=policy?policy.readingEnabled?'设置允许按相关性参考':'总设置已暂停':'总设置尚未核对';
+  const learning=controls.excludeNewInputs===true?'本对话已排除新原话':
+    !policy?'总设置尚未核对':!policy.learningEnabled?'总设置已暂停':
+    controls.excludeNewInputs===false?'设置允许，是否整理还要看实际条件':'本对话的新原话范围尚未核对';
+  return `已保存的记忆：${reading}。从新原话整理候选：${learning}。`;
 }
 
 /** Independent, owner-reviewed choices on the same original header. This sheet owns no saved mode. */
@@ -68,7 +81,8 @@ export function ConversationMemorySettings({conversationId,controls,composer,isO
     <p className="pw-muted">这里只显示对话设置，不是这次请求的已选记忆。对应回答若有「本次记忆」，可在那里核对实际提供的条目。</p>
     {pending&&!controls&&<ShimmerText>正在读取此对话设置…</ShimmerText>}
     {error&&<p className="pw-error" role="alert">{error}</p>}
-    {controls&&<StretchSwitch label="允许此对话参考我的资料、偏好和记忆" description="关闭后，此对话不引用个人资料与记忆，也不自动整理记忆候选。开启只解除本对话的暂停，不改变总设置。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save('enabled',enabled);}}/>}
+    {controls&&<><StretchSwitch label="允许此对话参考我的资料、偏好和记忆" description="只改本对话。开启不改变记忆的总设置；关闭也不删除已保存的记忆。" checked={controls.enabled} disabled={pending} busy={pending} onChange={enabled=>{void save('enabled',enabled);}}/>
+      <p className="pw-muted" role="status">{pending?'正在核对当前范围…':memoryScope(controls)}</p></>}
     <p className="pw-muted">关闭后，后续请求不再带上过去查询或修改默认偏好时读到的设置值。你自己写的消息仍会保留，也仍可用于对话。已经发出的请求不能撤回。明确选用的项目资料保持原范围。</p>
     {typeof controls?.excludeNewInputs==='boolean'&&<StretchSwitch label="从现在起，新原话不参与自动整理" description={controls.enabled?
       '适合临时项目：仍可按原规则参考已有偏好，但此对话之后发的原话不用于后台提炼或记忆建议。关闭不会补整理，既有记忆和手动设置不变。':

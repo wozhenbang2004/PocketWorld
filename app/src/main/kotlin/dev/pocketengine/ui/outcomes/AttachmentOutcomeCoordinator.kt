@@ -819,6 +819,25 @@ internal class AttachmentOutcomeCoordinator(
 
     fun privateLibrary()=state.open&&state.taskId==null&&state.group==null&&state.team==null&&!state.deviceOriginalOnly&&
         state.resultRun==null&&!state.choosingSource&&!state.liveMessageOriginalOnly
+    // This receipt never changes the current pane, editor, picker or catalog read.
+    internal var librarySystemShare by mutableStateOf<AttachmentLibraryImport?>(null)
+        private set
+    internal fun recordSystemShare(target:OwnerAttachmentImport.Target,receipt:OwnerAttachmentImport.Receipt?,notStarted:Boolean=false) {
+        if(target.taskId!=null||target.projectId!=null)return
+        val registration=receipt?.takeIf{it.linked==0&&it.associationUnconfirmed==0&&it.imported>0}?.let{
+            runCatching{it.registration()}.getOrNull()
+        }?.takeIf{
+            val registered=it.optInt("registered",-1);val selected=it.optInt("selected",-1)
+            val files=it.optJSONArray("files").objects()
+            selected in 1..10&&registered in 1..selected&&registered==receipt?.imported&&files.size==registered&&
+                files.map{file->file.optString("id")}.toSet().size==registered&&files.all{file->
+                    file.optString("id").matches(Regex("[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}"))&&
+                        file.optString("sha256").matches(Regex("[0-9a-f]{64}"))
+                }
+        }
+        val phase=if(registration!=null)"confirmed" else if(notStarted)"not_started" else "unconfirmed"
+        librarySystemShare=AttachmentLibraryImport(target.requestId,phase,registration)
+    }
     private fun currentLibraryImport(original:OwnerAttachmentImport.Target?):AttachmentLibraryImport?=
         state.libraryImport?.takeIf{privateLibrary()&&original!=null&&original.taskId==null&&original.projectId==null&&it.requestId==original.requestId}
     fun importSource(trackLibrary:Boolean){

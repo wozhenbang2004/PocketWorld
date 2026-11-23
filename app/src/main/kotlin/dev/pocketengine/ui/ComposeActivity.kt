@@ -476,7 +476,7 @@ class ComposeActivity : ComponentActivity() {
     }
     private fun deliverSharedFiles(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE) {
-            controller.importAttachments(Intent(intent), null, null)
+            controller.importFromSystemShare(Intent(intent))
             intent?.action = null
         }
     }

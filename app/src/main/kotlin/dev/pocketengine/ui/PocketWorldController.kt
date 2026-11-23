@@ -763,7 +763,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 "conversationRead", "conversationSave" -> {
                     val conversation = input.getString("conversationId")
                     check(conversation.isNotEmpty() && conversation == state.conversationId) { "请返回原私人对话设置记忆" }
-                    if (command == "conversationRead") app.conversationPersonalMemoryForOwner(conversation)
+                    val result = if (command == "conversationRead") app.conversationPersonalMemoryForOwner(conversation)
                     else {
                         val revision = input.opt("expectedRevision")
                         require((revision is Int || revision is Long) && (revision as Number).toLong() >= 0) { "请刷新此对话的原记忆设置" }
@@ -776,6 +776,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                             app.setConversationPersonalMemoryForOwner(conversation, expected, input.getBoolean("enabled"))
                         }
                     }
+                    // This exact private window needs only the two global policy flags. A
+                    // failed read cannot turn the original confirmed conversation save into a failure.
+                    val policy = runCatching {
+                        val global = app.personalMemoryControlsForOwner()
+                        JSONObject().put("readingEnabled", global.getJSONObject("reading").getBoolean("enabled"))
+                            .put("learningEnabled", global.getJSONObject("learning").getBoolean("enabled"))
+                    }.getOrNull()
+                    result.putOpt("globalMemoryPolicy", policy)
                 }
                 "save" -> {
                     val revision = input.opt("expectedRevision")
@@ -2432,11 +2440,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (_: java.util.concurrent.RejectedExecutionException) { pluginRuntime = JSONObject().put("status", "unavailable").put("message", "工作队列不可用，本次准备未开始。") }
     }
 
-    private data class ProjectCreationNavigation(
-        val requestId: String,
-        val window: Pair<Triple<Long, Int, Long>, Long>
-    )
-    private var projectCreationNavigation: ProjectCreationNavigation? = null
+    private var latestProjectCreationRequest: String? = null
     private var latestWorkspaceFileList: String? = null
     private var fileRequestId: String? = null
     private var workspaceArtifactReadRequest: String? = null
@@ -3578,6 +3582,21 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             AttachmentImportPicker.Launch.BUSY -> state.copy(error = "上一次文件选择或导入尚未结束，请先完成或取消原选择")
             AttachmentImportPicker.Launch.NOT_STARTED -> state.copy(error = "未找到可用的文件选择器，本次未开始导入")
             AttachmentImportPicker.Launch.UNKNOWN -> state.copy(error = "原文件选择是否打开尚未确认；请先返回原选择完成或取消，不会自动重开")
+        }
+    }
+    internal fun importFromSystemShare(intent: Intent) {
+        if (closed || intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
+        val received = Intent(intent)
+        val target = OwnerAttachmentImport.Target(null, null)
+        // A provider share is not a picker result. Its queued work never owns the input or authoring busy state.
+        try { io.execute {
+            val receipt = try {
+                check(app.features.module("attachments") is AttachmentsModule) { "附件能力尚未接入" }
+                OwnerAttachmentImport.receivePrivateSystemShare(AttachmentRepository.get(app), received, target)
+            } catch (_: Exception) { null }
+            main.post { if (!closed) attachmentOutcomes.recordSystemShare(target, receipt) }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            attachmentOutcomes.recordSystemShare(target, null, notStarted = true)
         }
     }
     fun importAttachments(intent: Intent, taskId: String?, projectId: String?) = importAttachments(intent, OwnerAttachmentImport.Target(taskId, projectId))
@@ -5986,12 +6005,32 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         state = state.copy(projectId = id, files = emptyList(), fileObservation = null, revisionObservation = null, heldFormalDraft = null, filePath = null, lastSavedVersion = null, fileReady = false, workspaceArtifactEditorOrigin = null, projectTaskReturn = state.projectTaskReturn?.takeIf { it.projectId == id })
         feature("workspace", "list", JSONObject().put("projectId", id))
     }
-    fun createProject(name: String) {
-        val window = webWindowTicket()
-        val requestId = feature("workspace", "create", JSONObject().put("name", name.trim()))
-        // Creation continues independently. Only the latest creation intent may
-        // open its result, and only while its original owner window is still current.
-        projectCreationNavigation = ProjectCreationNavigation(requestId, window)
+    private fun rememberProjectCreation(ticket: String, receipt: JSONObject): JSONObject {
+        val key = "workspace.create.ownerReceipts"
+        val proof = receipt.put("ticket", ticket)
+        val previous = state.moduleResults[key]
+        val next = JSONObject()
+        previous?.let { old ->
+            old.keys().asSequence().filter { it != ticket }.toList().takeLast(3).forEach { next.put(it, old.get(it)) }
+        }
+        state = state.copy(moduleResults = state.moduleResults + (key to next.put(ticket, proof)))
+        return proof
+    }
+    internal fun createProject(name: String, ticket: String, done: (JSONObject?, String?) -> Unit) {
+        val title = name.trim()
+        val refused = when {
+            title.length !in 1..80 -> "请输入 1 至 80 字的项目名称，未提交创建。"
+            state.projects.size >= 20 -> "当前已读取的项目目录有 20 个项目，未提交创建。"
+            else -> null
+        }
+        if (refused != null) {
+            done(rememberProjectCreation(ticket, JSONObject().put("state", "not_created").put("message", refused)), null)
+            return
+        }
+        val requestId = requestFeatureReceipt("workspace", "create", JSONObject().put("name", title), done)
+        // Controller-only correlation, not a create capability or storage field.
+        pending[requestId]?.second?.put("ownerCreateTicket", ticket)
+        latestProjectCreationRequest = requestId
     }
     private var openedCommittedCheckoutFile: Pair<Long, ProjectAdoptedFormalFile.Loaded>? = null
     /** From the original private checkout only. No path-based latest read, external open or save. */
@@ -6779,10 +6818,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                             webChatCancelCallbacks.containsKey(input.optString("requestId"))
                         val workspaceListFailure = action == "featureRequest" &&
                             input.optString("feature") == "workspace" && input.optString("command") == "list"
+                        val ownerProjectCreateFailure = action == "featureRequest" &&
+                            input.optString("feature") == "workspace" && input.optString("command") == "create" &&
+                            webFeatureReceipts.containsKey(input.optString("requestId"))
                         if (action == "featureRequest") {
                             featureResult(JSONObject().put("requestId", input.optString("requestId")).put("feature", input.optString("feature")).put("command", input.optString("command")).put("ok", false).put("message", message(error)))
                         }
-                        if (!webCancelFailure && !workspaceListFailure) state = state.copy(error = message(error), taskActionErrors = if (taskAction != null) state.taskActionErrors + (taskAction to message(error)) else state.taskActionErrors, phoneSubmitting = if (action in setOf("startRun", "startOwnedPhonePractice")) false else state.phoneSubmitting)
+                        if (!webCancelFailure && !workspaceListFailure && !ownerProjectCreateFailure) state = state.copy(error = message(error), taskActionErrors = if (taskAction != null) state.taskActionErrors + (taskAction to message(error)) else state.taskActionErrors, phoneSubmitting = if (action in setOf("startRun", "startOwnedPhonePractice")) false else state.phoneSubmitting)
                         if (action == "featureRequest" && input.optString("feature") == "assistant" && input.optString("command") == "send") refreshCurrentConversationTurn()
                     }
                     val originalPhoneFailure = createdPhoneTaskId?.let { JSONObject().put("taskId", it) }
@@ -6904,11 +6946,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (meta.first != key) return
         pending.remove(requestId)
         val workspaceFileList = key == "workspace.list"
-        val createdProjectNavigation = if (feature == "workspace" && command == "create")
-            projectCreationNavigation?.takeIf { it.requestId == requestId } else null
-        // Retire this navigation receipt on success or failure, without clearing a
-        // newer creation. A late result still keeps its normal persisted/result data.
-        if (createdProjectNavigation != null) projectCreationNavigation = null
+        val ordinaryProjectCreate = key == "workspace.create"
         if (workspaceFileList) {
             // Only the current selection's read owns its spinner, not older worker results.
             if (latestWorkspaceFileList == requestId) state = state.copy(moduleBusy = state.moduleBusy - key)
@@ -6949,6 +6987,29 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             state = state.copy(teamOwnerReceipts = (state.teamOwnerReceipts + (requestId to receipt)).entries.toList().takeLast(32).associate { it.toPair() }, moduleResultInputs = state.moduleResultInputs + (key to metadata))
         }
         val webReceipt = webFeatureReceipts.remove(requestId)
+        val createTicket = if (ordinaryProjectCreate) meta.second.opt("ownerCreateTicket") as? String else null
+        if (createTicket != null && webReceipt != null) {
+            val project = (result.opt("id") as? String)?.takeIf { it.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")) }
+            val createdAt = when (val at = result.opt("createdAt")) { is Long -> at; is Int -> at.toLong(); else -> 0L }
+            if (failure != null || event.opt("ok") != true || result.opt("ok") != true || project == null ||
+                createdAt <= 0 || result.opt("name") != meta.second.opt("name")) {
+                val message = failure ?: "尚未核对到这次创建的原项目回执，请先查看项目目录。"
+                // The shared worker does not attest whether a failure came before or after the write.
+                if (latestProjectCreationRequest == requestId) state = state.copy(moduleResults = state.moduleResults - key,
+                    moduleResultInputs = state.moduleResultInputs + (key to metadata.put("_failed", true)),
+                    moduleErrors = state.moduleErrors + (key to message))
+                webReceipt.invoke(null, message)
+                return
+            }
+            if (latestProjectCreationRequest == requestId) {
+                state = state.copy(moduleResults = state.moduleResults + (key to JSONObject(result.toString())),
+                    moduleResultInputs = state.moduleResultInputs + (key to metadata), moduleErrors = state.moduleErrors - key)
+            }
+            // The write does not select a project, even if this is a late successful receipt.
+            webReceipt.invoke(rememberProjectCreation(createTicket, JSONObject().put("state", "created")
+                .put("projectId", project).put("createdAt", createdAt)), null)
+            return
+        }
         webReceipt?.invoke(if (failure == null) JSONObject(result.toString()) else null, failure)
         // An original callback can consume its own receipt, but only the latest
         // read for this project may update shared files, metadata, or errors.
@@ -7089,9 +7150,6 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     state = state.copy(workspaceArtifactView = if (valid) view.copy(diffLoading = false, diffError = null, diff = UiWorkspaceArtifactDiff(result.getString("diff"), result.getInt("version"), result.getString("revisionId"), result.getBoolean("truncated"), System.currentTimeMillis())) else view.copy(diffLoading = false, diffError = "差异回执不属于原成果及源文件，请重新读取"))
                 }
                 "createArtifact" -> refreshWorkspaceArtifacts()
-                "create" -> if (createdProjectNavigation != null && createdProjectNavigation.window == webWindowTicket()) {
-                    result.optString("id").takeIf { it.isNotBlank() }?.let(::selectProject)
-                }
                 "list" -> if (meta.second.optString("projectId") == state.projectId) state = state.copy(files = result.optJSONArray("files").objects().map { UiFile(it.optString("path"), it.optInt("version")) })
                 "history" -> if (requestId == historyRequestId && meta.second.optString("projectId") == state.projectId && meta.second.optString("path") == state.filePath) {
                     val project = meta.second.getString("projectId"); val path = meta.second.getString("path")

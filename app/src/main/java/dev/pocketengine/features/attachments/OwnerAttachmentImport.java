@@ -52,7 +52,22 @@ public final class OwnerAttachmentImport {
 
     public static Receipt receive(AttachmentsModule module,Intent intent,Target original,Linker linker)throws Exception {
         // Never place a task ID in import metadata as a substitute for an actual task link.
-        JSONObject result=module.importIntent(intent,"",original==null||original.projectId==null?"":original.projectId);
+        return receiptFromImport(module.importIntent(intent,"",original==null||original.projectId==null?"":original.projectId),original,linker);
+    }
+
+    /** The Activity's Android share route only: same private repository, no mutation of a message or task source. */
+    public static Receipt receivePrivateSystemShare(AttachmentRepository repository,Intent intent,Target target)throws Exception{
+        if(target==null||target.taskId!=null||target.projectId!=null||intent==null||
+                !(Intent.ACTION_SEND.equals(intent.getAction())||Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())))
+            throw new IllegalArgumentException("系统分享只能登记到私人文件库");
+        // The module wrapper emits a broad source-change event. This independent registration
+        // must not retire a different message's still-valid original or its read window.
+        return receiptFromImport(repository.importIntent(intent,"",""),target,(task,file)->{
+            throw new IllegalStateException("系统分享不能关联任务");
+        });
+    }
+
+    private static Receipt receiptFromImport(JSONObject result,Target original,Linker linker)throws Exception{
         JSONArray files=result.getJSONArray("attachments"),failures=result.optJSONArray("errors");
         if(files.length()>10||failures!=null&&failures.length()>10)throw new IllegalStateException("附件接收回执超出单次范围，请先核对附件库");
         int linked=0,unconfirmed=0;

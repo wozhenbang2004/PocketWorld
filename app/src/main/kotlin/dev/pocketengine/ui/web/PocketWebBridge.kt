@@ -480,6 +480,11 @@ internal class PocketWebBridge(
         })
     private val commandReceipts = linkedMapOf<String, Pair<String, JSONObject>>()
     private val pendingCommands = mutableMapOf<String, String>()
+    private class ProjectCreateSelection(val ticket: String, val document: String, val owner: PocketWebWindowTicket) {
+        var projectId: String? = null
+        var expiresAt: Long = 0L
+    }
+    private var projectCreateSelection: ProjectCreateSelection? = null
     @Volatile private var documentId: String? = null
     private data class SavedLocalReturn(val handle:String,val window:PocketWebWindowTicket,val key:String,val conversation:String,val message:String,val revision:Long)
     @Volatile private var savedLocalReturn: SavedLocalReturn? = null
@@ -670,6 +675,9 @@ internal class PocketWebBridge(
     internal fun captureWindow(): PocketWebWindowTicket = PocketWebWindowTicket(commandFence.ticket(), controller.webWindowTicket())
     internal fun acceptsWindow(ticket: PocketWebWindowTicket): Boolean =
         ticket.accepts(commandFence.ticket(), controller.webWindowTicket())
+    private fun currentProjectCreateOwner(original: ProjectCreateSelection) =
+        !closed && documentId == original.document && acceptsWindow(original.owner) && section == null && taskViewId == null &&
+            controller.webPrivateOwnerVisible() && controller.state.filePath == null && controller.conversationReader == null
 
     /** Host facts only. The explicit shelf visit owns JS-only Project subnavigation;
      * generic section=null or a caller-supplied project id alone never owns a review. */
@@ -985,6 +993,27 @@ internal class PocketWebBridge(
             }
             pendingCommands[id] = identity
             ownsRequest = true
+            if (action == "projects.create") {
+                checkedPayload(args, setOf("name", "ticket"))
+                val ticket = requiredString(args, "ticket")
+                require(ticket.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}"))) { "这次创建请求身份无效，未提交创建。" }
+                val name = requiredString(args, "name")
+                val original = ProjectCreateSelection(ticket, requireNotNull(documentId), captureWindow())
+                require(currentProjectCreateOwner(original)) { "原项目窗口已变化，未提交创建。" }
+                projectCreateSelection = original
+                controller.createProject(name, ticket) { value, error ->
+                    if (projectCreateSelection === original) {
+                        if (value != null && value.opt("state") == "created" && value.opt("ticket") == ticket && currentProjectCreateOwner(original)) {
+                            original.projectId = value.getString("projectId")
+                            original.expiresAt = SystemClock.elapsedRealtime() + 15_000L
+                        } else projectCreateSelection = null
+                    }
+                    publishState()
+                    complete(id, value, error ?: if (value == null) "尚未核对到这次创建，请先查看项目目录。" else null,
+                        errorCode = "outcome_unknown")
+                }
+                return
+            }
             if (args.has(PocketWebSentPhoneResult.ARG)) {
                 if(action=="devices.queryPhoneGoalResult"){
                     sentPhoneResult.read(args) { value,error ->
@@ -3615,8 +3644,18 @@ internal class PocketWebBridge(
                 controller.stopReviewedTask(task)
             }
             "projects.refresh" -> { retireKeptStaticPages(); controller.state.projectId?.let(controller::selectProject) ?: controller.refresh() }
-            "projects.select" -> { leaveTask(); leaveConnection(); reviews.clear(); controller.selectProject(requiredString(args, "id")) }
-            "projects.create" -> controller.createProject(requiredString(args, "name"))
+            "projects.select" -> {
+                val project = requiredString(args, "id")
+                if (args.has("creationTicket")) {
+                    checkedPayload(args, setOf("id", "creationTicket"))
+                    val original = projectCreateSelection
+                    require(original != null && original.ticket == requiredString(args, "creationTicket") &&
+                        original.projectId == project && SystemClock.elapsedRealtime() < original.expiresAt &&
+                        currentProjectCreateOwner(original)) { "项目已保存，原窗口已变化；请在项目目录自行打开。" }
+                }
+                projectCreateSelection = null
+                leaveTask(); leaveConnection(); reviews.clear(); controller.selectProject(project)
+            }
             "projects.open", "projects.newFile" -> {
                 require(controller.state.projectId == requiredString(args, "projectId")) { "原项目已变化" }
                 val path = checkedPath(args)

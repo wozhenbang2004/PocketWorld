@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {bridge} from './bridge';
 import {Button,IconButton} from './forms-library';
 import {Drawer} from './shell-library';
@@ -10,14 +10,16 @@ type Json=Record<string,any>;
 const locatorFields=['kind','generation','conversationId','recordId','recordVersion','fingerprint'];
 /** The existing source-reader and history-window layout reads the exact owner
  * locator. Viewing a search hit never changes the active composer or its scope. */
-export function WorkSearchOriginalReader({target,identity,covered=false,conversation,onClose,onConversation,onContext,onCopy}:{
+export function WorkSearchOriginalReader({target,identity,covered=false,conversation,onClose,onConversation,onContext,onCopy,onOriginalAccepted}:{
  target:WorkSearchItem;identity:string;covered?:boolean;conversation?:WorkSearchConversation;onClose:()=>void;onConversation?:()=>void;
  onContext?:(locator:Record<string,unknown>)=>Promise<void>;onCopy:(text:string)=>Promise<unknown>;
+ onOriginalAccepted?:(target:WorkSearchItem)=>void;
 }){
  const initialOffset=Number.isSafeInteger(target.readRange?.offset)&&Number(target.readRange?.offset)>=0?Number(target.readRange?.offset):0;
  const [page,setPage]=useState<Json|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[offsets,setOffsets]=useState<number[]>([]);
  const [locating,setLocating]=useState(false);
  const alive=useRef(false),generation=useRef(0),pending=useRef(false),requestedOffset=useRef(initialOffset),scroller=useRef<HTMLDivElement>(null);
+ const confirmed=useRef<{target:WorkSearchItem;identity:string;request:number;epoch:number}|null>(null);
  const contextButton=useRef<HTMLButtonElement>(null),contextPosition=useRef<number|null>(null),contextOpening=useRef(false);
  const read=useCallback(async(offset:number)=>{
   if(pending.current)return;pending.current=true;
@@ -33,12 +35,13 @@ export function WorkSearchOriginalReader({target,identity,covered=false,conversa
    if(result.status==='current'){
     const range=result.readRange;
     if(locatorFields.some(key=>result.ownerLocator?.[key]!==target.ownerLocator?.[key])||typeof result.body!=='string'||range?.offset!==offset||range?.chars!==result.body.length||!Number.isSafeInteger(range?.totalChars)||range.totalChars<offset+result.body.length||!Number.isSafeInteger(result.nextOffset)||(result.nextOffset!==-1&&result.nextOffset!==offset+result.body.length))throw new Error('原文身份或读取范围已变化，请重新搜索这条记录。');
+     confirmed.current={target,identity,request,epoch};
    }
    setPage(result);setOffsets(previous=>{const index=previous.indexOf(offset);return index<0?[...previous,offset]:previous.slice(0,index+1)});
    if(scroller.current)scroller.current.scrollTop=0;
   }catch(failure){if(accepts()){setPage(null);setError(failure instanceof Error?failure.message:'原文暂不可读取，请重试。')}}
   finally{if(request===generation.current){pending.current=false;if(alive.current)setBusy(false)}}
- },[target,conversation]);
+ },[target,conversation,identity]);
  useEffect(()=>{
   alive.current=true;pending.current=false;setPage(null);void read(requestedOffset.current);
   const resume=()=>{generation.current++;pending.current=false;if(document.hidden)setBusy(false);else if(!conversation){setPage(null);void read(requestedOffset.current)}};
@@ -48,6 +51,14 @@ export function WorkSearchOriginalReader({target,identity,covered=false,conversa
  const copy=async(text:string)=>{try{await onCopy(text)}catch(failure){if(alive.current)setError(failure instanceof Error?failure.message:'复制未完成，请选中文字后复制。');throw failure}};
  const current=page?.status==='current',range=page?.readRange;
  const original=page?.ownerLocator;
+ useLayoutEffect(()=>{
+  const proof=confirmed.current;
+  if(!onOriginalAccepted||!current||covered||document.hidden||!alive.current||!proof||proof.target!==target||
+     proof.identity!==identity||proof.request!==generation.current||proof.epoch!==bridge.getDocumentEpoch())return;
+  // Only acknowledge the exact verified passage once its reader commit has taken place.
+  confirmed.current=null;
+  onOriginalAccepted(target);
+ },[page,current,target,identity,covered,onOriginalAccepted]);
  const contextReady=current&&original?.kind==='owner_native_original'&&page.importAssignedIdentity===false&&
   page.derivedUseStatus==='not_authorized_by_this_owner_read'&&locatorFields.every(key=>original[key]===target.ownerLocator?.[key]);
  const locate=async()=>{

@@ -199,6 +199,17 @@ type OriginalChatTeamReportSource=WorkIdentity&{conversationId:string;messageId:
 type OriginalChatTeamReportVisit={source:OriginalChatTeamReportSource;documentEpoch:number;navigation:number;resume:number;sourceChanges:number;draftEpoch:number;taskRequest:number;key:number;trigger:HTMLButtonElement};
 type Message={id?:string;role:string;content:string;at?:number;taskId?:string;submission?:Json;attachments?:Json[];attachmentFiles?:Json[];localMessagePdfSourceCurrent?:boolean;localMessageInputDocumentSourceCurrent?:boolean;originalGeneratedDocument?:Json;originalGeneratedDocumentCheck?:Json;originalGeneratedDocuments?:unknown;originalGeneratedDocumentsCheck?:unknown;originalGeneratedTextCheck?:unknown;memoryReference?:Json;projectConventionRecorded?:boolean;retainedSources?:boolean;sourceRevision?:number;hostGoalTaskId?:string;originalHostFinal?:{text?:string};firstHostRequestLocal?:boolean;quoteAvailable?:boolean;automaticLearningExcluded?:boolean;originalDefaultWritesBlocked?:boolean;phoneResult?:PhoneResult;replyContext?:ReplyContext;taskResult?:TaskResult};
 type Project={id:string;name:string};
+type ProjectCreationFeedback={kind:'rejected'|'saved-only';message:string}|{kind:'unknown';ticket:string};
+type ProjectCreationProof={state:'created';projectId:string;createdAt:number}|{state:'not_created';message:string};
+type SetAsideProjectCreation={ticket:string;name:string;proof?:ProjectCreationProof};
+const projectCreationReminderLimit=4;
+const projectCreationReceipt=(value:unknown,ticket:string):ProjectCreationProof|null=>{
+ const row=obj(value);
+ if(row.ticket!==ticket)return null;
+ if(row.state==='not_created'&&typeof row.message==='string'&&row.message)return {state:'not_created',message:row.message};
+ return row.state==='created'&&typeof row.projectId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(row.projectId)&&
+  Number.isSafeInteger(row.createdAt)&&row.createdAt>0?{state:'created',projectId:row.projectId,createdAt:row.createdAt}:null;
+};
 type Review={reviewHandle:string;task?:Task;ownerQuestion?:Json|null;actions?:{action:string;label:string}[];approvals?:Json[];unresolvedOperations?:Json[];projectContinuation?:Json|null;capabilityApprovalRead?:Json;approvalExecutionScope?:Json;
  projectDraftAcceptance?:{state:'missing_saved_draft';taskId:string;runId:string;epoch:number;resultReviewDigest:string};
  savedTeamDefaultModel?:WorkIdentity&{state:'unconfigured';modelSelectionRevision:number}};
@@ -1071,6 +1082,7 @@ export default function App(){
  const [organizationTarget,setOrganizationTarget]=useState<string|null>(null);
  const workSearchMemory=useRef<WorkSearchMemory>({}),capabilityMemory=useRef<CapabilityWorkspaceMemory>({});
  const searchOpenRequest=useRef(0);
+ const searchResultReturn=useRef<{arm:()=>void;current:()=>boolean;reader?:{target:WorkSearchItem;accepted:boolean}}|null>(null);
  const [searchReturn,setSearchReturn]=useState(false),[searchOriginal,setSearchOriginal]=useState<WorkSearchItem|null>(null);
  const [chatSearchVisit,setChatSearchVisit]=useState<ChatSearchVisit|null>(null);
  const chatSearchOriginal=useRef<{visit:ChatSearchVisit;hit:WorkSearchItem}|null>(null);
@@ -1078,11 +1090,25 @@ export default function App(){
  const searchContextFlight=useRef<string|null>(null),retiredSearchReader=useRef<number|null>(null);
  const [desktopNavigation,setDesktopNavigation]=useState(()=>window.matchMedia('(min-width: 1024px)').matches);
  const presentWorkSearch=useCallback(()=>{searchOpenRequest.current++;setCommandOpen(true);setWorkOpen(!desktopNavigation)},[desktopNavigation]);
- const showWorkSearch=useCallback(()=>{
+ const currentSearchReturn=useCallback(()=>{
+  const location=searchResultReturn.current;
+  return location?.current()&&(!location.reader||location.reader.accepted)?location.arm:undefined;
+ },[]);
+ const acknowledgeSearchOriginal=useCallback((target:WorkSearchItem)=>{
+  const location=searchResultReturn.current,reader=location?.reader;
+  if(location&&reader&&reader.target===target&&location.current())reader.accepted=true;
+ },[]);
+ const revealWorkSearch=useCallback((returnFromResult:boolean)=>{
+  const arm=returnFromResult?currentSearchReturn():undefined;
+  if(returnFromResult&&!arm&&searchResultReturn.current?.reader)workSearchMemory.current.selectedId=undefined;
+  searchResultReturn.current=null;workSearchMemory.current.returnAnchor=undefined;
+  arm?.();
   const from=chatSearchOriginal.current;
   if(from){chatSearchOriginal.current=null;setSearchOriginal(item=>item===from.hit?null:item)}
   setChatSearchVisit(null);presentWorkSearch();
- },[presentWorkSearch]);
+ },[presentWorkSearch,currentSearchReturn]);
+ const showWorkSearch=useCallback(()=>revealWorkSearch(false),[revealWorkSearch]);
+ const returnToWorkSearch=useCallback(()=>revealWorkSearch(true),[revealWorkSearch]);
  useEffect(()=>{const invalidate=()=>{if(document.hidden)searchOpenRequest.current++};document.addEventListener('visibilitychange',invalidate);return()=>document.removeEventListener('visibilitychange',invalidate)},[]);
  const [chatMenuOpen,setChatMenuOpen]=useState(false);const chatMenuTrigger=useRef<HTMLButtonElement>(null);
  const [deliveredFileVisit,setDeliveredFileVisit]=useState<DeliveredFileVisit|null>(null),deliveredFileRef=useRef<DeliveredFileVisit|null>(null);
@@ -1329,7 +1355,22 @@ export default function App(){
  const channelPhoneModel=intent!=='chat'&&phoneDraft.channelOrigin===true;
  const composerModelName=channelPhoneModel?String(state.modelName||''):conversationModelName(state);
  const createWindow=useRef(0),createPending=useRef(new Set<number>());const [createBusy,setCreateBusy]=useState(false),[createKind,setCreateKind]=useState<'project'|'file'>('project');
- const closeCreate=()=>{createWindow.current++;setNewProjectOpen(false);setNewFileOpen(false);setCreateBusy(false)};
+ const [projectCreationFeedback,setProjectCreationFeedback]=useState<ProjectCreationFeedback|null>(null);
+ const [projectCreateDirectoryTicket,setProjectCreateDirectoryTicket]=useState('');
+ const [setAsideProjectCreates,holdSetAsideProjectCreates]=useState<SetAsideProjectCreation[]>([]);
+ const finishCreate=useCallback(()=>{createWindow.current++;setNewProjectOpen(false);setNewFileOpen(false);setCreateBusy(false)},[]);
+ const createProjectHeld=createKind==='project'&&(projectCreationFeedback?.kind==='unknown'||projectCreationFeedback?.kind==='saved-only');
+ const projectCreateTitle=projectName.trim();
+ const sameTitlePrior=newProjectOpen?setAsideProjectCreates.filter(row=>row.proof?.state!=='not_created'&&row.name===projectCreateTitle):[];
+ const sameTitleSaved=sameTitlePrior.filter(row=>row.proof?.state==='created').length;
+ const sameTitleUnknown=sameTitlePrior.length-sameTitleSaved;
+ const sameTitleIntent=(windowId:number)=>sameTitlePrior.length?JSON.stringify([windowId,projectCreateTitle,sameTitlePrior.map(row=>row.ticket)]):'';
+ const duplicateCreateIntent=sameTitleIntent(createWindow.current);
+ const closeCreate=()=>{
+  if(newProjectOpen&&createPending.current.has(createWindow.current))return;
+  finishCreate();
+  if(newProjectOpen&&projectCreationFeedback?.kind==='saved-only'){setProjectName('');setProjectCreationFeedback(null)}
+ };
  const openCreate=(kind:'project'|'file')=>{createWindow.current++;setCreateKind(kind);setCreateBusy(false);setNewProjectOpen(kind==='project');setNewFileOpen(kind==='file')};
  const modelPicker=useRef<ConversationModelPickerHandle>(null);
  const [voiceReview,setVoiceReview]=useState<any>(null),[voiceText,setVoiceText]=useState(''),[voicePending,setVoicePending]=useState(false);const [voiceOptionsOpen,setVoiceOptionsOpen]=useState(false),[workOptionsOpen,setWorkOptionsOpen]=useState(false),[messageMenu,setMessageMenu]=useState<string|null>(null),[expandedCalls,setExpandedCalls]=useState<Record<string,boolean>>({});
@@ -1432,10 +1473,10 @@ export default function App(){
  const closeSearchOriginal=useCallback(()=>{
   const from=chatSearchOriginal.current;
   chatSearchOriginal.current=null;setSearchOriginal(null);
-  if(!from){showWorkSearch();return}
+  if(!from){returnToWorkSearch();return}
   if(chatSearchVisit===from.visit&&currentChatSearch()?.identity===from.visit.identity){presentWorkSearch();return}
   setChatSearchVisit(null);setSearchReturn(false);
- },[chatSearchVisit,currentChatSearch,presentWorkSearch,showWorkSearch]);
+ },[chatSearchVisit,currentChatSearch,presentWorkSearch,returnToWorkSearch]);
  useEffect(()=>{
   if(!chatSearchVisit)return;
   const retire=()=>{
@@ -1860,7 +1901,7 @@ export default function App(){
     }
     if(!current())return false;
    }
-   setSearchReturn(false);setWorkOptionsOpen(false);setSearchOriginal(null);
+   searchResultReturn.current=null;setSearchReturn(false);setWorkOptionsOpen(false);setSearchOriginal(null);
    setSentPhoneFocus(null);
    if(next!=='teams'){setTeamAttentionFocus(undefined);setTeamRunFocus(undefined);}
    if(requested==='memory'||requested==='profile'){setPersonalTarget({view:requested==='memory'?'memories':'home'});setPersonalTargetKey(key=>key+1);}
@@ -6483,7 +6524,7 @@ export default function App(){
    }
   }
  };
- const openSearchResult=async(item:WorkSearchItem,searchCurrent:()=>boolean=()=>true,chatSearch?:ChatSearchVisit)=>{
+ const openSearchResult=async(item:WorkSearchItem,searchCurrent:()=>boolean=()=>true,chatSearch?:ChatSearchVisit,armReturn?:()=>void)=>{
   if(!searchCurrent())return;
   if(chatSearch&&(chatSearch!==chatSearchVisit||currentChatSearch()?.identity!==chatSearch.identity||
      item.kind!=='conversation'||item.conversationId!==chatSearch.scope.conversationId||
@@ -6501,6 +6542,8 @@ export default function App(){
     if(!can('work.search.read'))throw new Error('当前版本暂不能读取搜索命中的原文。');
     if(chatSearch&&currentChatSearch()?.identity!==chatSearch.identity)throw Error('原对话已变化，未打开其他记录。');
     chatSearchOriginal.current=chatSearch?{visit:chatSearch,hit:item}:null;
+    if(!chatSearch)searchResultReturn.current=armReturn?{arm:armReturn,current:()=>ownsRequest()&&navigationWindow.current===navigation,
+     reader:{target:item,accepted:false}}:null;
     setSearchOriginal(item);setSearchReturn(!chatSearch);setWorkOpen(false);setCommandOpen(false);return;
    }
    if(item.kind==='work'){
@@ -6544,7 +6587,11 @@ export default function App(){
      },4500);
      const check=()=>{const current=atDestination();if(!current||matches()){clearTimeout(timer);unsubscribe();resolve(current)}};
      unsubscribe=bridge.subscribe(check);check();
-    })).then(opened=>{if(opened&&atDestination())setSearchReturn(true);}).catch(failure=>{
+    })).then(opened=>{
+     if(!opened||!atDestination())return;
+     if(item.kind==='conversation'&&armReturn)searchResultReturn.current={arm:armReturn,current:atDestination};
+     setSearchReturn(true);
+    }).catch(failure=>{
      if(!atDestination())return;
      showWorkSearch();toast.error(failure instanceof Error?failure.message:'尚未打开所选记录。',{id:'work-search-open'});
     });
@@ -6658,14 +6705,100 @@ export default function App(){
  const copyText=async(textToCopy:string,feedback:'toast'|'local'='toast')=>{try{if(!navigator.clipboard?.writeText)throw new Error('当前无法直接复制，请选择文字后复制。');await navigator.clipboard.writeText(textToCopy);if(feedback==='toast')toast('已复制');}catch(error){const message=error instanceof Error?error.message:'复制未完成，请选择文字后复制。';setLocalError(message);toast.error(message);throw error;}};
  const copyWithLocalFeedback=(textToCopy:string)=>copyText(textToCopy,'local');
 
- const createObject=()=>{
-  const original=createWindow.current;if(createPending.current.has(original))return;
-  const project=newProjectOpen;const args=project?{name:projectName}:{projectId:state.projectId,path:newPath};
+ const projectCreationReadbacks=state.moduleResults?.['workspace.create.ownerReceipts'];
+ useEffect(()=>{
+  if(projectCreationFeedback?.kind!=='unknown')return;
+  const receipt=projectCreationReceipt(projectCreationReadbacks?.[projectCreationFeedback.ticket],projectCreationFeedback.ticket);
+  if(!receipt)return;
+  setProjectCreateDirectoryTicket('');
+  if(receipt.state==='not_created'){setProjectCreationFeedback({kind:'rejected',message:receipt.message});return}
+  // A late write proof must never select a project.
+  const note='已核对到项目保存。没有切换当前项目，可在项目目录查看。';
+  if(newProjectOpen){
+   setProjectCreationFeedback({kind:'saved-only',message:note});return;
+  }
+  setProjectCreationFeedback(null);setProjectName('');
+  if(route==='projects')setLocalStatus(note);
+ },[projectCreationFeedback,projectCreationReadbacks,route,newProjectOpen]);
+ useEffect(()=>{
+  if(!projectCreationReadbacks)return;
+  holdSetAsideProjectCreates(current=>{
+   const observed=current.map(row=>{
+    if(row.proof)return row;
+    const proof=projectCreationReceipt(projectCreationReadbacks[row.ticket],row.ticket);
+    return proof?{...row,proof}:row;
+   });
+   return observed.some((row,index)=>row!==current[index])?observed:current;
+  });
+ },[projectCreationReadbacks]);
+ const inspectCreatedProjectDirectory=()=>{
+  // Open the existing chooser. No project is selected or re-created.
+  if(route!=='projects'||bridge.getState().state.filePath)return;
+  if(projectCreationFeedback?.kind==='unknown')setProjectCreateDirectoryTicket(projectCreationFeedback.ticket);
+  closeCreate();setProjectPickerOpen(true);
+ };
+ const reviewingCreateDirectory=route==='projects'&&projectPickerOpen&&!state.filePath&&
+  projectCreationFeedback?.kind==='unknown'&&projectCreateDirectoryTicket===projectCreationFeedback.ticket;
+ const replacedReminder=setAsideProjectCreates.length>=projectCreationReminderLimit?
+  setAsideProjectCreates.find(row=>row.proof?.state==='not_created')||setAsideProjectCreates[0]:undefined;
+ const replacedProtected=replacedReminder&&replacedReminder.proof?.state!=='not_created'?replacedReminder:undefined;
+ const setAsideOriginalCreate=(acceptedReplacement?:string)=>{
+  if(!reviewingCreateDirectory||projectCreationFeedback?.kind!=='unknown'||document.hidden)return;
+  if(acceptedReplacement!==replacedProtected?.ticket)return;
+  const ticket=projectCreationFeedback.ticket,live=bridge.getState().state;
+  if(live.filePath||projectCreationReceipt(live.moduleResults?.['workspace.create.ownerReceipts']?.[ticket],ticket))return;
+  holdSetAsideProjectCreates(current=>[
+   ...current.filter(row=>row.ticket!==ticket&&row.ticket!==replacedReminder?.ticket),{ticket,name:projectCreateTitle},
+  ]);
+  setProjectCreationFeedback(null);setProjectCreateDirectoryTicket('');setProjectName('');
+ };
+ const createObject=(confirmedDuplicate?:string)=>{
+  const original=createWindow.current;if(createPending.current.has(original)||createProjectHeld)return;
+  const duplicate=sameTitleIntent(original);
+  // Ordinary submit/Enter cannot stand in for the explicit same-title action.
+  if(duplicate&&confirmedDuplicate!==duplicate)return;
+  const project=newProjectOpen,ticket=project?crypto.randomUUID():'';
+  const initial=bridge.getState(),originalProject=initial.state.projectId??null,ownerResume=obj(initial.view).resumeRevision;
+  const ownerDocument=bridge.getDocumentEpoch(),ownerNavigation=navigationWindow.current;
+  const sameOwner=()=>{
+   const live=bridge.getState(),view=obj(live.view);
+   return createWindow.current===original&&!document.hidden&&ownerDocument===bridge.getDocumentEpoch()&&ownerNavigation===navigationWindow.current&&
+    view.section===null&&view.taskId===null&&view.resumeRevision===ownerResume&&!live.state.filePath;
+  };
+  if(project)setProjectCreationFeedback(null);
   createPending.current.add(original);setCreateBusy(true);
-  void act(project?'projects.create':'projects.newFile',args).then(()=>{
+  const pending=project?bridge.command('projects.create',{name:projectCreateTitle,ticket}):
+   act('projects.newFile',{projectId:state.projectId,path:newPath});
+  void pending.then(async value=>{
    if(createWindow.current!==original)return;
-   closeCreate();if(project)setProjectName('');else setNewPath('');
-  }).catch(()=>{}).finally(()=>{createPending.current.delete(original);if(createWindow.current===original)setCreateBusy(false)});
+   if(!project){finishCreate();setNewPath('');return}
+   const receipt=projectCreationReceipt(value,ticket);
+   if(!receipt){setProjectCreationFeedback({kind:'unknown',ticket});return}
+   if(receipt.state==='not_created'){setProjectCreationFeedback({kind:'rejected',message:receipt.message});return}
+   // Only this still-open form can use the original, one-visit selection.
+   // The creation write and the late readback never navigate.
+   const triedSelection=sameOwner()&&(bridge.getState().state.projectId??null)===originalProject;
+   if(triedSelection){
+    try{await bridge.command('projects.select',{id:receipt.projectId,creationTicket:ticket})}
+    catch{/* The already confirmed save remains a success. */}
+   }
+   const visible=triedSelection&&sameOwner()&&await awaitPickerProjection(sameOwner,()=>{
+    const live=bridge.getState(),view=obj(live.view);
+    return view.section===null&&view.taskId===null&&live.state.projectId===receipt.projectId&&
+     asArray<Project>(live.state.projects).some(row=>row.id===receipt.projectId)?true:undefined;
+   });
+   if(createWindow.current!==original)return;
+   if(visible&&sameOwner()){
+    finishCreate();setProjectName('');return;
+   }
+   setProjectCreationFeedback({kind:'saved-only',message:triedSelection?'项目已创建，未确认切换。可在项目目录查看。':'项目已创建，未切换当前项目。'});
+  }).catch(error=>{
+   if(!project||createWindow.current!==original)return;
+   const code=error instanceof Error&&'code'in error?error.code:null;
+   if(code==='not_sent'||code==='not_accepted'||code==='invalid_request'){
+    setProjectCreationFeedback({kind:'rejected',message:error instanceof Error?error.message:'项目未提交创建。'});
+   }else setProjectCreationFeedback({kind:'unknown',ticket});
+  }).finally(()=>{createPending.current.delete(original);if(createWindow.current===original)setCreateBusy(false)});
  };
 
  const openSource=(message:Message)=>{if(can('sources.open')&&message.id&&message.retainedSources)setSourceSelection({messageId:message.id});else setLocalStatus('这条回答没有可核对的原来源身份。');};
@@ -8030,7 +8163,7 @@ export default function App(){
     const actual=currentChatSearch();if(!actual||actual.identity!==currentSearch.identity)return;
     setChatSearchVisit({...actual,memory:{}});
    }:undefined} onFindAll={chatSearchVisit?()=>setChatSearchVisit(null):undefined}
-   onOpen={(item,stillCurrent)=>openSearchResult(item,stillCurrent,chatSearchVisit||undefined)} labelStatus={labelStatus} onClose={()=>setCommandOpen(false)}/>}
+   onOpen={(item,stillCurrent,armReturn)=>openSearchResult(item,stillCurrent,chatSearchVisit||undefined,armReturn)} labelStatus={labelStatus} onClose={()=>setCommandOpen(false)}/>}
   openConversation={can('conversation.select')?chooseConversation:undefined}
   organizeConversation={can('conversation.organization.read')?setOrganizationTarget:undefined}
   newConversation={can('conversation.new')?()=>chooseConversation(null):undefined} newPending={!!state.chatSubmitting||draftSwitching}
@@ -9791,7 +9924,7 @@ export default function App(){
   })}/>
  </div>:null;
  const workspaceNotices=<>{route!=='chat'&&replyActivity}{stopFeedback}{(localError||state.error)&&<div className="pw-banner pw-banner-error" role="alert"><IconInfo size={17}/><p>{localError||state.error}</p>{localError&&<IconButton icon={IconClose} aria-label="关闭这条操作提示" onClick={()=>setLocalError('')}/>}</div>}{(localStatus||state.notice)&&<div className="pw-banner" role="status"><p>{localStatus||state.notice}</p>{savedLocalVisible&&<Button variant="ghost" size="small" aria-busy={savedLocalOpening||undefined} disabled={savedLocalOpening} onClick={()=>void viewSavedLocal()}>查看刚才保存的原话</Button>}{(localStatus||can('notice.dismiss'))&&<IconButton icon={IconClose} aria-label="关闭这条提示" onClick={()=>{if(savedLocalVisible)setSavedLocalReturn(null);setLocalStatus('');if(state.notice&&can('notice.dismiss'))run('notice.dismiss')}}/>}</div>}
-  {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={showWorkSearch}>返回搜索结果</Button></div>}</>;
+  {searchReturn&&!state.attachmentWorkspace?.open&&<div className="pw-search-return"><Button variant="ghost" size="small" leadingIcon={IconArrowLeft} onClick={returnToWorkSearch}>返回搜索结果</Button></div>}</>;
  const archiveVisit=packageReturn.current, archiveChoice=projectPreview.choices;
  // A fixed webpage opened from Work is a child of that Work, not its list's parent.
  const returnToArchiveWork=route==='projects'&&!state.filePath&&projectPreview.expanded&&archiveChoice?.mode==='web_output'&&
@@ -9869,7 +10002,16 @@ export default function App(){
      aria-label={detail?`${project.name}，${detail}`:undefined} onClick={()=>{setProjectPickerOpen(false);run('projects.select',{id:project.id})}}>
      <IconFolder size={17}/>{detail?projectDirectoryName(project.name,detail):<span>{project.name}</span>}{project.id===state.projectId&&<small>当前</small>}
     </Button>;
-   })}{can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>{setProjectPickerOpen(false);run('projects.localSource.open')}}>{localProjectSourceLabel}</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
+   })}
+   {reviewingCreateDirectory&&<section className="pw-form-flow" aria-label="核对此次项目创建">
+    <p className="pw-field-hint">「{projectName}」仍可能已保存。放下这次核对不会撤销，也不会再次提交。</p>
+    {replacedProtected&&<p className="pw-field-hint">这也会移除最早的「{replacedProtected.name}」同名创建提醒，不会撤销那次请求。</p>}
+    <Button variant="secondary" onClick={()=>setAsideOriginalCreate(replacedProtected?.ticket)}>{replacedProtected?'放下并替换最早提醒':'放下这次核对'}</Button>
+   </section>}
+   {setAsideProjectCreates.length>0&&<ul className="pw-muted" aria-label="已放下的项目创建核对">{setAsideProjectCreates.map(row=>
+    <li key={row.ticket}><bdi>{row.name}</bdi>：{row.proof?.state==='created'?`已核对到该次保存（${projectDetails?.get(row.proof.projectId)||timeLabel(row.proof.createdAt)}）。`:
+     row.proof?.state==='not_created'?'已核对到这次未提交创建。':'已放下核对，仍未确认是否保存。'}</li>)}</ul>}
+   {can('projects.localSource.open')&&<Button variant="ghost" onClick={()=>{setProjectPickerOpen(false);run('projects.localSource.open')}}>{localProjectSourceLabel}</Button>}{can('projects.create')&&<Button variant="secondary" leadingIcon={IconAdd} onClick={()=>{setProjectPickerOpen(false);openCreate('project')}}>{canCreateLocalStarter?'新建空白项目':'新项目'}</Button>}</div></Popover></PopoverTrigger>:<div className="pw-current-work"><BlurCrossfade identity={currentTitle}><h1>{currentTitle}</h1></BlurCrossfade></div>}
    {isChatSurface?<div ref={headerActionsGlass} className="pw-header-actions pw-navigation-glass" role="group" aria-label="对话操作">
     {can('remoteInbox.state')&&Number(state.remoteInbox?.unread||0)>0&&<IconButton icon={IconNotification} aria-label={'外部消息 · '+state.remoteInbox.unread+' 条未读'} title="外部未读消息" onClick={openUnreadMessages}/>}
     {!homeNewTopic&&can('conversation.new')&&<IconButton icon={IconNewChat} aria-label="聊件新事" title="聊件新事" disabled={!!state.chatSubmitting||draftSwitching} onClick={()=>chooseConversation(null)}/>}
@@ -9928,9 +10070,13 @@ export default function App(){
     registerBack={registerOriginalReminderBack}/>}
   {searchOriginal&&(!scopedSearchOriginal||scopedOriginalCurrent)&&<WorkSearchOriginalReader target={searchOriginal} covered={searchContextHere}
     identity={scopedSearchOriginal?.visit.identity||`${bridge.getDocumentEpoch()}:${Number(snapshot?.view?.resumeRevision||0)}`} conversation={scopedSearchOriginal?.visit.scope} onClose={closeSearchOriginal}
+    onOriginalAccepted={scopedSearchOriginal?undefined:acknowledgeSearchOriginal}
     onContext={searchContextHere||canLocateSearchOriginal(searchOriginal)||
       (searchAnchor.requestId&&searchAnchor.requestId===searchContextFlight.current)?locator=>openSearchContext(searchOriginal,locator):undefined}
-    onConversation={scopedSearchOriginal?undefined:()=>{const target=searchOriginal;void openSearchResult({...target,ownerLocator:undefined}).catch(error=>setLocalError(error instanceof Error?error.message:String(error)))}} onCopy={copyWithLocalFeedback}/>}
+    onConversation={scopedSearchOriginal?undefined:()=>{
+     void openSearchResult({...searchOriginal,ownerLocator:undefined},undefined,undefined,currentSearchReturn())
+      .catch(error=>setLocalError(error instanceof Error?error.message:String(error)));
+    }} onCopy={copyWithLocalFeedback}/>}
   <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onOriginalBookReply={bookReplyVisit?originalBookReply:undefined} onReturnFocus={(event,messageOriginalWindow)=>{
    restoreTaskFileFocus(event);
    if(messageOriginalWindow){
@@ -10031,10 +10177,21 @@ export default function App(){
    {drawerStop.phase!=='checking'&&taskLayer!=='process'&&can('history.read')&&<Button variant="ghost" size="small" onClick={seeDrawerStopProcess}>到过程核对</Button>}
   </div>}{!directTeamReportDrawer&&drawerCurrentTask&&selectedTask&&taskLayer!=='homeReport'&&selectedWorkControl?.message&&<div className="pw-task-control-feedback" role="status"><p>{selectedWorkControl.message}</p>{selectedWorkControl.unknown&&can('tasks.open')&&<Button variant="ghost" size="small" onClick={recheckSelectedWork}>核对原任务状态</Button>}</div>}{!directTeamReportDrawer&&taskLayer!=='homeReport'&&drawerCurrentTask&&selectedTask&&<>{taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{taskErrors[selectedTask.id]}</p></div>}{state.taskActionErrors?.[selectedTask.id]&&state.taskActionErrors[selectedTask.id]!==taskErrors[selectedTask.id]&&<div className="pw-banner pw-banner-error pw-task-local-error" data-task-id={selectedTask.id} role="alert"><IconInfo size={17}/><p>{state.taskActionErrors[selectedTask.id]}</p></div>}</>}<div ref={taskScroll} className="pw-drawer-body pw-task-body" onScroll={rememberTaskPosition}>{!directTeamReportDrawer&&!compactChatQuestion&&taskLayer!=='homeReport'&&selectedTask&&state.originalTaskNotice?.taskId===selectedTask.id&&<section className="pw-selected-object" aria-label="原任务通知"><h3>{state.originalTaskNotice.content?.title||"原任务提醒"}</h3><p style={{whiteSpace:"pre-wrap"}}>{state.originalTaskNotice.content?.body||"通知正文请在原任务执行过程的 post_notice 记录中核对。"}</p><p className="pw-muted">{state.originalTaskNotice.expired?"这条提醒属于先前的执行状态。":""}{state.originalTaskNotice.content?.message||"通知接口回执不代表已经显示或阅读。"}</p><Button variant="ghost" size="small" onClick={()=>run("notice.task.close")}>收起提醒</Button></section>}{compactChatQuestion?questionBody:selectedTask?<>{taskReviewBody(selectedTask)}</>:taskOpening?<ThinkingLoader phase="正在读取原任务"/>:directTeamReportDrawer?<section className="pw-empty-small"><p className="pw-error" role="alert">{directTeamReportArrival(taskId)?.retiredRequest!==undefined?teamConclusionWindowEnded:changedTeamConclusion}</p></section>:<section className="pw-empty-small"><p className="pw-error" role="alert">{ownerRequestUnavailable?(ownerRequestAnotherRound?'这件工作已进入另一轮。可返回原话，或到「我的工作」查看当前进展。':'暂未核对到这条消息打开的原轮次。可返回原话。'):chatReportVisit?'暂未核对到这条汇报的原工作，可返回原对话。':originalLiveProcess?'原回复的执行窗口已变化，没有打开其他轮次。可返回原对话。':taskLayer==='homeReport'?(route==='tasks'?'暂未核对到这份原汇报，请返回「我的工作」重试。':'原工作或汇报已变化，请返回管家首页核对。'):taskId&&taskErrors[taskId]||(expectedProjectRun?'原运行暂不可读取，没有用其他轮次代替。':'原任务暂不可读取，请重新读取原历史窗口。')}</p>{taskLayer!=='homeReport'&&!ownerRequestUnavailable&&!noticeBinding&&!expectedProjectRun&&!chatReportVisit&&!originalLiveProcess&&taskId&&can('tasks.open')&&<Button variant="secondary" onClick={()=>openTask(taskId,taskLayer)}>重新读取原任务</Button>}</section>}</div>{!compactChatQuestion&&selectedTask&&taskFooter(selectedTask)}</Drawer.Content></Drawer.Portal></Drawer.Root>
   <Drawer.Root open={!!phoneReview} onOpenChange={open=>{if(!open&&!phoneReviewPending)setPhoneReview(null)}} dismissible={!phoneReviewPending} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-phone-description" inert={!phoneReview} onCloseAutoFocus={finishPhoneReviewExit}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对这次手机任务</Drawer.Title><Drawer.Description id="pw-phone-description">目标、执行位置与本次范围</Drawer.Description></div><IconButton icon={IconClose} aria-label="关闭手机任务核对" disabled={phoneReviewPending} onClick={()=>setPhoneReview(null)}/></header><div className="pw-drawer-body">{phoneDisplay&&<PhoneScopeReview key={phoneExit.generation} shown={phoneDisplay} live={phoneReview} pending={phoneReviewPending} unknown={phoneStart?.status==='unknown'} onClose={()=>{if(phoneReviewLive.current)setPhoneReview(null)}} onStart={can('phone.start')?startReviewedPhone:undefined} onCheck={can(phoneReview?.localModelFree===true?localMainReadAction:'phone.prepare')?preparePhone:undefined} onSettings={can('phone.review.settings')?openPhoneReviewSettings:undefined} onPlace={canVisitReviewedPlace?visitReviewedPhonePlace:undefined} error={phoneReviewError?.handle===phoneReview?.reviewHandle?phoneReviewError?.message:undefined}/>}{phoneStart&&phoneStart.status!=='accepted'&&<><Receipt receipt={phoneStart}/>{phoneStart.status==='unknown'&&(phoneStart.draftRequestId?blankReceiptActions(phoneStart):phoneStart.requestId&&phoneStart.conversationId&&can('phone.query')?<Button variant="secondary" disabled={phoneReviewPending} onClick={()=>{if(phoneReviewLive.current)queryOriginalPhone()}}>查询原手机请求</Button>:<Button variant="secondary" onClick={()=>{if(!phoneReviewLive.current)return;setPhoneReview(null);if(phoneStart.taskId)openTask(phoneStart.taskId);else navigate('tasks')}}>核对原任务记录</Button>)}</>}</div></Drawer.Content></Drawer.Portal></Drawer.Root>
-  <SettingsDialog isOpen={newProjectOpen||newFileOpen} title={createKind==='project'?'新项目':'新文件'} onClose={closeCreate} closeLabel="关闭创建" className="pw-create-dialog">
-   <form className="pw-create-form" onSubmit={event=>{event.preventDefault();if(!createBusy&&(createKind==='project'?projectName:newPath).trim())createObject()}}>
-    <TextField label={createKind==='project'?'项目名称':'文件路径'} isDisabled={createBusy} value={createKind==='project'?projectName:newPath} onChange={createKind==='project'?setProjectName:setNewPath} placeholder={createKind==='project'?'输入项目名称':'例如 index.html'}/>
-    <footer><Button type="button" variant="ghost" onClick={closeCreate}>取消</Button><Button type="submit" disabled={createBusy||!(createKind==='project'?projectName:newPath).trim()}>{createBusy?'正在创建…':'创建'}</Button></footer>
+  <SettingsDialog isOpen={newProjectOpen||newFileOpen} title={createKind==='project'?'新项目':'新文件'} onClose={closeCreate} closeLabel={newProjectOpen&&createBusy?'正在等待原创建回执':'关闭创建'} className="pw-create-dialog">
+   <form className="pw-create-form" aria-busy={createBusy||undefined} onSubmit={event=>{event.preventDefault();if(!createBusy&&!createProjectHeld&&(createKind==='project'?projectName:newPath).trim())createObject()}}>
+    <TextField label={createKind==='project'?'项目名称':'文件路径'} isDisabled={createBusy||createProjectHeld} value={createKind==='project'?projectName:newPath} onChange={createKind==='project'?setProjectName:setNewPath} placeholder={createKind==='project'?'输入项目名称':'例如 index.html'}/>
+    {createKind==='project'&&projectCreationFeedback&&(projectCreationFeedback.kind==='rejected'
+     ?<p className="pw-error" role="alert">{projectCreationFeedback.message}</p>
+     :<p className="pw-field-hint" role="status">{projectCreationFeedback.kind==='unknown'?'尚未确认项目是否已保存。原名称保留，请先查看项目目录，不要重复创建。':projectCreationFeedback.message}</p>)}
+    {!createProjectHeld&&duplicateCreateIntent&&<p id="pw-project-create-duplicate" className="pw-field-hint" role="status">
+     {sameTitleSaved>0&&`此前已确认保存 ${sameTitleSaved} 个同名项目。`}{sameTitleUnknown>0&&`有 ${sameTitleUnknown} 次同名创建还没核实，可能已经保存。`}
+     继续会另建一份同名项目，不会重发原请求。
+    </p>}
+    <footer><Button type="button" variant="ghost" disabled={newProjectOpen&&createBusy} onClick={closeCreate}>{createProjectHeld?'关闭':'取消'}</Button>
+    {createProjectHeld?(route==='projects'&&!state.filePath&&<Button type="button" variant="secondary" onClick={inspectCreatedProjectDirectory}>查看项目目录</Button>):
+     duplicateCreateIntent?<Button type="button" aria-describedby="pw-project-create-duplicate" disabled={createBusy}
+      onClick={()=>createObject(duplicateCreateIntent)}>{createBusy?'核对保存中…':'仍另建同名项目'}</Button>:
+     <Button type="submit" disabled={createBusy||!(createKind==='project'?projectName:newPath).trim()}>{createBusy?(newProjectOpen?'核对保存中…':'正在创建…'):'创建'}</Button>}</footer>
    </form>
   </SettingsDialog>
  <Drawer.Root open={!!voiceReview} onOpenChange={open=>{if(!open)setVoiceReview(null)}} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-overlay"/><Drawer.Content className="pw-drawer pw-scope-drawer" aria-describedby="pw-voice-description" inert={!voiceReview} onCloseAutoFocus={voiceExit.onCloseAutoFocus}><div className="pw-drawer-handle"/><header className="pw-drawer-header"><div><Drawer.Title>核对听写文字</Drawer.Title><Drawer.Description id="pw-voice-description">采用后放入原输入，暂不发送</Drawer.Description></div><Drawer.Close asChild><IconButton icon={IconClose} aria-label="关闭听写核对"/></Drawer.Close></header><div className="pw-drawer-body"><TextAreaField label="原听写文字" value={voiceText} isReadOnly={!voiceReview} onChange={editVoiceReview}/></div><footer className="pw-drawer-actions"><Button variant="secondary" disabled={voicePending||!voiceReview} onClick={()=>submitVoiceReview('voice.discard')}>丢弃</Button><PressButton label="采用到原输入" disabled={voicePending||!voiceReview||!voiceText.trim()} onClick={()=>submitVoiceReview('voice.accept')}/></footer></Drawer.Content></Drawer.Portal></Drawer.Root>

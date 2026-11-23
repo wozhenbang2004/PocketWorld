@@ -609,6 +609,8 @@ internal class PocketWebAttachments(
             .put("progress", state.progress).put("observing", state.observing).put("exportPending", flow.exportPending)
             .put("privateCopyStage", if(ownedCopy)flow.privateCopyStage() else null).put("privateCopyReceipt",copyReceipt)
             .put("libraryImport",state.libraryImport?.takeIf{ordinaryLibrary}?.toJson()).put("readableLibrarySources",readableLibrarySources)
+            .put("librarySystemShare",if(draftPresentation&&ordinaryLibrary&&state.file==null&&state.originalFile==null&&
+                !state.documentOpen&&(!drafts.isInitialized()||!drafts.value.showing()))flow.librarySystemShare?.toJson() else null)
             .put("canRequestOcr", state.pdfPageText==null&&flow.canRequestOcr()).put("canSaveRead", exposeDocument&&flow.canSaveRead())
             .put("canReadTeamDifference", state.team != null && flow.canReadTeamDifference())
             .put("teamDifference", state.teamDifference).put("hasPreviousTeamArtifact", state.teamPrevious != null)

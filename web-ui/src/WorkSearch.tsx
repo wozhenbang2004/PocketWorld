@@ -10,14 +10,34 @@ import './work-search.css';
 export type WorkSearchKind = 'all' | 'conversation' | 'work' | 'artifact' | 'project';
 export type WorkSearchItem = { kind: Exclude<WorkSearchKind, 'all'>; id: string; title: string; excerpt?: string; updatedAt?: number; status?: string; conversationId?: string; projectId?: string; taskId?: string; artifactId?: string; sha256?: string; recordId?: string; ownerLocator?: Record<string, unknown>; readRange?: { offset?: number; chars?: number } };
 export type WorkSearchConversation = { conversationId: string; composerEpoch: number };
+type SearchReturnAnchor = { scope: string; item: string; version: string; inset: number };
 export type WorkSearchMemory = { query?: string; kind?: WorkSearchKind; selectedId?: string; scrollTop?: number; pages?: number;
-  conversationPage?: { query: string; from: string; reply: SearchReply } };
+  conversationPage?: { query: string; from: string; reply: SearchReply }; returnAnchor?: SearchReturnAnchor };
 type SearchReply = { items: WorkSearchItem[]; nextCursor?: string; notices: string[] };
 const kinds = { conversation: '对话', work: '工作', artifact: '成果', project: '项目' };
 const scopeHints = { all: '查找保存的工作、对话内容、成果和项目', conversation: '查找对话标题与保存的原文', work: '查找工作目标与摘要', artifact: '查找文件名与文件信息', project: '查找已保存的项目名称' };
 const filters: { id: WorkSearchKind; label: string }[] = [{ id: 'all', label: '全部' }, { id: 'work', label: '工作' }, { id: 'conversation', label: '对话' }, { id: 'artifact', label: '成果' }, { id: 'project', label: '项目' }];
 const icons = { conversation: IconChat, work: IconLayers, artifact: IconFile, project: IconFolder };
 const itemKey = (item: WorkSearchItem) => `${item.kind}:${item.id}:${item.sha256 || ''}`;
+// Stable result IDs alone do not distinguish changed originals in the same conversation.
+function conversationHitVersion(item: WorkSearchItem) {
+  const { conversationId, recordId, ownerLocator: locator } = item;
+  if (item.kind !== 'conversation' || typeof conversationId !== 'string' || !conversationId) return;
+  if (locator === undefined && recordId === undefined && item.id === conversationId) return JSON.stringify(['title', conversationId]);
+  if (!locator || typeof recordId !== 'string' || !recordId || locator.conversationId !== conversationId || locator.recordId !== recordId) return;
+  const { kind, generation, recordVersion, fingerprint } = locator;
+  if (typeof generation !== 'string' || !generation || typeof recordVersion !== 'number' ||
+    !Number.isSafeInteger(recordVersion) || recordVersion < 1 || typeof fingerprint !== 'string') return;
+  if (!(kind === 'owner_native_original' && /^sha256:[0-9a-f]{64}$/.test(fingerprint) ||
+    kind === 'owner_imported_original' && /^[0-9a-f]{64}$/.test(fingerprint))) return;
+  return JSON.stringify([kind, generation, conversationId, recordId, recordVersion, fingerprint]);
+}
+// CommandMenu renders one option per remote result, in the supplied order.
+const resultOption = (list: HTMLElement, items: WorkSearchItem[], key: string, version: string) =>
+  list.querySelectorAll<HTMLElement>('[role="option"]')[items.findIndex(item => itemKey(item) === key && conversationHitVersion(item) === version)];
+type ListPosition = { list: HTMLElement; top: number };
+const listMoved = (list: HTMLElement, previous: ListPosition | null) =>
+  previous?.list === list && Math.abs(list.scrollTop - Math.min(previous.top, Math.max(0, list.scrollHeight - list.clientHeight))) > 1;
 const scopeLabel = (kind: WorkSearchKind) => kind === 'all' ? '工作、对话、成果与项目' : kinds[kind];
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 // Keep the matching passage visible even when a small screen clips the native excerpt.
@@ -57,7 +77,8 @@ export function matchesWorkSearchConversation(value: unknown, expected: WorkSear
 /** The retained Affect/BeUI search surface reads only the selected native stores.
  * Query, category and return position are presentation memory, never authority. */
 export function WorkSearch({ supported, identity, memory, onOpen, onClose, labelStatus, conversation, onFindConversation, onFindAll }: {
-  supported: boolean; identity: string; memory: WorkSearchMemory; onOpen: (item: WorkSearchItem, stillCurrent: () => boolean) => void | Promise<void>;
+  supported: boolean; identity: string; memory: WorkSearchMemory;
+  onOpen: (item: WorkSearchItem, stillCurrent: () => boolean, armReturn?: () => void) => void | Promise<void>;
   onClose: () => void; labelStatus: (status: string) => string;
   conversation?: WorkSearchConversation; onFindConversation?: () => void; onFindAll?: () => void;
 }) {
@@ -71,6 +92,9 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   const explicitlyTyped = useRef(false);
   const current = useRef({ query, kind, identity }); current.current = { query, kind, identity };
   const scope = JSON.stringify([query, kind, identity]);
+  const [returning, setReturning] = useState(() => memory.returnAnchor?.scope === scope ? memory.returnAnchor : undefined);
+  const interruptedReturn = useRef('');
+  const listPosition = useRef<ListPosition | null>(null);
   const openingRef = useRef(false), openingRequest = useRef(0);
   const active = useRef(present); active.current = present;
   const read = useCallback(async (cursor = '') => {
@@ -94,7 +118,9 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
           memory.conversationPage = { query: expected.query, from: nextCursor, reply: next };
           if (nextCursor) { restored.current = false; returnPosition.current = 0; memory.scrollTop = 0; memory.selectedId = undefined; }
         }
-        pages.current = append ? pages.current + 1 : 1; memory.pages = pages.current;
+        pages.current = append ? pages.current + 1 : 1;
+        // An interrupted return should not replace the previously loaded depth with its first page.
+        memory.pages = next.nextCursor && !conversation ? Math.max(memory.pages || 1, pages.current) : pages.current;
         cursors.current = append ? [...cursors.current, nextCursor] : [nextCursor];
         setReply(previous => append && previous ? { ...next,
           items: [...new Map([...previous.items, ...next.items].map(item => [itemKey(item), item])).values()],
@@ -108,9 +134,13 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
   }, [supported, memory, conversation]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; request.current++; openingRequest.current++; pending.current = false; }; }, []);
   useEffect(() => {
-    request.current++; pending.current = false; pages.current = 0; cursors.current = []; restored.current = false;
+    const anchor = memory.returnAnchor?.scope === scope ? memory.returnAnchor : undefined;
+    if (!anchor) memory.returnAnchor = undefined;
+    else interruptedReturn.current = '';
+    request.current++; pending.current = false; pages.current = 0; cursors.current = []; restored.current = interruptedReturn.current === scope;
     openingRequest.current++; openingRef.current = false; setOpening(false); setOpenFailure(null);
     returnPosition.current = memory.scrollTop || 0; setReply(null); setError('');
+    setReturning(anchor);
     if (conversation) {
       const retained = memory.conversationPage;
       if (supported && attempt === 0 && !explicitlyTyped.current && retained?.query === query) {
@@ -147,18 +177,59 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     root.current?.querySelector<HTMLInputElement>('input[role="combobox"]')?.focus({ preventScroll: true });
   };
   const visibleReply = replyScope === scope && (!conversation || supported) ? reply : null;
+  const yieldReturnToUser = useCallback(() => {
+    const anchor = memory.returnAnchor;
+    if (!anchor || anchor.scope !== scope) return;
+    memory.returnAnchor = undefined;
+    if (memory.selectedId === anchor.item) memory.selectedId = undefined;
+    interruptedReturn.current = scope;
+    restored.current = true;
+    setReturning(undefined);
+  }, [memory, scope]);
+  useEffect(() => {
+    const list = root.current?.querySelector<HTMLElement>('.afa-commandlist');
+    if (!list) return;
+    listPosition.current = { list, top: list.scrollTop };
+    const remember = () => {
+      if (active.current && !openingRef.current && listMoved(list, listPosition.current)) yieldReturnToUser();
+      listPosition.current = { list, top: list.scrollTop };
+      if (restored.current && active.current && !openingRef.current) memory.scrollTop = list.scrollTop;
+    };
+    list.addEventListener('scroll', remember, { passive: true });
+    return () => { list.removeEventListener('scroll', remember); };
+  }, [memory, yieldReturnToUser]);
   useEffect(() => {
     if (!visibleReply || loading || restored.current) return;
-    const frame = requestAnimationFrame(() => { const scroller = root.current?.querySelector('.afa-commandlist'); if (scroller) scroller.scrollTop = returnPosition.current; restored.current = true; });
+    const frame = requestAnimationFrame(() => {
+      const list = root.current?.querySelector<HTMLElement>('.afa-commandlist');
+      if (!list || !active.current || document.hidden || restored.current || returning !== memory.returnAnchor) return;
+      // An accessibility or inertial scroll may precede its DOM scroll event.
+      // A shorter result list merely clamps the previous offset and doesn't cancel return.
+      if (returning && listMoved(list, listPosition.current)) {
+        yieldReturnToUser(); memory.scrollTop = list.scrollTop; return;
+      }
+      const row = returning && resultOption(list, visibleReply.items, returning.item, returning.version);
+      if (returning && !row && memory.selectedId === returning.item) memory.selectedId = undefined;
+      restored.current = true;
+      if (returning) {
+        memory.returnAnchor = undefined;
+        setReturning(undefined);
+      }
+      if (returning && row) {
+        const inset = Math.max(1 - row.offsetHeight, Math.min(returning.inset, list.clientHeight - 1));
+        list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientTop - inset;
+      } else {
+        list.scrollTop = returnPosition.current;
+      }
+      memory.scrollTop = list.scrollTop;
+      listPosition.current = { list, top: list.scrollTop };
+    });
     return () => cancelAnimationFrame(frame);
-  }, [visibleReply, loading]);
-  useEffect(() => {
-    const scroller = root.current?.querySelector('.afa-commandlist');
-    const remember = () => { if (scroller && restored.current) memory.scrollTop = scroller.scrollTop; };
-    scroller?.addEventListener('scroll', remember, { passive: true });
-    return () => { remember(); scroller?.removeEventListener('scroll', remember); };
-  }, [memory]);
-  const resetPosition = () => { request.current++; pending.current = false; memory.selectedId = undefined; memory.scrollTop = 0; memory.pages = 1; restored.current = false; };
+  }, [visibleReply, loading, memory, returning, yieldReturnToUser]);
+  const resetPosition = () => {
+    request.current++; pending.current = false; memory.selectedId = undefined; memory.returnAnchor = undefined;
+    interruptedReturn.current = ''; setReturning(undefined); memory.scrollTop = 0; memory.pages = 1; restored.current = false;
+  };
   const changeQuery = (value: string) => {
     if (openingRef.current) return;
     if (conversation) { explicitlyTyped.current = true; memory.conversationPage = undefined; }
@@ -171,12 +242,27 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     const stillCurrent = () => active.current && alive.current && owner === openingRequest.current && openingRef.current
       && expected.query === current.current.query && expected.kind === current.current.kind && expected.identity === current.current.identity
       && epoch === bridge.getDocumentEpoch() && !document.hidden;
-    openingRef.current = true; setOpening(true); setOpenFailure(null); memory.selectedId = itemKey(item);
-    void Promise.resolve().then(() => { if (stillCurrent()) return onOpen(item, stillCurrent); }).catch(failure => {
-      if (stillCurrent()) setOpenFailure({ scope: JSON.stringify([expected.query, expected.kind, expected.identity]), itemKey: itemKey(item),
+    const key = itemKey(item), list = root.current?.querySelector<HTMLElement>('.afa-commandlist');
+    const version = !conversation && conversationHitVersion(item);
+    const row = list && visibleReply && version ? resultOption(list, visibleReply.items, key, version) : undefined;
+    const inset = row && list ? row.getBoundingClientRect().top - list.getBoundingClientRect().top - list.clientTop : undefined;
+    const anchor = version && inset !== undefined && list && row && inset < list.clientHeight && inset + row.offsetHeight > 0
+      ? { scope, item: key, version, inset } : undefined;
+    const scrollTop = list?.scrollTop ?? memory.scrollTop;
+    memory.scrollTop = scrollTop;
+    // The host calls this only when explicitly returning from the accepted match.
+    const armReturn = anchor ? () => {
+      if ((memory.query || '') !== expected.query || (memory.kind || 'all') !== expected.kind) return;
+      memory.scrollTop = scrollTop;
+      memory.selectedId = key;
+      memory.returnAnchor = anchor;
+    } : undefined;
+    openingRef.current = true; setOpening(true); setOpenFailure(null); memory.selectedId = key;
+    void Promise.resolve().then(() => { if (stillCurrent()) return onOpen(item, stillCurrent, armReturn); }).catch(failure => {
+      if (stillCurrent()) setOpenFailure({ scope, itemKey: key,
         message: failure instanceof Error ? failure.message : '尚未打开这条结果，请重试。' });
     }).finally(() => { if (owner === openingRequest.current) { openingRef.current = false; if (alive.current) setOpening(false); } });
-  }, [onOpen, memory]);
+  }, [onOpen, memory, scope, visibleReply, conversation]);
   const commands = useMemo<WorkCommand[]>(() => (visibleReply?.items || []).map(item => {
     const passage = item.kind === 'conversation' && !!item.recordId;
     const preview = passagePreview(item.excerpt || '', query);
@@ -196,14 +282,18 @@ export function WorkSearch({ supported, identity, memory, onOpen, onClose, label
     ? `已显示 ${shown} 条${query.trim() ? '匹配结果' : '记录'}`
     : scopeHints[kind];
   return <motion.div className="pw-work-search" ref={root} inert={!present} aria-hidden={!present || undefined}
+    onPointerDownCapture={yieldReturnToUser} onWheelCapture={yieldReturnToUser}
+    onKeyDownCapture={event => {
+      if (!event.nativeEvent.isComposing && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Enter', 'Tab', ' '].includes(event.key)) yieldReturnToUser();
+    }}
     initial={reduce ? false : { opacity: 0, clipPath: 'inset(0 0 calc(100% - 48px) 0 round 20px)' }}
     animate={{ opacity: 1, clipPath: 'inset(0 0 0 0 round 20px)' }}
     exit={{ opacity: 0, clipPath: 'inset(0 0 calc(100% - 48px) 0 round 20px)' }}
     transition={reduce ? motionTransition.instant : present ? motionTransition.enter : motionTransition.exit}
     onAnimationComplete={() => { if (present) focusSearch(); }}>
 
-    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} commands={commands} query={query} queryLabel={conversation ? '查找此对话的本机原文' : undefined} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
-      closeOnSelect={false} onClose={() => { openingRequest.current++; openingRef.current = false; onClose(); }} selectedId={memory.selectedId}
+    <CommandMenu autoFocusInput={!!reduce} animateReveal={false} scrollActive={conversation ? 'auto' : 'keyboard'} commands={commands} query={query} queryLabel={conversation ? '查找此对话的本机原文' : undefined} queryReadOnly={opening} onQueryChange={changeQuery} scopeKey={kind} remote loading={loading || opening}
+      closeOnSelect={false} onClose={() => { openingRequest.current++; openingRef.current = false; onClose(); }} selectedId={memory.returnAnchor?.scope === scope ? undefined : memory.selectedId}
       controls={<div className="pw-search-kind-filters" role="group" aria-label="查找对象">{conversation ?
         <Button variant="ghost" disabled={opening} onClick={onFindAll}>返回全部记录搜索</Button> : <>
         {onFindConversation && <Button variant="ghost" disabled={opening} onClick={onFindConversation}>查找此对话</Button>}

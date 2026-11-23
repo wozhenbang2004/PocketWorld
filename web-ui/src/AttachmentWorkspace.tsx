@@ -1093,9 +1093,20 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const confirmedImport=importPhase==='confirmed'&&Number.isSafeInteger(selectedCount)&&Number.isSafeInteger(registeredCount)&&
   selectedCount>0&&selectedCount<=10&&registeredCount>=0&&registeredCount<=selectedCount;
  const importedKeys=new Set(confirmedImport?rows(registration.files).map(exactFileKey).filter(Boolean):[]);
+ const systemShare=privateLibrary&&mode==='list'?obj(view.librarySystemShare):{},shareRegistration=obj(systemShare.registration);
+ const shareReceived=shareRegistration.selected,shareRegistered=shareRegistration.registered;
+ const shareFiles=rows(shareRegistration.files),shareKeys=new Set(shareFiles.map(exactFileKey).filter(Boolean));
+ const confirmedShare=systemShare.phase==='confirmed'&&Number.isSafeInteger(shareReceived)&&Number.isSafeInteger(shareRegistered)&&
+  shareReceived>=1&&shareReceived<=10&&shareRegistered>=1&&shareRegistered<=shareReceived&&shareFiles.length===shareRegistered&&
+  shareKeys.size===shareRegistered&&shareFiles.every(file=>!!exactFileTarget(file));
+ const shareMessage=confirmedShare?(shareRegistered===shareReceived
+  ?`最近一次系统分享已在本机登记 ${shareRegistered} 个文件。`:`最近一次系统分享确认登记 ${shareRegistered}/${shareReceived} 个文件，其余未确认。`)
+  :systemShare.phase==='unconfirmed'?'本次系统分享没有确认登记结果。可能已有文件保留，可重新读取，不必重复导入。'
+  :systemShare.phase==='not_started'?'本次系统分享尚未开始接收。可返回原应用重新分享。':'';
  const readableKeys=new Set(privateLibrary?rows(view.readableLibrarySources).map(exactFileKey).filter(Boolean):[]);
  const opensSource=(row:Json)=>readableKeys.has(exactFileKey(row));
  const recentSources=allSources.filter(row=>importedKeys.has(exactFileKey(row)));
+ const sharedSources=confirmedShare?allSources.filter(row=>shareKeys.has(exactFileKey(row))):[];
  const importMessage=confirmedImport?`收到 ${selectedCount} 个文件，本机已登记 ${registeredCount} 个。${registeredCount<selectedCount?`还有 ${selectedCount-registeredCount} 个未确认登记。`:''}`:
   Object.hasOwn(importMessages,importPhase)?importMessages[importPhase]:'';
  const editableCompanions=new Set(privateLibrary?savedFiles.flatMap(record=>{
@@ -1105,13 +1116,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const editableSources:Json[]=[];
  // The writer stores its editable data separately. Fold it only when the exact published document is also listed.
  const sourceFiles=allSources.filter(record=>{
-  if(importedKeys.has(exactFileKey(record)))return false;
+  if(importedKeys.has(exactFileKey(record))||confirmedShare&&shareKeys.has(exactFileKey(record)))return false;
   if(record.sourceKind!=='document_source'||!editableCompanions.has(documentSourceKey(record)))return true;
   editableSources.push(record);return false;
  });
  const fileCount=allSources.length+savedFiles.length,hasLibraryFiles=fileCount>0;
  const listedOutputs=savedFiles.filter(matchesFile),listedSources=sourceFiles.filter(matchesFile),listedRecent=recentSources.filter(matchesFile),listedEditable=editableSources.filter(matchesFile);
- const matchingCount=listedOutputs.length+listedSources.length+listedRecent.length+listedEditable.length;
+ const listedShared=sharedSources.filter(row=>!importedKeys.has(exactFileKey(row))&&matchesFile(row));
+ const matchingCount=listedOutputs.length+listedSources.length+listedRecent.length+listedEditable.length+listedShared.length;
  const runFiles=privateFiles&&resultFilesOnly?listedOutputs.flatMap(row=>{
   const target=exactFileTarget(row);
   return row.runProvenance==='current'&&row.availability==='available'&&target?[{target,name:String(row.name||'原件')}]:[];
@@ -1135,6 +1147,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   resumeRows[0].mimeType==='application/pdf'&&resumeRows[0].role==='source'&&resumeRows[0].availability==='available'&&opensSource(resumeRows[0])?
   resumeRows[0]:undefined;
  const recentSourcesList=fileList('本次已登记的文件',listedRecent,opensSource);
+ const sharedSourcesList=fileList('从系统分享登记的文件',listedShared,opensSource);
  const outputsList=fileList(resultFilesOnly?'本轮已保存文件':'已保存的文件成果',listedOutputs,privateLibrary||resultFilesOnly||
   (row=>documentRecord&&view.fromWorkResult===false&&row.recordedDocumentOriginal===true));
  const editableSourceList=listedEditable.length>0&&<Accordion className="pw-attachment-tools"><AccordionItem id="library-editable-sources" title={`文档编辑源 · ${listedEditable.length} 项`}>
@@ -1361,6 +1374,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {offerDraftShelf&&<Button variant="ghost" data-local-document-drafts disabled={busy} onClick={()=>openDraftDesk('catalog')}>本机文档草稿</Button>}
   {importMessage&&<p role="status" className="pw-field-hint">{importMessage}
    {confirmedImport&&registeredCount>recentSources.length&&!busy&&' 当前清单未列齐这批已登记文件，可重新读取，不必再导入。'}</p>}
+  {shareMessage&&<p role="status" className="pw-field-hint">{shareMessage}
+   {confirmedShare&&!busy&&shareRegistered>sharedSources.length&&' 当前清单未核对到全部已登记版本，可重新读取，不必再导入。'}</p>}
  </>}
  {filterable&&((workSourcePicker?fileCount>1:hasLibraryFiles)||filterActive)&&<div role="search" aria-label="查找当前清单中的文件" className="pw-file-search">
   <TextField label="文件名" placeholder="在当前清单查找" leadingIcon={IconSearch} value={nameFilter} onChange={name=>updateFilter(name.slice(0,180),formatFilter)}/>
@@ -1369,6 +1384,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  {filterActive&&!busy&&<div className="pw-action-row"><p className="pw-muted" role="status">{matchingCount?`已读取的文件中有 ${matchingCount} 项匹配。`:'当前已读取的文件没有匹配项。'}{catalogIncomplete&&' 文件清单尚未读全。'}</p><Button variant="ghost" onClick={()=>updateFilter('','all')}>清除筛选</Button></div>}
  {recentPdf&&fileList('继续上次阅读',[recentPdf],true,true)}
  {privateLibrary&&recentSourcesList}
+ {privateLibrary&&sharedSourcesList}
  {hasLibraryFiles?privateLibrary?<>{outputsList}{sourcesList}{editableSourceList}</>:view.taskId&&!view.choosingSource?<>{outputsList}{sourcesList}{libraryActions}</>:<>{libraryActions}{sourcesList}{outputsList}</>
  :!busy&&!catalogUnconfirmed&&!error&&!view.error?<div className="pw-file-library-empty"><IconFolder size={28} aria-hidden="true"/><h2>{view.choosingSource?'还没有可关联的文件':resultFilesOnly?'本轮暂无可读取的文件':view.taskId?'这个任务还没有文件':'资料库还没有文件'}</h2><p>{view.choosingSource?'导入文件后，就可以把它关联到当前任务。':view.taskId?resultFilesOnly?(scopedResultOnly?'没有用其他轮次或同名文件替代。':'本轮文件将在这里显示，也可回原工作核对已保存的文件。'):'任务中使用的文件和生成的成果会出现在这里。':'从手机选择文件。支持的 PDF、Word（.docx）、Excel（.xlsx）和文本可在本机查看，不用模型。'}</p>{!privateLibrary&&libraryActions}</div>:!privateLibrary&&!catalogUnconfirmed&&libraryActions}
  {privateFiles&&!view.taskId&&!catalogUnread&&(documentActions.length>0||mayContinueEmptyDocumentPage)&&<details>
