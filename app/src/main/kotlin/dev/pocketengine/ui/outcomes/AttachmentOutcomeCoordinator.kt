@@ -1351,7 +1351,8 @@ internal class AttachmentOutcomeCoordinator(
             }catch(failure:Exception){c.cancel();throw failure}
         }
     }
-    fun prepareExport(){
+    fun prepareExport() = prepareExportWithPrivateCopyPresentation(null)
+    fun prepareExportWithPrivateCopyPresentation(onPrivateCopyPrepared: ((String) -> Unit)?){
         // The Activity result launcher has one outstanding request. Never replace its original source pin.
         if(closed||!state.open||state.busy||export!=null)return
         val pin:JSONObject;val mime:String;val name:String
@@ -1363,7 +1364,8 @@ internal class AttachmentOutcomeCoordinator(
             val file=state.file?:return
             pin=locator().put("file",JSONObject(file.toString()));mime=file.optString("mimeType","application/octet-stream");name=file.optString("name","群成果")
         }
-        pin.put("exportRequestId",java.util.UUID.randomUUID().toString()).put("exportPhase","waiting")
+        val requestId=java.util.UUID.randomUUID().toString()
+        pin.put("exportRequestId",requestId).put("exportPhase","waiting")
         export=pin;exportResult=null;exportAbandoned=false;exportPending=true
         // The new picker has no receipt yet. The old success is evidence about a different attempt.
         privateCopyFile(pin)?.let{file->
@@ -1371,8 +1373,9 @@ internal class AttachmentOutcomeCoordinator(
             val prior=state.copyReceipt?.takeIf{it.source()==key&&it.result.status==OwnerCopyStatus.VERIFIED}
                 ?:state.previousCopyInFile?.takeIf{it.source()==key}
             state=state.copy(copyReceipt=null,previousCopyInFile=prior,error=null)
+            // Optional presentation observer, not part of the durable locator or the launch.
+            onPrivateCopyPrepared?.let { observer -> runCatching { observer(requestId) } }
         }
-        val requestId=pin.getString("exportRequestId")
         try{activity.createOutcomeDocument(mime,name)}
         catch(_:android.content.ActivityNotFoundException){exportLaunchResult(requestId,OutcomeExportLaunch.NOT_STARTED)}
         catch(_:RuntimeException){exportLaunchResult(requestId,OutcomeExportLaunch.UNKNOWN)}

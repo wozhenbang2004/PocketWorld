@@ -3,7 +3,7 @@ import { IconArrowLeft, IconChevronLeft, IconChevronRight, IconClose, IconExtern
 import {bridge} from './bridge';
 import {Accordion,AccordionItem,Button,IconButton,SelectField,TextField} from './forms-library';
 import {Drawer,ContextMenuTrigger,ContextMenu,ContextMenuItem,Popover,PopoverTrigger} from './shell-library';
-import {AttachmentOriginalReader,DocumentProjection,FileDetails,type DisplayedOriginalText} from './AttachmentOriginalReader';
+import {AttachmentOriginalReader,DocumentProjection,FileDetails,capturePdfCopyViewport,type DisplayedOriginalText,type PdfCopyViewportReturn} from './AttachmentOriginalReader';
 import {AttachmentDocumentEditor,AttachmentProcessingEditor,AttachmentVersionContinuation,type SavedFileNote} from './AttachmentDocumentEditor';
 import {AttachmentStandaloneDrafts} from './AttachmentStandaloneDrafts';
 import {OriginalImageComparison} from './workspace-library/OriginalImageComparison';
@@ -39,6 +39,7 @@ type Props={
 type DraftHandoff={scope:string;phase:'adding'|'added'|'opening'|'failed';error?:string};
 type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
+type WorkPdfCopyAttempt=NonNullable<ReturnType<typeof capturePdfCopyViewport>>&{nonce:string;scope:string;windowId:string};
 type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit;libraryList?:'returning'|'listed'};
 type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'|'resume'|'quoted';pendingDocument?:string;warmReentry?:true};
 const standalonePendingDocument=(view:Json)=>typeof view.pendingDocumentTask==='string'?view.pendingDocumentTask:undefined;
@@ -70,6 +71,32 @@ function workPdfTextWindow(view:Json,taskId:string|undefined){
   file.role==='result'&&file.availability==='available'&&file.sourceKind==='created_document'&&file.mimeType==='application/pdf'&&
   !!exactFileTarget(file)&&file.sourceTaskId===taskId&&typeof work.taskRunId==='string'&&!!work.taskRunId&&
   file.sourceTaskRunId===work.taskRunId&&Number.isSafeInteger(work.coordinatorEpoch)&&work.coordinatorEpoch>0;
+}
+function workPdfCopyScope(view:Json,taskId:string|undefined){
+ const work=obj(view.snapshot),file=obj(view.file),original=obj(view.originalFile),selection=exactFileTarget(file);
+ if(!taskId||view.open!==true||view.ready!==true||view.taskId!==taskId||work.taskId!==taskId||
+    view.fromWorkResult!==true||view.originalReturn!=='entry'||view.restoredWorkReturn!==false||view.resultFilesOnly!==false||
+    view.historyResultOnly!==false||view.reportResultOnly!==false||view.group!==false||view.team!==false||view.deviceOriginalOnly!==false||
+    view.documentOpen!==false||view.choosingSource!==false||!selection||file.role!=='result'||file.availability!=='available'||
+    file.sourceKind!=='created_document'||file.mimeType!=='application/pdf'||file.sourceTaskId!==taskId||
+    typeof work.taskRunId!=='string'||!work.taskRunId||file.sourceTaskRunId!==work.taskRunId||
+    !Number.isSafeInteger(work.coordinatorEpoch)||work.coordinatorEpoch<1||
+    original.kind!=='pdf'||original.sourceUnavailable!==false||original.sha256!==selection.sha256||
+    typeof original.identity!=='string'||!/^[a-f0-9]{64}$/.test(original.identity))return '';
+ return JSON.stringify([taskId,work.taskRunId,work.coordinatorEpoch,selection.fileId,selection.sha256,original.identity]);
+}
+function workPdfCopyProof(view:Json,taskId:string|undefined,held:WorkPdfCopyAttempt){
+ const returned=obj(view.workPdfCopyViewport),receipt=obj(view.privateCopyReceipt),file=obj(view.file),
+  original=obj(view.originalFile),shown=obj(original.information);
+ if(workPdfCopyScope(view,taskId)!==held.scope||!attachmentFrame(view)||view.windowId===held.windowId||
+    view.busy!==false||view.exportPending!==false||view.canShareWorkPdf!==true||original.busy!==false||
+    returned.nonce!==held.nonce||typeof returned.requestId!=='string'||!returned.requestId||
+    receipt.requestId!==returned.requestId||receipt.historical===true||!['verified','no_target'].includes(receipt.status)||
+    receipt.taskId!==taskId||receipt.fileId!==file.id||receipt.sha256!==file.sha256||
+    typeof returned.viewerId!=='string'||returned.viewerId===held.viewerId||returned.viewerId!==original.id||
+    typeof returned.rasterId!=='string'||returned.rasterId===held.rasterId||returned.rasterId!==shown.pdfRasterId||
+    returned.page!==held.page||shown.page!==held.page)return;
+ return {viewerId:returned.viewerId,rasterId:returned.rasterId,page:held.page};
 }
 function pairedPdfPage(view:Json){
  const pair=obj(view.pdfPageText),reader=obj(view.originalFile),shown=obj(reader.information),file=obj(view.file);
@@ -164,7 +191,7 @@ function listedLocalTxt(view:Json,target:ExactFile|null){
  return sources.length===1&&source.sha256===target.sha256&&source.role==='source'&&source.availability==='available'&&
   source.sourceKind==='content_uri'&&source.sourceTaskId==null&&typeof source.name==='string'&&/\.txt$/i.test(source.name);
 }
-function workTxtFrame(view:Json,taskId:string){
+function workOriginalEntryFrame(view:Json,taskId:string){
  return view.taskId===taskId&&view.fromWorkResult===true&&view.originalReturn==='entry'&&view.restoredWorkReturn===false&&
   view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.resultFilesOnly===false&&
   view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false&&
@@ -172,13 +199,49 @@ function workTxtFrame(view:Json,taskId:string){
 }
 function workTxtPositionScope(view:Json,work?:WorkTextVisit){
  const file=obj(view.file),snapshot=obj(view.snapshot),version=exactFileTarget(file);
- return work&&view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&workTxtFrame(view,work.taskId)&&
+ return work&&view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&workOriginalEntryFrame(view,work.taskId)&&
   snapshot.taskId===work.taskId&&snapshot.taskRunId===work.runId&&snapshot.coordinatorEpoch===work.epoch&&
   file.role==='result'&&file.availability==='available'&&file.runProvenance==='current'&&
   file.sourceKind==='device_received_file'&&file.sourceRunEvidence==='original_device_file_receive'&&
   file.sourceTaskId===work.taskId&&file.sourceTaskRunId===work.runId&&file.sourceCoordinatorEpoch===work.epoch&&
   typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
   JSON.stringify(['work',work.visit,version.fileId,version.sha256]):'';
+}
+// Only the already-mounted native preview of one current ordinary Work DOCX.
+function workWordCopyScope(native:ReturnType<typeof bridge.getState>,view:Json,taskId?:string){
+ const state=native.state,window=obj(native.view),catalog=obj(view.snapshot),file=obj(view.file),reader=obj(view.originalFile);
+ const {taskRunId:runId,coordinatorEpoch:epoch}=catalog,target=exactFileTarget(file);
+ const mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+ if(!taskId||document.hidden||native.host?.ready!==true||window.taskId!==taskId||window.section!==null||
+    !Number.isSafeInteger(window.resumeRevision)||!Number.isSafeInteger(state.requestedTaskRevision)||
+    state.conversationReader||state.chatAttachmentPickerOpen!==false||!workOriginalEntryFrame(view,taskId)||
+    view.open!==true||view.ready!==true||view.busy!==false||view.exportPending!==false||view.error||view.canSaveOriginal!==true||
+    typeof view.windowId!=='string'||!view.windowId||catalog.taskId!==taskId||catalog.taskStatus!=='completed'||
+    typeof runId!=='string'||!runId||!Number.isSafeInteger(epoch)||epoch<1||!target||file.mimeType!==mime||
+    reader.kind!=='office'||reader.mimeType!==mime||reader.sourceUnavailable!==false||reader.busy!==false||reader.error||
+    reader.sha256!==target.sha256||typeof reader.id!=='string'||!reader.id||
+    typeof reader.identity!=='string'||!/^[a-f0-9]{64}$/.test(reader.identity))return '';
+ const lists=rows(state.tasks).filter(task=>task.id===taskId),task=lists[0],raw=obj(task?.raw),work=obj(raw.ownerWork);
+ if(lists.length!==1||task?.status!=='completed'||raw.id!==taskId||raw.runId!==runId||raw.coordinatorEpoch!==epoch||
+    raw.status!=='completed'||raw.actorId!=='owner'||raw.spaceId!=='private'||raw.kind!=='assistant'||
+    raw.executionMode!=='capabilities'||raw.executionRole!=='owner_work'||raw.taskProjection!=='detail_window'||
+    raw.taskCoreReadLimited!==false||raw.auditBodyIncluded!==true||raw.metadataLimited===true||
+    raw.contextAvailable!==true||raw.contextWithdrawn===true||raw.sourceCurrentReadRequired===true||
+    raw.cancelRequested!==false||raw.hasUnresolvedOperations!==false||
+    typeof raw.conversationId!=='string'||!raw.conversationId.trim()||work.format!=='pocketworld.owner-work.v1'||
+    work.workTaskId!==taskId||work.conversationId!==raw.conversationId||work.relatedSourcesUnavailable===true||
+    !Array.isArray(raw.ownerWorkTeams)||raw.ownerWorkTeams.length!==0||raw.ownerWorkTeamsUnavailable===true||
+    rows(raw.relatedTasks).length>0||(work.relatedTaskCount??0)!==0||
+    ['origin','parentTaskId','teamRunId','memberId','teamAssignment','developmentContext','ownerWorkPreparation',
+     'ownerWorkTakeover','ownerResultHandling','ownerPhoneControl','ownerDeviceWork','workProfileRef','workProfileIntent','projectMemoryRead','teamWriteScope','sourceLearningJob']
+     .some(key=>raw[key]!=null))return '';
+ const inRun=(row:Json)=>row.id===target.fileId&&row.sha256===target.sha256&&row.mimeType===mime&&row.role==='result'&&
+  row.availability==='available'&&row.sourceKind==='created_document'&&row.runProvenance==='current'&&
+  row.sourceTaskId===taskId&&row.sourceTaskRunId===runId&&(row.sourceCoordinatorEpoch==null||row.sourceCoordinatorEpoch===epoch);
+ const files=rows(catalog.artifacts).filter(row=>row.id===target.fileId);
+ if(!inRun(file)||files.length!==1||!inRun(obj(files[0])))return '';
+ return JSON.stringify([bridge.getDocumentEpoch(),window.resumeRevision,state.requestedTaskRevision,view.windowId,
+  taskId,runId,epoch,raw.conversationId,target.fileId,target.sha256,reader.id,reader.identity]);
 }
 function matchesTextViewer(view:Json,range:DisplayedOriginalText){
  const original=obj(view.originalFile);
@@ -359,6 +422,64 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const [workPdfCopyFeedback,setWorkPdfCopyFeedback]=useState<{key:string;message:string;error?:true}>();
  useEffect(()=>{if(!view.open){setPreviewContinuation('');setCatalogFilter(null)}},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
+ const heldCopyViewport=useRef<WorkPdfCopyAttempt|null>(null);
+ const [, renderCopyViewport]=useState(0);
+ const finishCopyViewport=useCallback((held:WorkPdfCopyAttempt)=>{
+  if(heldCopyViewport.current!==held)return;
+  heldCopyViewport.current=null;renderCopyViewport(count=>count+1);
+ },[]);
+ useLayoutEffect(()=>{
+  // Ignore the chooser itself and synthetic input. Trusted new input in this Web document always wins.
+  const steer=(event:Event)=>{
+   const held=heldCopyViewport.current;if(event.isTrusted&&held)finishCopyViewport(held);
+  };
+  const moved=(event:Event)=>{
+   const held=heldCopyViewport.current,pane=scroller.current,target=event.target;
+   if(!held||!pane||!event.isTrusted||!(target instanceof HTMLElement))return;
+   const outer=pane===target;
+   if(!outer&&(!pane.contains(target)||!target.classList.contains('pw-original-raster')))return;
+   const current=obj(bridge.getState().state.attachmentWorkspace);
+   if(current.ready!==true)return;
+   // The ordinary new window starts at zero. Old positions may still have a queued scroll notification.
+   const old=current.windowId===held.windowId;
+   const top=old?(outer?held.position.outerTop:held.position.top):0,left=old&&!outer?held.position.left:0;
+   if(Math.abs(target.scrollTop-top)>1||Math.abs(target.scrollLeft-left)>1)finishCopyViewport(held);
+  };
+  const focus=(event:Event)=>{
+   const held=heldCopyViewport.current;
+   if(!held||event.target===heading.current||event.target===document.body)return;
+   const current=obj(bridge.getState().state.attachmentWorkspace);
+   if(current.ready===true&&current.windowId!==held.windowId)steer(event);
+  };
+  const events=['pointerdown','click','wheel','touchstart','touchmove','keydown','input','change'];
+  events.forEach(type=>document.addEventListener(type,steer,{capture:true,passive:true}));
+  document.addEventListener('scroll',moved,{capture:true,passive:true});
+  document.addEventListener('focusin',focus,true);
+  window.addEventListener('pagehide',steer);
+  return()=>{
+   events.forEach(type=>document.removeEventListener(type,steer,true));document.removeEventListener('scroll',moved,true);
+   document.removeEventListener('focusin',focus,true);
+   window.removeEventListener('pagehide',steer);heldCopyViewport.current=null;
+  };
+ },[finishCopyViewport]);
+ const copyAttempt=heldCopyViewport.current;
+ const copyProof=copyAttempt&&!onReturnToSearch?workPdfCopyProof(incoming,openTaskId,copyAttempt):undefined;
+ const copyViewport:PdfCopyViewportReturn|undefined=copyAttempt&&copyProof?{
+  ...copyProof,position:copyAttempt.position,
+  current:()=>{
+   const native=bridge.getState(),owner=obj(native.view);
+   if(heldCopyViewport.current!==copyAttempt||document.hidden||native.host?.ready!==true||owner.section!==null||
+      owner.taskId!==openTaskId)return false;
+   const live=workPdfCopyProof(obj(native.state.attachmentWorkspace),openTaskId,copyAttempt);
+   return !!live&&live.viewerId===copyProof.viewerId&&live.rasterId===copyProof.rasterId;
+  },
+  finish:()=>finishCopyViewport(copyAttempt)
+ }:undefined;
+ useLayoutEffect(()=>{
+  const held=heldCopyViewport.current;
+  if(held&&(!incoming.open||onReturnToSearch||!openTaskId||
+    incoming.ready===true&&workPdfCopyScope(incoming,openTaskId)!==held.scope))finishCopyViewport(held);
+ },[incoming,onReturnToSearch,openTaskId,finishCopyViewport]);
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
  const nativePdfPage=obj(view.pdfPageText),pairedOriginal=obj(view.originalFile),acknowledgedPage=obj(pairedOriginal.information);
@@ -436,7 +557,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   // The overlay can be empty while this same Work reads the file selected by
   // the owner. Do not carry its position to any other Work visit or original.
   if(retainedText?.work&&(workTextVisit?.visit!==retainedText.work.visit||bridge.getDocumentEpoch()!==retainedText.document||
-     view.open&&view.ready&&(!workTxtFrame(view,retainedText.work.taskId)||!!file.id&&workTextScope!==retainedText.scope)))
+     view.open&&view.ready&&(!workOriginalEntryFrame(view,retainedText.work.taskId)||!!file.id&&workTextScope!==retainedText.scope)))
    textReturn.current=null;
  },[view.open,view.ready,location,workTextVisit?.visit,workTextScope]);
  useLayoutEffect(()=>{
@@ -957,7 +1078,24 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const exportLabel=copyStage==='writing'?'正在另存…':copyStage==='picker_unconfirmed'?'保存位置尚未确认…':
   view.exportPending?'等待选择保存位置…':confirmed?'另存另一份…':'另存原件…';
  const saveFirst=!reviewManagedWorkApk&&preferSave&&!confirmed;
- const exportAction=!pythonOutputFile&&<Button variant={confirmed?'ghost':saveFirst?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending} onClick={()=>run('export')}>{exportLabel}</Button>;
+ const saveOriginalCopy=(trusted:boolean)=>{
+  heldCopyViewport.current=null;
+  const native=bridge.getState(),live=obj(native.state.attachmentWorkspace),owner=obj(native.view),pane=scroller.current;
+  const scope=workPdfCopyScope(live,openTaskId);
+  if(trusted&&mode==='original'&&!onReturnToSearch&&!busy&&!draftBusy&&!document.hidden&&pane&&scope&&
+     owner.section===null&&owner.taskId===openTaskId&&native.host?.ready===true&&live.windowId===view.windowId&&
+     live.canSaveOriginal===true&&live.canShareWorkPdf===true&&live.busy===false&&live.exportPending===false){
+   const shown=capturePdfCopyViewport(pane,live.windowId,obj(live.originalFile));
+   if(shown){
+    const nonce=Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
+    heldCopyViewport.current={...shown,nonce,scope,windowId:live.windowId};
+    run('export',{pdfCopyViewportNonce:nonce,displayedPdfRaster:shown.rasterId});return;
+   }
+  }
+  run('export');
+ };
+ const exportAction=!pythonOutputFile&&<Button variant={confirmed?'ghost':saveFirst?'primary':'secondary'} disabled={busy||draftBusy||view.exportPending}
+  onClick={event=>saveOriginalCopy(event.nativeEvent.isTrusted)}>{exportLabel}</Button>;
  const shareableWorkPdf=mode==='original'&&view.canShareWorkPdf===true&&!!openTaskId&&view.taskId===openTaskId&&!onReturnToSearch;
  const shareWorkPdf=()=>{
   const frame=attachmentFrame(view),native=bridge.getState(),live=obj(native.state.attachmentWorkspace),owner=obj(native.view);
@@ -996,7 +1134,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
     {canKeepSupplement&&<Button variant="ghost" disabled={busy||draftBusy}
       onClick={()=>selectReaderAction(revealContinuation)}>{supplementLabel}</Button>}
     <Button variant="ghost" disabled={busy||draftBusy||view.exportPending}
-      onClick={()=>selectReaderAction(()=>run('export'))}>{exportLabel}</Button>
+      onClick={event=>selectReaderAction(()=>saveOriginalCopy(event.nativeEvent.isTrusted))}>{exportLabel}</Button>
     {sharePdfAction(()=>selectReaderAction(shareWorkPdf))}
    </div>
   </Popover>
@@ -1315,6 +1453,12 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
     {pdfDraftFile&&pdfDraft.state==='READY'?'草稿只含本页文字层，不保留原排版。':'保存到私人文件库，原 PDF 保留。'}
    </p>}
  </section>;
+ const wordCopyScope=mode==='original'&&!onReturnToSearch&&!busy&&!draftBusy?workWordCopyScope(bridge.getState(),incoming,openTaskId):'';
+ const mayCopyWorkWordPassage=wordCopyScope?()=>{
+  const live=bridge.getState();
+  return alive.current&&!backFlight.current&&!draftFlight.current&&
+   workWordCopyScope(live,obj(live.state.attachmentWorkspace),openTaskId)===wordCopyScope;
+ }:undefined;
  const offerWordExcerpt=privateLibrary&&mode==='original'&&view.canReadWordExcerpt===true&&!busy&&!draftBusy&&!view.exportPending;
  const wordSave=obj(snapshot.savedWordExcerptHere),wordResult=offerWordExcerpt&&wordSave.viewerId===original.id&&
   wordSave.unit===obj(original.information).unit&&wordSave.chunk===obj(original.information).chunk?exactFileTarget(wordSave):undefined;
@@ -1419,9 +1563,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   invoke={(command,args)=>draftAct(draftDesk.visit,command,args)} registerExit={handler=>{draftDeskExit.current=handler}}
   onExit={close=>leaveDraftDesk(draftDesk.visit,close)}/>):view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}
   retainLinkedDraft={view.canRetainLinkedDocumentDraft===true&&!onReturnToSearch}/>:!view.ready?null:view.comparison?<OriginalImageComparison key={`${view.windowId}:${rows(view.comparison).map(source=>source.id).join(':')}`} sources={rows(view.comparison)} windowId={view.windowId}/>:view.processingOpen?<AttachmentProcessingEditor key={view.processingInfo?.sourceIdentity} info={obj(view.processingInfo)} review={obj(view.processingReview)} reviewId={view.processingReviewId} pendingTask={view.pendingProcessingTask} busy={busy} act={act}/>:liveMessageOriginalOnly&&!hasOriginal&&view.savedChatLinkedOnly!==true?null:Object.keys(original).length?<><AttachmentOriginalReader source={original} windowId={view.windowId} showTitle={false}
-  findBeforeLongText={!!textScope&&canSaveOriginal} onTextDisplayed={textScope?textDisplayed:undefined}
+  findBeforeLongText={!!textScope&&canSaveOriginal} onTextDisplayed={textScope?textDisplayed:undefined} mayCopyWorkWordPassage={mayCopyWorkWordPassage}
   showingPdfPageText={!!pdfPageText} onReadPdfPageText={offerPdfPageText?requestPdfPageText:undefined}
   showingWordExcerpt={!!wordExcerpt} onReadWordExcerpt={offerWordExcerpt?requestWordExcerpt:undefined} onOpenSavedWordExcerpt={shownWordResult?openSavedWordExcerpt:undefined}
+  pdfCopyViewport={copyViewport}
   recovery={{canSave:canSaveOriginal&&!pythonOutputFile,busy:busy||draftBusy,onOpenInReader:offerReader?()=>run('openInReader'):undefined}}/>{pdfPageTextView}{wordExcerptView}</>:view.documentOpen?<section><h3>{file.name||'原文件'}</h3><div className="pw-action-row">{Number(view.document?.nextUnit)>0&&<Button variant="secondary" disabled={busy} onClick={()=>run('read',{unit:view.document.nextUnit,chunk:view.document.nextChunk||0})}>读取后续范围</Button>}{view.canRequestOcr&&<Button variant="secondary" disabled={busy} onClick={()=>run('ocr')}>识别原图或 PDF 文字</Button>}{view.canSaveRead&&<Button variant="primary" disabled={busy} onClick={()=>run('saveRead')}>保存当前已读范围为文件</Button>}</div><DocumentProjection value={obj(view.document)}/><p className="pw-muted">文字摘录只包含当前已查看的部分，并保留来源位置。</p></section>:view.team?<section><h3>{snapshot.artifact?.path||'成员的固定文件成果'}</h3><div className="pw-action-row"><Button variant="primary" disabled={busy} onClick={()=>run('openOriginal')}>查看原件</Button><Button variant="secondary" disabled={busy||view.exportPending} onClick={()=>run('export')}>导出到手机</Button><Button variant="ghost" disabled={busy} onClick={()=>run('newerTeam')}>核对较新成果</Button>{view.hasPreviousTeamArtifact&&<Button variant="ghost" disabled={busy} onClick={()=>run('previousTeam')}>返回上一份成果</Button>}{view.canReadTeamDifference&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference')}>比较原项目当前文件</Button>}<Button variant="ghost" disabled={busy} onClick={()=>run('continueTask')}>回原分工</Button></div>{typeof snapshot.content==='string'&&<pre className="pw-file-text">{snapshot.content}</pre>}{typeof snapshot.preview?.content==='string'&&<pre className="pw-file-text">{snapshot.preview.content}</pre>}<FileDetails value={snapshot} title="原成果与读取范围"/>{snapshot.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('readTeam',{offset:snapshot.nextOffset})}>读取后续内容</Button>}{view.teamDifference&&<><FileDetails value={view.teamDifference} title="原文件差异"/>{view.teamDifference.nextOffset!=null&&<Button variant="ghost" disabled={busy} onClick={()=>run('teamDifference',{offset:view.teamDifference.nextOffset})}>读取后续差异</Button>}</>}</section>:<>
  {otherPendingDocument&&<p className="pw-muted">另有文档待核对，可回「成果」核对。</p>}
  {!scopedResultOnly&&(documentRecord||pendingDocumentHere)&&<div className="pw-action-row">{pendingDocumentHere&&<p>有原文档动作待核对。</p>}<Button variant="secondary" disabled={busy} onClick={()=>run('queryDocument')}>{pendingDocumentHere?'核对原文档结果':'核对这条文档记录'}</Button></div>}{!scopedResultOnly&&view.pendingProcessingTask&&<div className="pw-action-row"><p>有原加工动作待核对。</p><Button variant="secondary" disabled={busy} onClick={()=>run('queryProcessing')}>核对原加工结果</Button></div>}

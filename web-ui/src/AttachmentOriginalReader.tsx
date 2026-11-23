@@ -82,10 +82,14 @@ export function DocumentProjection({value,orderedOriginalWord=false,pdfPage,word
 
 const textEncodings=['UTF-8','UTF-16LE','UTF-16BE','GB18030','ISO-8859-1'].map(id=>({id,label:id}));
 export type DisplayedOriginalText={windowId:string;viewerId:string;identity:string;sha256:string;encoding:string;offset:number};
+type PdfCopyPosition={zoom:number;x:number;y:number;inset:number;top:number;left:number;outerTop:number};
+export type PdfCopyViewportReturn={viewerId:string;rasterId:string;page:number;position:PdfCopyPosition;
+ current:()=>boolean;finish:()=>void};
 type OriginalReaderProps={source:Json;windowId:string;showTitle?:boolean;findBeforeLongText?:boolean;onTextDisplayed?:(range:DisplayedOriginalText)=>void;
  onReadPdfPageText?:(viewerId:string,rasterId:string)=>void;showingPdfPageText?:boolean;
+ mayCopyWorkWordPassage?:()=>boolean;
  onReadWordExcerpt?:(viewerId:string,unit:number,chunk:number)=>void;onOpenSavedWordExcerpt?:()=>void;
- showingWordExcerpt?:boolean;
+ showingWordExcerpt?:boolean;pdfCopyViewport?:PdfCopyViewportReturn;
  recovery?:{canSave:boolean;busy:boolean;onOpenInReader?:()=>void}};
 type PdfRaster={pdfRasterId:string;page:number;pages:number;searchAvailable:boolean};
 type PdfFindPin={windowId:string;viewerId:string;identity:string;sha256:string;url:string};
@@ -102,14 +106,27 @@ type PdfHitBox=readonly [number,number,number,number];
 type PdfMark={raster:PdfRaster;receipt:PdfFindReceipt;hits:PdfHitBox[][];index:number};
 type TextAdvance={range:DisplayedOriginalText;epoch:number;interaction:number;focus:Element|null;pane:HTMLElement;findCurrent?:()=>boolean};
 type WordPoint={unit:number;chunk:number};
-type WordAdvance={windowId:string;viewerId:string;identity:string;sha256:string;epoch:number;before:WordPoint;next:WordPoint;
- pane:HTMLElement;start:HTMLElement;focus:Element|null;top:number;left:number;anchor:string;anchorPriority:string;request:number;confirmed:boolean};
+type WordScope={windowId:string;viewerId:string;identity:string;sha256:string;epoch:number};
+type WordTrail={scope:WordScope;points:WordPoint[]};
+type WordStep={scope:WordScope;before:WordPoint;next:WordPoint;back:boolean;trail?:WordTrail;request:number;confirmed:boolean};
+type WordAdvance={step:WordStep;pane:HTMLElement;start:HTMLElement;focus:Element|null;
+ top:number;left:number;anchor:string;anchorPriority:string};
+const WORD_TRAIL_POINTS=17; // Current range and at most 16 actually visited predecessors, never their text.
 const wordPoint=(unit:number,chunk:number):WordPoint|undefined=>Number.isSafeInteger(unit)&&unit>0&&
  Number.isSafeInteger(chunk)&&chunk>=0?{unit,chunk}:undefined;
-const wordRangeIs=(value:Json,owner:WordAdvance,point:WordPoint)=>value.format==='docx'&&['ok','partial'].includes(value.status)&&
+const earlierWordPoint=(a:WordPoint,b:WordPoint)=>a.unit<b.unit||a.unit===b.unit&&a.chunk<b.chunk;
+const sameWordScope=(a:WordScope,b:WordScope)=>a.windowId===b.windowId&&a.viewerId===b.viewerId&&
+ a.identity===b.identity&&a.sha256===b.sha256&&a.epoch===b.epoch;
+function wordScope(windowId:string,source:Json):WordScope|undefined {
+ const {id,identity,sha256}=source;
+ if(!/^[a-f0-9-]{36}$/.test(windowId)||typeof id!=='string'||!/^[a-f0-9-]{36}$/.test(id)||
+    typeof identity!=='string'||!/^[a-f0-9]{64}$/.test(identity)||typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256))return;
+ return {windowId,viewerId:id,identity,sha256,epoch:bridge.getDocumentEpoch()};
+}
+const wordRangeIs=(value:Json,owner:WordScope,point:WordPoint)=>value.format==='docx'&&['ok','partial'].includes(value.status)&&
  value.sourceIdentity===owner.identity&&value.sha256===owner.sha256&&value.unit===point.unit&&value.chunk===point.chunk&&
  Number.isSafeInteger(value.totalUnits)&&point.unit<=value.totalUnits&&Array.isArray(value.chunks)&&value.chunks.length>0;
-function currentWordReader(owner:WordAdvance):Json|undefined {
+function currentWordReader(owner:WordScope):Json|undefined {
  const drawer=obj(bridge.getState().state.attachmentWorkspace),source=obj(drawer.originalFile);
  if(!document.hidden&&bridge.getDocumentEpoch()===owner.epoch&&drawer.open===true&&drawer.ready===true&&drawer.windowId===owner.windowId&&
     source.kind==='office'&&source.sourceUnavailable===false&&source.id===owner.viewerId&&source.identity===owner.identity&&source.sha256===owner.sha256)return source;
@@ -217,6 +234,23 @@ function pdfRaster(value:Json):PdfRaster|null {
   Number.isSafeInteger(page)&&Number.isSafeInteger(pages)&&page>=1&&page<=pages&&typeof searchAvailable==='boolean'
   ?{pdfRasterId,page,pages,searchAvailable}:null;
 }
+export function capturePdfCopyViewport(pane:HTMLDivElement,windowId:string,source:Json){
+ const pin=capturePdfFindPin(windowId,source),raster=pdfRaster(obj(source.information));
+ const body=pane.querySelector<HTMLDivElement>('.pw-original-file .pw-original-raster');
+ if(document.hidden||!pane.isConnected||!body?.isConnected||body.closest('[hidden],[inert],[aria-hidden="true"]')||
+    !pin||!raster||source.busy!==false||source.error)return;
+ const image=displayedPdfImage(body,raster,pin);
+ const width=body.querySelector<HTMLElement>(`[data-pdf-raster="${raster.pdfRasterId}"]`)?.style.width;
+ const zoom=width&&width.endsWith('%')?Number(width.slice(0,-1))/100:NaN;
+ if(!image||!Number.isFinite(zoom)||zoom<1||zoom>8)return;
+ const viewport=body.getBoundingClientRect(),outer=pane.getBoundingClientRect();
+ const fraction=(value:number)=>Math.min(1,Math.max(0,value));
+ return {viewerId:pin.viewerId,rasterId:raster.pdfRasterId,page:raster.page,position:{
+  zoom,x:fraction((viewport.left+body.clientLeft+body.clientWidth/2-image.left)/image.width),
+  y:fraction((viewport.top+body.clientTop+body.clientHeight/2-image.top)/image.height),
+  inset:viewport.top-outer.top-pane.clientTop,top:body.scrollTop,left:body.scrollLeft,outerTop:pane.scrollTop
+ }};
+}
 function isDisplayedPdfRaster(value:Json,raster:PdfRaster){
  return value.pdfRasterId===raster.pdfRasterId&&value.page===raster.page&&value.pages===raster.pages&&value.searchAvailable===true;
 }
@@ -250,10 +284,11 @@ export function AttachmentOriginalReader(props:OriginalReaderProps) {
  return <OriginalReader key={JSON.stringify([props.windowId,props.source.id])} {...props}/>;
 }
 
-function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed,onReadPdfPageText,showingPdfPageText,
- onReadWordExcerpt,onOpenSavedWordExcerpt,showingWordExcerpt}:OriginalReaderProps) {
+function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongText,onTextDisplayed,mayCopyWorkWordPassage,onReadPdfPageText,showingPdfPageText,
+ onReadWordExcerpt,onOpenSavedWordExcerpt,showingWordExcerpt,pdfCopyViewport}:OriginalReaderProps) {
  const readerSurface=useRef<HTMLElement>(null),textAdvance=useRef<TextAdvance|null>(null);
  const wordAdvance=useRef<WordAdvance|null>(null);
+ const wordStep=useRef<WordStep|null>(null),[wordTrail,setWordTrail]=useState<WordTrail|null>(null);
  const [wordAdvanceRevision,setWordAdvanceRevision]=useState(0);
  const textBody=useRef<HTMLDivElement>(null),pdfBody=useRef<HTMLDivElement>(null),pdfView=useRef<HTMLDivElement>(null);
  const [toolsVisible,setToolsVisible]=useState(false),[wordReturnRevision,setWordReturnRevision]=useState(0);
@@ -279,6 +314,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    else pending.pane.style.removeProperty('overflow-anchor');
   }
  };
+ const retireWordTrail=()=>{wordStep.current=null;setWordTrail(null);dropWordAdvance()};
  const retirePdfMatch=()=>{
   if(pdfPending.current)pdfPending.current.target=undefined;
   pdfReveal.current=null;setPdfMark(null);
@@ -325,8 +361,10 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    setPdfShown(raster);clearPdfAttempt();
   } catch {failRaster(raster)}
  };
- const invoke=async(command:string,args:Json={},target?:PdfReveal,advance?:TextAdvance)=>{
+ const invoke=async(command:string,args:Json={},target?:PdfReveal,advance?:TextAdvance,steppingWord=false)=>{
   if(pending.current||pdfPending.current||live.current.retired)return null;
+  // An explicit jump/read outside the sequential controls cannot inherit a previous Word range.
+  if(type==='office'&&!steppingWord&&(command==='load'||command==='read'))retireWordTrail();
   const pdfFind=command==='find'&&type==='pdf'?pdfInput.current:undefined;
   const textFind=command==='find'&&type==='text'?textFindInput.current:undefined;
   const start=args.cursor,pdfPages=pdfShown?.pages??0,sha=source.sha256,epoch=bridge.getDocumentEpoch();
@@ -407,7 +445,31 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
  const unavailable=actual.previewAvailable===false?'这个格式没有内置预览。':officeIssue;
  const ready=(!failed||retaining)&&!unavailable&&type!=='unsupported'&&Object.keys(actual).length>0,page=Number(actual.page||1),pages=Number(actual.pages||0);
  const readerBusy=busy||source.busy||pdfAttempt!==null;
+ const returningCopy=pdfCopyViewport&&pdfShown&&ready&&!failed&&!readerBusy&&!showingPdfPageText&&type==='pdf'&&
+  source.id===pdfCopyViewport.viewerId&&pdfShown.pdfRasterId===pdfCopyViewport.rasterId&&
+  pdfShown.page===pdfCopyViewport.page?pdfCopyViewport:undefined;
+ const paintedZoom=returningCopy?.position.zoom??zoom;
+ useLayoutEffect(()=>{
+  if(!returningCopy||!pdfShown)return;
+  const body=pdfBody.current,pane=body?.closest<HTMLElement>('.pw-file-page-scroll'),pin=capturePdfFindPin(windowId,source);
+  const allowed=returningCopy.current()&&body?.isConnected&&pane?.isConnected&&!body.hidden&&
+   !body.closest('[hidden],[inert],[aria-hidden="true"]')&&Math.abs(body.scrollLeft)<=1&&Math.abs(body.scrollTop)<=1&&Math.abs(pane.scrollTop)<=1;
+  const image=allowed&&body&&pin?displayedPdfImage(body,pdfShown,pin):undefined;
+  returningCopy.finish();
+  if(!image||!body||!pane)return;
+  const position=returningCopy.position,viewport=body.getBoundingClientRect(),outer=pane.getBoundingClientRect();
+  // The fresh raster is already painted at this scale. Move only its two reader scroll surfaces.
+  setZoom(position.zoom);
+  pane.scrollTop+=viewport.top-outer.top-pane.clientTop-position.inset;
+  body.scrollLeft+=image.left-viewport.left-body.clientLeft+position.x*image.width-body.clientWidth/2;
+  body.scrollTop+=image.top-viewport.top-body.clientTop+position.y*image.height-body.clientHeight/2;
+ },[returningCopy,pdfShown,windowId,source.id]);
  const readingWord=type==='office'&&actual.format==='docx';
+ const paintedWord=readingWord&&ready&&!failed&&!showingWordExcerpt?wordScope(windowId,source):undefined;
+ const currentWordPoint=wordTrail?.points.at(-1);
+ const shownWordTrail=wordTrail&&paintedWord&&currentWordPoint&&sameWordScope(wordTrail.scope,paintedWord)&&
+  wordRangeIs(actual,paintedWord,currentWordPoint)&&wordRangeIs(details,paintedWord,currentWordPoint)?wordTrail:undefined;
+ const previousWord=shownWordTrail?.points.at(-2);
  const findDetour=useOriginalFindDetour({root:readerSurface,windowId,source,actual,
   ready:ready&&!readerBusy&&!failed,enabled:!showingPdfPageText&&!showingWordExcerpt&&!(type==='text'&&markdown),failed:!!failed,
   read:point=>invoke('read',point.kind==='pdf'?{page:point.page}:point.kind==='text'?{encoding:point.encoding,offset:point.offset}:
@@ -473,64 +535,77 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   const surface=pane.closest('.pw-file-workspace')??pane;
   const steer=(event:Event)=>{if(event.isTrusted)dropWordAdvance()};
   const moved=()=>{const advance=wordAdvance.current;if(advance?.pane===pane&&!wordViewportUnchanged(advance))dropWordAdvance()};
-  const hide=()=>{if(document.hidden)dropWordAdvance()};
+  const hide=()=>{if(document.hidden)retireWordTrail()};
   const events=['pointerdown','click','input','wheel','touchmove','keydown'];
   events.forEach(event=>surface.addEventListener(event,steer,{capture:true,passive:true}));
   pane.addEventListener('scroll',moved,{passive:true});document.addEventListener('visibilitychange',hide);
-  const off=bridge.subscribeDocumentEpoch(dropWordAdvance);
+  const off=bridge.subscribeDocumentEpoch(retireWordTrail);
   return()=>{events.forEach(event=>surface.removeEventListener(event,steer,true));pane.removeEventListener('scroll',moved);
-   document.removeEventListener('visibilitychange',hide);off();dropWordAdvance()};
+   document.removeEventListener('visibilitychange',hide);off();wordStep.current=null;dropWordAdvance()};
  },[readingWord,source.id,windowId]);
  useLayoutEffect(()=>{
-  const advance=wordAdvance.current;if(!advance?.confirmed)return;
-  const owned=currentWordReader(advance),start=advance.start,active=document.activeElement;
-  if(!owned||owned.error!=null||retired||failed||showingWordExcerpt||sequence.current!==advance.request||source.id!==advance.viewerId||
-     (active!==advance.focus&&active!==document.body)||!start.isConnected||!readerSurface.current?.contains(start)||
-     start.closest('.pw-file-page-scroll')!==advance.pane||start.closest('[hidden],[inert],[aria-hidden="true"]')||
-     !wordViewportUnchanged(advance)){dropWordAdvance();return;}
+  if(retired||showingWordExcerpt)retireWordTrail();
+ },[retired,showingWordExcerpt]);
+ useLayoutEffect(()=>{
+  const step=wordStep.current;
+  if(!step?.confirmed)return;
+  const finish=()=>{wordStep.current=null;dropWordAdvance()};
+  const owned=currentWordReader(step.scope);
+  if(!owned||owned.error!=null||retired||failed||showingWordExcerpt||sequence.current!==step.request){finish();return;}
   if(readerBusy||owned.busy!==false)return;
   const observed=obj(owned.information);
-  if(!wordRangeIs(observed,advance,advance.next)||!wordRangeIs(actual,advance,advance.next)){
-   const follows=(value:Json)=>wordRangeIs(value,advance,advance.next)||wordRangeIs(value,advance,advance.before)&&
-    value.nextUnit===advance.next.unit&&value.nextChunk===advance.next.chunk;
-   if(!follows(observed)||!follows(actual))dropWordAdvance();
+  if(!wordRangeIs(observed,step.scope,step.next)||!wordRangeIs(actual,step.scope,step.next)){
+   const follows=(value:Json)=>wordRangeIs(value,step.scope,step.next)||wordRangeIs(value,step.scope,step.before)&&
+    (step.back||value.nextUnit===step.next.unit&&value.nextChunk===step.next.chunk);
+   if(!follows(observed)||!follows(actual))finish();
    return;
   }
-  if(!ready||!start.getClientRects().length){dropWordAdvance();return;}
+  const start=readerSurface.current?.querySelector<HTMLElement>('[data-word-reading-body]');
+  if(!ready||!start?.isConnected||start.closest('[hidden],[inert],[aria-hidden="true"]')||!start.getClientRects().length){finish();return;}
+  const points=step.trail?.points??[step.before];
+  const next=step.back?points.slice(0,-1):[...points,step.next].slice(-WORD_TRAIL_POINTS);
+  setWordTrail(current=>{
+   if(step.trail&&current!==step.trail)return current;
+   return next.length>1?{scope:step.scope,points:next}:null;
+  });
+  const advance=wordAdvance.current,active=document.activeElement;
   try{
+   if(!advance||advance.step!==step||advance.start!==start||start.closest('.pw-file-page-scroll')!==advance.pane||
+      (active!==advance.focus&&active!==document.body)||!wordViewportUnchanged(advance))return;
    advance.pane.scrollTop+=start.getBoundingClientRect().top-advance.pane.getBoundingClientRect().top-advance.pane.clientTop;
    start.focus({preventScroll:true});
-  }finally{dropWordAdvance()}
+  }finally{finish()}
  },[actual,source.information,wordAdvanceRevision,ready,readerBusy,failed,retired,showingWordExcerpt]);
  const imageTools=(type==='pdf'||type==='image')&&ready;
  const isMarkdown=String(source.name||'').toLowerCase().endsWith('.md');
  const read=(args:Json)=>{findDetour.clear();void invoke('read',args)};
- const readWordNext=()=>{
-  if(pending.current||readerBusy)return;
-  const args={unit:actual.nextUnit,chunk:actual.nextChunk};
+ const readWordRange=(back:boolean)=>{
+  if(pending.current||readerBusy||wordStep.current||back&&!previousWord)return;
+  const args=back&&previousWord?previousWord:{unit:actual.nextUnit,chunk:actual.nextChunk};
+  const fallback=()=>{if(!back)read(args)};
   const before=wordPoint(actual.unit,actual.chunk),next=wordPoint(args.unit,args.chunk);
   const start=readerSurface.current?.querySelector<HTMLElement>('[data-word-reading-body]');
   const pane=start?.closest<HTMLElement>('.pw-file-page-scroll');
-  if(!before||!next||!start||!pane||!readingWord||!ready||failed||!start.isConnected||document.hidden||
-     !/^[a-f0-9-]{36}$/.test(windowId)||typeof source.id!=='string'||!/^[a-f0-9-]{36}$/.test(source.id)||
-     typeof source.identity!=='string'||!/^[a-f0-9]{64}$/.test(source.identity)||typeof source.sha256!=='string'||!/^[a-f0-9]{64}$/.test(source.sha256)||
-     next.unit>actual.totalUnits||next.unit<before.unit||next.unit===before.unit&&next.chunk<=before.chunk){read(args);return;}
+  const scope=paintedWord;
+  if(!scope||!before||!next||!start?.isConnected||!pane||document.hidden||next.unit>actual.totalUnits||
+     !(back?earlierWordPoint(next,before):earlierWordPoint(before,next))){fallback();return;}
   dropWordAdvance();
-  const advance:WordAdvance={windowId,viewerId:source.id,identity:source.identity,sha256:source.sha256,epoch:bridge.getDocumentEpoch(),
-   before,next,pane,start,focus:document.activeElement,top:pane.scrollTop,left:pane.scrollLeft,
-   anchor:pane.style.getPropertyValue('overflow-anchor'),anchorPriority:pane.style.getPropertyPriority('overflow-anchor'),request:0,confirmed:false};
-  const owner=currentWordReader(advance),observed=obj(owner?.information);
-  if(owner?.busy!==false||owner?.error!=null||!wordRangeIs(actual,advance,before)||!wordRangeIs(observed,advance,before)||
-     observed.nextUnit!==next.unit||observed.nextChunk!==next.chunk){read(args);return;}
-  // Keep the old scroller position across the exact replacement, not across any other action.
-  pane.style.setProperty('overflow-anchor','none');wordAdvance.current=advance;
-  findDetour.clear();const reading=invoke('read',args);advance.request=sequence.current;
+  const owner=currentWordReader(scope),observed=obj(owner?.information);
+  if(owner?.busy!==false||owner?.error!=null||!wordRangeIs(actual,scope,before)||!wordRangeIs(observed,scope,before)||
+     !back&&(observed.nextUnit!==next.unit||observed.nextChunk!==next.chunk)){fallback();return;}
+  // Reading and viewport placement are separate: later scrolling can veto focus, not the verified history.
+  const step:WordStep={scope,before,next,back,trail:shownWordTrail,request:0,confirmed:false};
+  const advance:WordAdvance={step,pane,start,focus:document.activeElement,top:pane.scrollTop,left:pane.scrollLeft,
+   anchor:pane.style.getPropertyValue('overflow-anchor'),anchorPriority:pane.style.getPropertyPriority('overflow-anchor')};
+  pane.style.setProperty('overflow-anchor','none');wordStep.current=step;wordAdvance.current=advance;
+  findDetour.clear();const reading=invoke('read',args,undefined,undefined,true);step.request=sequence.current;
   void reading.then(receipt=>{
-   if(wordAdvance.current!==advance)return;
-   if(sequence.current!==advance.request||!currentWordReader(advance)||!wordRangeIs(obj(receipt),advance,next)||!wordViewportUnchanged(advance)){
-    dropWordAdvance();return;
+   if(wordStep.current!==step)return;
+   if(sequence.current!==step.request||!currentWordReader(scope)||!wordRangeIs(obj(receipt),scope,next)){
+    wordStep.current=null;dropWordAdvance();return;
    }
-   advance.confirmed=true;setWordAdvanceRevision(revision=>revision+1);
+   if(wordAdvance.current===advance&&!wordViewportUnchanged(advance))dropWordAdvance();
+   step.confirmed=true;setWordAdvanceRevision(revision=>revision+1);
   });
  };
  const readPdfPage=(page:number)=>{
@@ -726,7 +801,7 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
   <div ref={pdfBody} tabIndex={-1} role="region"
   aria-label={pdfShown?`原 PDF 第 ${pdfShown.page} 页`:'原 PDF'} className="pw-original-raster" hidden={!ready}>
   {[pdfShown,pdfAttempt].map(raster=>raster&&<div key={raster.pdfRasterId} data-pdf-raster={raster.pdfRasterId} className="pw-original-pdf-page"
-   style={{display:pdfShown===raster?'block':'none',width:`${zoom*100}%`}}>
+   style={{display:pdfShown===raster?'block':'none',width:`${paintedZoom*100}%`}}>
    <img src={`${source.url}?page=${raster.page}&raster=${raster.pdfRasterId}`} loading="eager" style={{width:'100%'}}
     alt={`原 PDF 第 ${raster.page} 页`} onLoad={()=>void confirmRaster(raster)} onError={()=>failRaster(raster)}/>
    {currentPdfMark?.raster===raster&&currentPdfMark.hits[currentPdfMark.index]?.map(([left,top,right,bottom],index)=><span key={index}
@@ -760,12 +835,15 @@ function OriginalReader({source,windowId,showTitle=true,recovery,findBeforeLongT
    <div className="pw-action-row"><TextField label={actual.format==='pptx'?'幻灯片编号':actual.format==='xlsx'?'工作表编号':'段落起点'} value={position} onChange={setPosition}/><Button variant="secondary" disabled={busy||!/^\d+$/.test(position)||Number(position)<1} onClick={()=>read({unit:Number(position),chunk:0})}>定位</Button></div>}
   {actual.format==='docx'?<OriginalWordFind source={source} windowId={windowId} value={actual} busy={readerBusy}
    find={query=>invoke('find',{query})} read={(unit,chunk)=>invoke('read',{unit,chunk})}
-   onExcerpt={onReadWordExcerpt} onSavedExcerpt={onOpenSavedWordExcerpt}
+   onExcerpt={onReadWordExcerpt} onSavedExcerpt={onOpenSavedWordExcerpt} mayCopyWorkPassage={mayCopyWorkWordPassage}
    returnRevision={wordReturnRevision} beforeFindJump={(unit,chunk)=>findDetour.start({kind:'word',unit,chunk})}>
-   {(match,action)=><DocumentProjection value={actual} orderedOriginalWord wordMatch={match} wordExcerptAction={action}/>}
+   {(match,action)=><>
+    {previousWord&&<Button variant="ghost" leadingIcon={IconChevronLeft} disabled={readerBusy} onClick={()=>readWordRange(true)}>返回上一段内容</Button>}
+    <DocumentProjection value={actual} orderedOriginalWord wordMatch={match} wordExcerptAction={action}/>
+   </>}
   </OriginalWordFind>:<DocumentProjection value={actual} orderedOriginalWord/>}
   {Number(actual.nextUnit)>0&&<Button variant="secondary" disabled={actual.format==='docx'?readerBusy:busy}
-   onClick={actual.format==='docx'?readWordNext:()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
+   onClick={actual.format==='docx'?()=>readWordRange(false):()=>read({unit:actual.nextUnit,chunk:actual.nextChunk})}>读取后续内容</Button>}
  </>}
  {ready&&type==='text'&&<Accordion className="pw-original-find"><AccordionItem id="text-options" title="文本显示选项">
   <RadioOptions label="文本编码" value={actual.encoding||'UTF-8'} options={textEncodings} isDisabled={busy} onChange={encoding=>{setRecoveryEncoding(encoding);selectTextEncoding(encoding)}}/>

@@ -70,22 +70,60 @@ function confirmedRange(value:Json,found:Found,hit:OriginalWordHit){
  return text===query;
 }
 
-export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt,onSavedExcerpt,beforeFindJump,returnRevision=0,children}:{
+// Copy only the original match's single painted paragraph chunk, never search snippets or unseen continuation.
+function workPassage(value:Json,native:Json,selected:Reveal):string|undefined{
+ const {found,hit}=selected;
+ if(hit.kind!=='text'||!confirmedRange(value,found,hit)||!confirmedRange(native,found,hit))return;
+ const first=obj(rows(value.chunks)[0]),proof=obj(rows(native.chunks)[0]),at=obj(first.locator),source=obj(proof.locator);
+ return typeof first.text==='string'&&first.text.trim()&&first.text.length<=8000&&first.text===proof.text&&
+  at.part===source.part&&at.charStart===source.charStart&&at.charEnd===source.charEnd&&
+  hit.offset+found.input.query.length<=wholeNumber(at.charEnd)?first.text:undefined;
+}
+
+export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt,onSavedExcerpt,mayCopyWorkPassage,beforeFindJump,returnRevision=0,children}:{
  source:Json;windowId:string;value:Json;busy:boolean;
  find:(query:string)=>Promise<Json|null>;read:(unit:number,chunk:number)=>Promise<Json|null>;
- onExcerpt?:(viewerId:string,unit:number,chunk:number)=>void;onSavedExcerpt?:()=>void;
+ onExcerpt?:(viewerId:string,unit:number,chunk:number)=>void;onSavedExcerpt?:()=>void;mayCopyWorkPassage?:()=>boolean;
  beforeFindJump?:(unit:number,chunk:number)=>(()=>void)|undefined;returnRevision?:number;
  children:(match?:OriginalWordHit,action?:ReactNode)=>ReactNode;
 }){
  const input=useRef<Input>({query:''}),entered=useRef(false),mounted=useRef(false),interaction=useRef(0);
- const body=useRef<HTMLDivElement>(null),focusNext=useRef<Reveal|undefined>(undefined);
+ const body=useRef<HTMLDivElement>(null),focusNext=useRef<Reveal|undefined>(undefined),paintedCopy=useRef<Reveal|undefined>(undefined),copying=useRef(false);
  const [query,setQuery]=useState(''),[found,setFound]=useState<Found>(),[reveal,setReveal]=useState<Reveal>();
  const [pending,setPending]=useState(false),[error,setError]=useState('');
+ const [copyFeedback,setCopyFeedback]=useState<{selection:Reveal;message:string}>();
  const captured=originalWordScope(source,windowId),visible=captured&&isWord(value,captured);
  const current=(result:Found)=>mounted.current&&input.current===result.input&&!!liveWord(result.scope);
  const shown=found&&current(found)?found:undefined;
  const selected=reveal&&reveal.returnRevision===returnRevision&&current(reveal.found)&&
   confirmedRange(value,reveal.found,reveal.hit)?reveal:undefined;
+ const observed=selected&&mayCopyWorkPassage?.()?liveWord(selected.found.scope):undefined;
+ const copyText=selected&&observed?workPassage(value,observed,selected):undefined;
+ useLayoutEffect(()=>{
+  paintedCopy.current=copyText?selected:undefined;
+  if(!copyText)setCopyFeedback(undefined);
+ },[selected,copyText]);
+ const copyWorkPassage=async(target:HTMLButtonElement)=>{
+  if(!selected||!copyText||busy||pending||copying.current)return;
+  const currentText=()=>{
+   if(paintedCopy.current!==selected||!current(selected.found)||!mayCopyWorkPassage?.()||
+      !target.isConnected||target.closest('[hidden],[inert],[aria-hidden="true"]'))return;
+   const anchors=body.current?.querySelectorAll<HTMLElement>('[data-original-word-find="true"]');
+   const match=anchors?.length===1?anchors[0]:undefined;
+   const prose=match?.matches('.pw-file-text')?match:match?.querySelector<HTMLElement>(':scope > .pw-file-text');
+   if(!match?.contains(target)||!prose||!prose.getClientRects().length||prose.textContent!==copyText)return;
+   const native=liveWord(selected.found.scope);
+   return native&&workPassage(value,native,selected)===copyText?copyText:undefined;
+  };
+  const text=currentText();if(!text)return;
+  copying.current=true;setCopyFeedback(undefined);
+  try{
+   if(!navigator.clipboard?.writeText)throw new Error('clipboard unavailable');
+   await navigator.clipboard.writeText(text);
+   if(currentText())setCopyFeedback({selection:selected,message:'已复制当前这段 Word 文字。'});
+  }catch{if(currentText())setCopyFeedback({selection:selected,message:'没有复制成功，原件未改动。'});}
+  finally{copying.current=false;}
+ };
  useLayoutEffect(()=>{
   mounted.current=true;
   const pane=body.current?.closest<HTMLElement>('.pw-file-page-scroll'),note=()=>{interaction.current++};
@@ -154,7 +192,9 @@ export function OriginalWordFind({source,windowId,value,busy,find,read,onExcerpt
     {shown.more&&<p className="pw-muted">只显示前 40 处匹配。可用更具体的文字重新查找。</p>}
    </>)}
   </AccordionItem></Accordion>}
-  <div ref={body} data-word-reading-body tabIndex={-1}>{children(selected?.hit,selected&&(onSavedExcerpt?
+  <div ref={body} data-word-reading-body tabIndex={-1}>{children(selected?.hit,selected&&(copyText?
+   <><Button variant="ghost" disabled={busy||pending} onClick={event=>void copyWorkPassage(event.currentTarget)}>复制这段 Word 文字</Button>
+    {copyFeedback&&copyFeedback.selection===selected&&<p role="status">{copyFeedback.message}</p>}</>:onSavedExcerpt?
    <Button variant="ghost" disabled={busy||pending} onClick={()=>{if(current(selected.found))onSavedExcerpt()}}>打开已保存的摘录</Button>:
    onExcerpt&&<Button variant="ghost" disabled={busy||pending} onClick={()=>{
     const page=liveWord(selected.found.scope);
