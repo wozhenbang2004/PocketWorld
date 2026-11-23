@@ -5,7 +5,7 @@ import { currentTaskHeaders, taskHeaderPage, type TaskHeader, type TaskHeaderPag
 import { matchesWorkFilter, type WorkCollectionFilter } from './work-collection';
 
 type DirectoryWindow = TaskHeaderPage & { key: string; scopeKey: string; identity: string; pages: number; cursors: string[]; unavailableSources: Set<string>; unavailableProjectAssociations: number };
-const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase('en-US').trim();
+export const normalizeWorkDirectoryText = (value: string) => value.normalize('NFKC').toLocaleLowerCase('en-US').trim();
 const sourceUnavailable = (task: TaskHeader) => task.raw?.taskProjection === 'source_unavailable' || task.raw?.sourceCurrentReadRequired === true;
 
 /** A view over the original private task directory, with no execution or new index.
@@ -22,7 +22,7 @@ export function useWorkDirectory({ tasks, query, filter, enabled, identity, scro
   const [refresh, setRefresh] = useState(0), [visible, setVisible] = useState(() => !document.hidden);
   const current = useRef({ key, scopeKey, identity, enabled, query: query.trim(), filter, projectId });
   current.current = { key, scopeKey, identity, enabled, query: query.trim(), filter, projectId };
-  const loadedRef = useRef(loaded); loadedRef.current = loaded;
+  const loadedRef = useRef(loaded);
   const alive = useRef(true), generation = useRef(0), pending = useRef(false);
   const positions = useRef(new Map<string, number>()), depths = useRef(new Map<string, number>()), restored = useRef(false);
 
@@ -100,7 +100,7 @@ export function useWorkDirectory({ tasks, query, filter, enabled, identity, scro
   }, [key, identity, enabled, visible, refresh, read]);
 
   const observed = enabled && visible && loaded?.key === key && loaded.identity === identity ? loaded : null;
-  const search = normalized(query);
+  const search = normalizeWorkDirectoryText(query);
   const originals = new Map(observed?.tasks.map(task => [task.id, task]));
   const currentRows = tasks.map(task => {
     const original = originals.get(task.id);
@@ -131,7 +131,7 @@ export function useWorkDirectory({ tasks, query, filter, enabled, identity, scro
   const safeOriginals = observed?.tasks.map(task => unavailableProjectRows.get(task.id) || currentRows.find(live => live.id === task.id && sourceUnavailable(live)) || task) || [];
   const rows = observed ? currentTaskHeaders([...safeOriginals, ...livePrivate], livePrivate).filter(task =>
     (!observed.unavailableSources.has(task.id) || sourceUnavailable(task)) && privateTask(task) && matchesWorkFilter(task, filter) &&
-    (!search || normalized(`${task.goal}\n${task.summary || ''}`).includes(search))) : [];
+    (!search || normalizeWorkDirectoryText(`${task.goal}\n${task.summary || ''}`).includes(search))) : [];
   useLayoutEffect(() => {
     if (!enabled || !observed || busy || error || restored.current || !scrollRef.current) return;
     scrollRef.current.scrollTop = positions.current.get(scopeKey) || 0;
@@ -144,6 +144,10 @@ export function useWorkDirectory({ tasks, query, filter, enabled, identity, scro
     setRefresh(value => value + 1);
   };
   return { tasks: rows, busy, error, hasMore: Boolean(observed?.hasMore), hasReadGaps: Boolean(observed?.unavailableProjectAssociations || unavailableProjectRows.size), loaded: Boolean(observed), enabled,
+    sourceScope: key, sourceUnavailable: (taskId: string) => {
+      const latest = loadedRef.current;
+      return enabled && visible && latest?.key === key && latest.unavailableSources.has(taskId);
+    },
     loadMore: () => { void read(true); }, reset, rememberScroll };
 }
 

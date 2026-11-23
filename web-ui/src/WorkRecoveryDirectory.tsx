@@ -12,7 +12,25 @@ import './work-recovery-directory.css';
 
 type Directory = ReturnType<typeof useWorkDirectory>;
 type RunPin = { runId: string; epoch: number };
-type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number; run?: RunPin; ownerConversation?: string };
+export type CompletedDirectoryResultIntent = 'readOriginal' | 'sourceUnavailable';
+type Origin = { id: string; entry: WorkEntry; scope: WorkCollectionFilter; query: string; updatedAt: number; run?: RunPin; ownerConversation?: string; completedResult?: true };
+/** The redacted header still identifies this ordinary kind of work, even when it cannot provide a run pin. */
+const completedOrdinaryWork = (task: WorkCollectionTask) => {
+  const raw=task.raw, work=raw?.ownerWork, conversation=raw?.conversationId;
+  return task.status==='completed' && raw?.status===task.status && raw.id===task.id && raw.kind==='assistant' &&
+    raw.actorId==='owner' && raw.spaceId==='private' && raw.executionMode==='capabilities' && raw.executionRole==='owner_work' &&
+    raw.origin==null && raw.parentTaskId==null && raw.teamRunId==null && raw.teamAssignment==null && raw.memberId==null &&
+    raw.developmentContext==null && raw.ownerPhoneControl==null && raw.ownerDeviceWork==null &&
+    typeof conversation==='string' && !!conversation.trim() &&
+    work?.format==='pocketworld.owner-work.v1' && work.workTaskId===task.id && work.conversationId===conversation;
+};
+const redactedStopRun = (task: WorkCollectionTask): RunPin | undefined => {
+  const raw=task.raw;
+  return raw?.taskProjection==='source_unavailable' && raw.contextAvailable===false && raw.sourceCurrentReadRequired===true &&
+    raw.auditBodyIncluded===false && raw.executionAuthorized===false && raw.controls?.canStop===true &&
+    typeof raw.runId==='string' && !!raw.runId.trim() && Number.isSafeInteger(raw.coordinatorEpoch) && raw.coordinatorEpoch>0
+    ? {runId:raw.runId,epoch:raw.coordinatorEpoch}:undefined;
+};
 const runOf = (task: WorkCollectionTask): RunPin | undefined => {
   const row=task.raw;
   return row?.id===task.id && row.actorId==='owner' && row.spaceId==='private' &&
@@ -71,7 +89,7 @@ type Props = {
   directory: Directory; live: WorkCollectionTask[]; canContinue: (task: WorkCollectionTask) => boolean; scroll: RefObject<HTMLElement | null>; ready: boolean; canOpen: boolean; canReview: boolean;
   scope: WorkCollectionFilter; query: string; selectScope: (value: WorkCollectionFilter) => void;
   clearQuery: () => void; drillEnded: () => void; start: () => void; history: () => void;
-  open: (id: string, entry: WorkEntry, query: string, run?: RunPin, report?: ReportTarget) => void;
+  open: (id: string, entry: WorkEntry, query: string, run?: RunPin, report?: ReportTarget, resultIntent?: CompletedDirectoryResultIntent) => void;
   registerReturn: (fn: (() => boolean) | null) => void; extra?: ReactNode;
 };
 export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, ready, canOpen, canReview, scope, query, selectScope,
@@ -98,13 +116,21 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
 
   const visit = (task: WorkCollectionTask, entry: WorkEntry) => {
     if (!canOpen) return;
-    const run=runOf(task);
-    const ownerConversation=run&&Number.isSafeInteger(task.updatedAt)&&task.raw?.controls?.canContinue===true ? ordinaryOwnerConversation(task) : undefined;
-    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0, run, ownerConversation }; setReturning(null);
-    if (scroll.current) directory.rememberScroll(scroll.current.scrollTop);
-    const report = entry === 'overview' && run && bridge.getState().capabilities.commands.includes('ownerWork.report.read')
+    const raw=task.raw, completed=entry==='overview' && completedOrdinaryWork(task);
+    const unavailable=completed && (directory.sourceUnavailable(task.id) || raw?.taskProjection==='source_unavailable' ||
+      raw?.contextWithdrawn===true || raw?.sourceCurrentReadRequired===true || raw?.contextAvailable===false);
+    const stopRun=unavailable ? redactedStopRun(task) : undefined;
+    if (unavailable && !stopRun) {
+      open(task.id, entry, query, undefined, undefined, 'sourceUnavailable'); return;
+    }
+    const run=stopRun??runOf(task);
+    const ownerConversation=run&&Number.isSafeInteger(task.updatedAt)&&raw?.controls?.canContinue===true ? ordinaryOwnerConversation(task) : undefined;
+    const report = !unavailable && entry === 'overview' && run && bridge.getState().capabilities.commands.includes('ownerWork.report.read')
       ? completedDirectoryReport(task) : null;
-    open(task.id, entry, query, run, report ?? undefined);
+    const completedResult=completed && !!run && (!!stopRun || raw?.contextAvailable===true) && !report ? true : undefined;
+    origin.current = { id: task.id, entry, scope, query, updatedAt: task.updatedAt || 0, run, ownerConversation, completedResult }; setReturning(null);
+    if (scroll.current) directory.rememberScroll(scroll.current.scrollTop);
+    open(task.id, entry, query, run, report ?? undefined, completedResult ? 'readOriginal' : undefined);
   };
   const focusOriginal = (o: Origin) => {
     if (o.run && !visible.some(item => item.task.id===o.id && sameRun(item.task,o.run))) return false;
@@ -166,6 +192,11 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
     if(scroll.current)directory.rememberScroll(scroll.current.scrollTop);
     open(returning.id,'overview','',current);
   };
+  const originalResultUnavailable=returning?.completedResult===true && directory.sourceUnavailable(returning.id);
+  const returnToOriginal = (original: Origin) => {
+    origin.current = original; setReturning(null);
+    open(original.id, 'overview', '', original.run, undefined, original.completedResult ? 'readOriginal' : undefined);
+  };
   const targetScope = located ? workCollectionPresentation(located).group : null;
   const norm = (s: string) => s.normalize('NFKC').toLocaleLowerCase('en-US').trim();
   const retainQuery = located ? !norm(query) || norm(located.goal + '\n' + (located.summary || '')).includes(norm(query)) : false;
@@ -185,11 +216,10 @@ export function WorkRecoveryDirectory({ directory, live, canContinue, scroll, re
       data-work-scope={s.id} aria-pressed={scope === s.id} onClick={() => scopeKey(s.id)}>{s.title}</Button>)}</div>
     {returning && matchesScope(returning) && directory.loaded && !directory.busy && !directory.error && !visible.some(v => v.task.id === returning.id && sameRun(v.task,returning.run)) &&
       <div ref={focusReturn} className="pw-work-return-notice" tabIndex={-1} role="status">
-        <span>{laterRound ? '这项工作已进入新一轮，刚才查看的是上一轮。' : differentRun ? '这项工作的执行轮次已变化。' : '刚查看的工作不在当前列表。'}</span>{shownDirectory&&canOpen ?
+        <span>{originalResultUnavailable ? '这项工作的原结果暂不可读取。' : laterRound ? '这项工作已进入新一轮，刚才查看的是上一轮。' : differentRun ? '这项工作的执行轮次已变化。' : '刚查看的工作不在当前列表。'}</span>{originalResultUnavailable ? returning.run && <Button variant="ghost" disabled={!canOpen}
+          onClick={() => returnToOriginal(returning)}>核对本轮停止状态</Button> : shownDirectory&&canOpen ?
           <Button variant="ghost" onClick={openLaterRound}>查看当前一轮</Button> : differentRun ? null : canLocate ? <Button variant="ghost" onClick={relocate}>在「{scopes.find(s => s.id === targetScope)?.title}」中定位</Button>
-          : <Button variant="ghost" disabled={!canOpen} onClick={() => {
-          const id = returning.id; origin.current = returning; setReturning(null); open(id, 'overview', '', returning.run);
-        }}>查看原工作</Button>}<IconButton icon={IconClose} aria-label="留在当前列表" onClick={() => { setReturning(null); scroll.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true }); }}/>
+          : <Button variant="ghost" disabled={!canOpen} onClick={() => returnToOriginal(returning)}>查看原工作</Button>}<IconButton icon={IconClose} aria-label="留在当前列表" onClick={() => { setReturning(null); scroll.current?.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus({ preventScroll: true }); }}/>
       </div>}
     <section className="pw-task-results pw-follow-directory" aria-label={searched ? '工作搜索结果' : '工作列表'} data-work-split={!!brief && hasQueue || undefined}>
       {searched && !!visible.length && <section className="pw-task-collection" aria-label="匹配的工作">

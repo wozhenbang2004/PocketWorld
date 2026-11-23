@@ -3585,7 +3585,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         check(current() && chatFilePickReady(picker)) { "原输入或模型已变化，请回输入框重新打开附件选择" }
         check(state.selectedChatAttachments.size < AttachmentRequestProjection.MAX_ATTACHMENTS) { "每条消息最多选择4个附件" }
         check(chatFilePick == null && !state.attachmentImporting) { "请先完成上一次文件选择" }
-        val target = OwnerAttachmentImport.Target(null, null)
+        val target = OwnerAttachmentImport.Target.forChatDraft()
         val pick = ChatFilePick(target.requestId, picker, current)
         chatFilePickFeedback = null
         chatFilePick = pick
@@ -3666,8 +3666,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     fun importAttachments(intent: Intent, original: OwnerAttachmentImport.Target?) {
         if (closed) return
         val received = Intent(intent)
-        val draftPick = takeChatFilePick(original)
-        val ordinaryPicker = takeOrdinaryLibraryPick(original) ?: draftPick?.picker
+        val restoredDraftOrigin = original?.restoredChatDraftSelection() == true
+        val draftPick = takeChatFilePick(original).takeUnless { restoredDraftOrigin }
+        val ordinaryPicker = if (restoredDraftOrigin) null else takeOrdinaryLibraryPick(original) ?: draftPick?.picker
         attachmentOutcomes.libraryImportSelected(original)
         state = state.copy(attachmentImporting = true, notice = null, error = null)
         try { io.execute {
@@ -3691,7 +3692,10 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 main.post {
                     if (!closed) {
                         recordOrdinaryListImports(ordinaryPicker,original,receipt)
-                        state = state.copy(attachmentImporting = false, notice = receipt.notice, error = receipt.error)
+                        val notice = if (restoredDraftOrigin && receipt.imported > 0)
+                            "已保存 ${receipt.imported} 个附件到附件库。没有加入原草稿；回到原输入点「添加附件」可手动选择，不用重新导入。"
+                        else receipt.notice
+                        state = state.copy(attachmentImporting = false, notice = notice, error = receipt.error)
                         attachmentOutcomes.imported(original,receipt)
                         if (draftPick != null) stagePickedChatFiles(draftPick, receipt, files)
                     }

@@ -1578,7 +1578,7 @@ internal class PocketWebBridge(
                 return
             }
             if (action == "tasks.open") {
-                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind", "teamPlanView", "completedSearchResult"))
+                checkedPayload(args, setOf("id", "requestNavigation", "readerWindow", "readerConversationId", "readerMessageId", "searchQuery", "expectedRunId", "expectedEpoch", "expectedProjectId", "expectedCheckoutId", "expectedExternalKind", "teamPlanView", "completedSearchResult", "completedDirectoryResult"))
                 val taskId = requiredString(args, "id")
                 val fromReader = args.has("readerWindow") || args.has("readerConversationId") || args.has("readerMessageId")
                 val completedSearch = args.has("completedSearchResult")
@@ -1586,6 +1586,10 @@ internal class PocketWebBridge(
                     args.keys().asSequence().toSet() == setOf("id", "requestNavigation", "searchQuery", "expectedRunId", "expectedEpoch", "completedSearchResult")) {
                     "请返回同一份已完成工作的私人搜索结果"
                 }
+                val completedDirectory = args.has("completedDirectoryResult")
+                if (completedDirectory) require(args.opt("completedDirectoryResult") == true && args.opt("requestNavigation") == false &&
+                    args.keys().asSequence().toSet() == setOf("id", "requestNavigation", "searchQuery", "expectedRunId", "expectedEpoch", "completedDirectoryResult") &&
+                    completedDirectoryWindow(taskId)) { "请返回原私人工作列表读取同一轮工作" }
                 require(args.has("expectedRunId") == args.has("expectedEpoch")) { "原整理记录身份不完整" }
                 val expectedRunId = if (args.has("expectedRunId")) requiredString(args, "expectedRunId") else null
                 if (args.has("expectedExternalKind")) {
@@ -1630,7 +1634,8 @@ internal class PocketWebBridge(
                     val requestNavigation = if (args.has("requestNavigation")) requiredBoolean(args, "requestNavigation") else true
                     val query = if (args.has("searchQuery")) requiredString(args, "searchQuery", true) else ""
                     val lookup = JSONObject().put("taskId", taskId).put("query", query)
-                    val originalSearchWindow = if (completedSearch) captureWindow() else null
+                    val originalSearchWindow = if (completedSearch || completedDirectory) captureWindow() else null
+                    val directoryDocument = if (completedDirectory) documentId else null
                     projectScope?.addTo(lookup)
                     if (expectedRunId != null) lookup.put("expectedRunId", expectedRunId).put("expectedEpoch", expectedEpoch)
                     workSearch.dispatch("work.search.task", lookup) { result, error ->
@@ -1639,11 +1644,30 @@ internal class PocketWebBridge(
                             require(taskHistory.contains(taskId) && result.optString("taskId") == taskId) { "原工作读取身份已变化" }
                             if (originalSearchWindow != null) {
                                 val run = checkNotNull(expectedRunId); val epoch = checkNotNull(expectedEpoch)
-                                fun currentSearch() = !closed && acceptsWindow(originalSearchWindow) && controller.webPrivateOwnerVisible()
-                                check(currentSearch()) { "原搜索窗口已关闭，未打开其他记录" }
-                                val verify: (JSONObject) -> Unit = { raw -> workSearch.verifyCompletedSearchOpen(raw, taskId, run, epoch, query) }
+                                fun currentSearch() = !closed && acceptsWindow(originalSearchWindow) && controller.webPrivateOwnerVisible() &&
+                                    (!completedDirectory || documentId == directoryDocument && completedDirectoryWindow(taskId))
+                                check(currentSearch()) {
+                                    if (completedDirectory) "原工作列表窗口已关闭，未打开其他记录" else "原搜索窗口已关闭，未打开其他记录"
+                                }
+                                var directoryDetail: JSONObject? = null
+                                var directoryFingerprint: String? = null
+                                val verify: (JSONObject) -> Unit = { raw ->
+                                    if (completedDirectory && raw !== directoryDetail) {
+                                        requireCompletedDirectoryProjection(raw, taskId, run, epoch)
+                                        // The bounded store read is checked first, then the actual selected row after merging.
+                                        val fingerprint = TaskStore.capabilityFingerprint(raw)
+                                        check(directoryFingerprint == null || directoryFingerprint == fingerprint) {
+                                            "本轮工作在读取时已变化，未显示先前结果。"
+                                        }
+                                        directoryFingerprint = fingerprint
+                                        directoryDetail = raw
+                                    }
+                                    if (!completedDirectory || raw.opt("taskProjection") != "source_unavailable")
+                                        workSearch.verifyCompletedSearchOpen(raw, taskId, run, epoch, query)
+                                }
                                 openOriginalTask(id, taskId, requestNavigation, expectedRunId = run, expectedEpoch = epoch,
-                                    sourceWindowCurrent = ::currentSearch, verifySourceBeforeMerge = verify, checkReaderInput = { verify(it.raw) })
+                                    sourceWindowCurrent = ::currentSearch, publishDirectoryProjection = completedDirectory,
+                                    verifySourceBeforeMerge = verify, checkReaderInput = { verify(it.raw) })
                             } else openOriginalTask(id, taskId, requestNavigation, keepConversationReader = expectedRunId != null && !requestNavigation, expectedRunId = expectedRunId, expectedEpoch = expectedEpoch, projectScope = projectScope)
                         } catch (failure: Exception) { complete(id, null, failure.message ?: "原工作暂不可打开") }
                     }
@@ -4147,9 +4171,9 @@ internal class PocketWebBridge(
                         if (current.pending() || observed.pending() || current.revision() != observed.revision()) {
                             requestId?.let { complete(it, null, "模型设置已变化，请等待保存回执后重新读取") }; return@fold
                         }
-                        domainSnapshots["models"] = JSONObject(snapshot.toString()); domainErrors.remove("models")
-                        requestId?.let { complete(it, (PocketWebState.publicValue(snapshot) as JSONObject)
-                            .put("modelSelectionRevision", observed.revision()), null) }
+                        val stamped = JSONObject(snapshot.toString()).put("modelSelectionRevision", observed.revision())
+                        domainSnapshots["models"] = stamped; domainErrors.remove("models")
+                        requestId?.let { complete(it, PocketWebState.publicValue(stamped) as JSONObject, null) }
                     }, { error -> domainErrors["models"] = error.message ?: "本机模型目录暂不可读取"; requestId?.let { complete(it, null, domainErrors["models"]) } })
                     publishState()
                 }
@@ -4328,7 +4352,39 @@ internal class PocketWebBridge(
     private fun projectReadCurrent(scope: ProjectTaskReadScope) = controller.webPrivateOwnerVisible() && section == null &&
         controller.state.projectId == scope.projectId && controller.state.filePath == null
 
-    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, preparedPhoneReceipt: JSONObject? = null, verifySourceBeforeMerge: ((JSONObject) -> Unit)? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
+    private fun completedDirectoryWindow(task: String) = !closed && documentId != null && section == null && taskReturnSection == null &&
+        (taskViewId == null || taskViewId == task) && controller.webPrivateOwnerVisible() && controller.conversationReader == null &&
+        controller.state.filePath == null && controller.queuedInputsPage == null && !controller.state.chatAttachmentPickerOpen && !attachmentPages.hasOpenWorkspace
+
+    private fun requireCompletedDirectoryProjection(raw: JSONObject, task: String, run: String, epoch: Int) {
+        val work = raw.optJSONObject("ownerWork")
+        val conversation = raw.opt("conversationId") as? String
+        val originalEpoch = raw.opt("coordinatorEpoch")
+        require(OwnerWorkTask.isOwnerWork(raw) && raw.opt("kind") == "assistant" && raw.opt("executionMode") == "capabilities" &&
+            raw.opt("actorId") == "owner" && raw.opt("spaceId") == "private" &&
+            raw.opt("status") == "completed" && raw.opt("id") == task && raw.opt("runId") == run &&
+            epoch > 0 && (originalEpoch is Int || originalEpoch is Long) && (originalEpoch as Number).toLong() == epoch.toLong() &&
+            !conversation.isNullOrBlank() && work?.opt("conversationId") == conversation &&
+            work?.opt("workTaskId") == task && listOf("origin", "parentTaskId", "developmentContext", "ownerPhoneControl",
+                "ownerDeviceWork", "teamRunId", "teamAssignment", "memberId").all(raw::isNull)) {
+            "原工作范围已变化，未打开其他记录。"
+        }
+        if (raw.opt("taskProjection") == "source_unavailable") {
+            val controls = raw.getJSONObject("controls")
+            // A current, explicitly redacted row may still have related work to stop.
+            require(raw.opt("contextAvailable") == false && raw.opt("sourceCurrentReadRequired") == true &&
+                raw.opt("auditBodyIncluded") == false && raw.opt("executionAuthorized") == false &&
+                controls.opt("canStop") == true && controls.opt("canContinue") == false && controls.opt("canInput") == false) {
+                "这件工作的原结果暂不可读取。"
+            }
+        } else require(raw.opt("contextAvailable") == true && raw.opt("contextWithdrawn") != true && raw.opt("sourceCurrentReadRequired") != true &&
+            raw.opt("taskProjection") == "detail_window" && raw.opt("auditBodyIncluded") == true && raw.opt("taskCoreReadLimited") == false &&
+            (!raw.has("metadataLimited") || raw.opt("metadataLimited") == false)) {
+            "暂未读到这件工作的本轮详情，未显示先前结果。"
+        }
+    }
+
+    private fun openOriginalTask(requestId: String, taskId: String, requestNavigation: Boolean, returnSection: String? = section ?: taskReturnSection, keepConversationReader: Boolean = false, expectedRunId: String? = null, expectedEpoch: Int? = null, projectScope: ProjectTaskReadScope? = null, sourceWindowCurrent: (() -> Boolean)? = null, checkedDeviceFile: dev.pocketengine.ui.ReceivedFileSelection? = null, originalFileApproval: String? = null, preparedPhoneReceipt: JSONObject? = null, publishDirectoryProjection: Boolean = false, verifySourceBeforeMerge: ((JSONObject) -> Unit)? = null, checkReaderInput: ((UiTask) -> Unit)? = null) {
         if (projectScope != null) require(projectReadCurrent(projectScope)) { "原项目页面已切换，未打开其他工作" }
         require(returnSection == null || returnSection in connectionSections) { "原工作页面已变化" }
         var entered = false
@@ -4381,8 +4437,19 @@ internal class PocketWebBridge(
                 // The read-only open must preserve the otherwise lost native save acknowledgment.
                 if (preparedPhoneReceipt != null) opened.put("prepared", true).put("taskStarted", false)
                     .put("manualPhoneTarget", preparedPhoneReceipt.optJSONObject("manualPhoneTarget"))
+                if (publishDirectoryProjection) {
+                    // The view was entered only after the original read and exact merge checks.
+                    // Tie the ACK to the actual published detail, not the last painted row.
+                    check(completedDirectoryWindow(taskId) && taskViewId == taskId && controller.state.tasks.singleOrNull { it.id == taskId } === task) {
+                        "原工作窗口已变化，未显示先前结果。"
+                    }
+                    val previousRevision = revision
+                    publishState(force = true)
+                    check(revision > previousRevision) { "原工作详情尚未显示，请重新读取。" }
+                    opened.put("directoryProjectionRevision", revision)
+                }
                 complete(requestId, opened, null, retainValue = checkedDeviceFile==null && preparedPhoneReceipt==null)
-                publishState()
+                if (!publishDirectoryProjection) publishState()
             } catch (failure: Exception) {
                 if ((requestNavigation || projectScope != null || checkReaderInput != null && entered) && (sourceWindowCurrent == null || entered)) runCatching { restoreTaskWorkspace() }
                 complete(requestId, null, failure.message ?: "原任务窗口不可用")

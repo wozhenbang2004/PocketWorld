@@ -340,7 +340,9 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   current.current = { view, editor, selection, profile, review, leaveOpen, memoryUnknown, newMemoryText, newMemoryExpiry, newMemoryCalendar, createUnknown, feedback, conversation: string(state.conversationId) };
   runRef.current = run; supportedRef.current = supported;
   const scroller = useRef<HTMLDivElement>(null), heading = useRef<HTMLHeadingElement>(null);
-  const positions = useRef(new Map<string, number>()), returnMemory = useRef(''), previousView = useRef<View>('home');
+  const positions = useRef(new Map<string, number>()), returnMemory = useRef('');
+  const previousScrollLocation = useRef<{ view: View; savedId: string }>({ view: 'home', savedId: '' });
+  const memoryScrollOwner = useRef('');
   const relatedFocus = useRef<{ id: string; scrollTop: number; relatedId?: string } | null>(null);
   const memoryParent = useRef<'home' | 'memories' | 'memory-history'>('memories');
   const handledTarget = useRef(''), targetArrival = useRef({ key: '', conversation: '' });
@@ -594,12 +596,18 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   }, [avatarPicking]);
   useEffect(() => { wakeAvatar.current?.(); }, [presentationKey]);
   const go = (next: View) => {
-    positions.current.set(current.current.view, scroller.current?.scrollTop || 0);
+    const { view: from, selection: selected } = current.current;
+    positions.current.set(from, scroller.current?.scrollTop || 0);
+    if (from === 'memory') memoryScrollOwner.current = selected && !selected.candidate ? selected.id : '';
     setView(next); setError(''); setNotice('');
   };
+  const savedScrollId = view === 'memory' && selection && !selection.candidate ? selection.id : '';
   useLayoutEffect(() => {
+    const previous = previousScrollLocation.current;
+    previousScrollLocation.current = { view, savedId: savedScrollId };
     const focus = relatedFocus.current;
-    if (focus && !locked && view === 'memory' && selection?.id === focus.id) {
+    if (focus && view === 'memory' && selection?.id === focus.id) {
+      if (locked) return;
       relatedFocus.current = null;
       const node = scroller.current;
       if (node) node.scrollTop = focus.scrollTop;
@@ -608,13 +616,13 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       (trigger || heading.current)?.focus({ preventScroll: true });
       return;
     }
-    if (previousView.current === view) return;
-    previousView.current = view;
+    if (previous.view === view && (!savedScrollId || previous.savedId === savedScrollId)) return;
     const node = scroller.current;
-    if (node) node.scrollTop = positions.current.get(view) || 0;
+    // A saved detail never inherits the scroll offset of a different record or suggestion.
+    if (node) node.scrollTop = savedScrollId && memoryScrollOwner.current !== savedScrollId ? 0 : positions.current.get(view) || 0;
     const returnTarget = (view === 'memories' || view === 'memory-history') && returnMemory.current ? Array.from(node?.querySelectorAll<HTMLElement>('[data-personal-memory]') || []).find(item => item.dataset.personalMemory === returnMemory.current) : null;
     (returnTarget || heading.current)?.focus({ preventScroll: true });
-  }, [view, selection?.id, locked]);
+  }, [view, savedScrollId, selection?.id, locked]);
 
   const beforeLeave: LeaveGuard = next => {
     if (busy.current) { setNotice('正在保存或读取，请稍候。'); return true; }

@@ -14,16 +14,24 @@ public final class OwnerAttachmentImport {
 
     /** A non-null target may explicitly mean the library. Null means the original context is unavailable. */
     public static final class Target {
+        private enum DraftOrigin { NONE, LIVE, RESTORED }
         public final String requestId, taskId, projectId;
-        public Target(String taskId,String projectId){this(UUID.randomUUID().toString(),taskId,projectId);}
-        private Target(String requestId,String taskId,String projectId){
+        private final DraftOrigin draftOrigin;
+        public Target(String taskId,String projectId){this(UUID.randomUUID().toString(),taskId,projectId,DraftOrigin.NONE);}
+        public static Target forChatDraft(){return new Target(UUID.randomUUID().toString(),null,null,DraftOrigin.LIVE);}
+        /** Result copy only: this never restores the original draft or document authority. */
+        public boolean restoredChatDraftSelection(){return draftOrigin==DraftOrigin.RESTORED;}
+        private Target(String requestId,String taskId,String projectId,DraftOrigin draftOrigin){
             if(requestId==null||!requestId.matches("[a-f0-9-]{36}"))throw new IllegalArgumentException("原文件选择编号无效");
             this.requestId=requestId;this.taskId=reference(taskId);this.projectId=reference(projectId);
+            if(draftOrigin!=DraftOrigin.NONE&&(this.taskId!=null||this.projectId!=null))throw new IllegalArgumentException("原草稿文件选择不能关联任务或项目");
+            this.draftOrigin=draftOrigin;
         }
         private static String reference(String value){if(value==null||value.isBlank())return null;if(value.length()>100)throw new IllegalArgumentException("原文件选择引用过长");return value;}
         public Bundle save(){
             Bundle saved=new Bundle();saved.putInt("version",1);saved.putString("requestId",requestId);
             saved.putBoolean("hasTask",taskId!=null);saved.putBoolean("hasProject",projectId!=null);
+            if(draftOrigin!=DraftOrigin.NONE)saved.putBoolean("chatDraftSelection",true);
             saved.putString("taskId",taskId);saved.putString("projectId",projectId);return saved;
         }
         public static Target restore(Bundle saved){
@@ -32,7 +40,8 @@ public final class OwnerAttachmentImport {
                 if(saved.getInt("version")!=1||!saved.containsKey("hasTask")||!saved.containsKey("hasProject"))return null;
                 String task=saved.getString("taskId"),project=saved.getString("projectId");
                 if(saved.getBoolean("hasTask")!=(task!=null&&!task.isBlank())||saved.getBoolean("hasProject")!=(project!=null&&!project.isBlank()))return null;
-                return new Target(saved.getString("requestId"),task,project);
+                DraftOrigin origin=saved.getBoolean("chatDraftSelection")?DraftOrigin.RESTORED:DraftOrigin.NONE;
+                return new Target(saved.getString("requestId"),task,project,origin);
             }catch(RuntimeException invalid){return null;}
         }
     }
