@@ -59,10 +59,10 @@ internal class PocketWebAttachments(
     private data class ReplyDocumentVisit(val window:Window,val file:UiChatAttachment,val target:OriginalReplyDocument.Target)
     data class ReplyAttachment(val file:UiChatAttachment,val target:OriginalReplyDocument.Target,
         val owns:()->Boolean,val ready:()->Boolean,val close:()->Boolean)
-    private data class WorkPdfShare(val work: AttachmentWorkReturn, val page: AttachmentPdfPageText)
+    private data class WorkPdfPin(val work: AttachmentWorkReturn, val page: AttachmentPdfPageText)
     private data class Frame(val location: String, val files: List<JSONObject>,
         val libraryPdfResume: PocketWebOriginalFiles.LibraryPdfResume?, val displayedPdfPage: AttachmentPdfPageText?,
-        val displayedWord:AttachmentWordExcerpt?, var workPdfShare: WorkPdfShare?)
+        val displayedWord:AttachmentWordExcerpt?, var workPdfShare: WorkPdfPin?, val workPdfText: WorkPdfPin?)
     private data class Review(val id: String, val location: String, val draft: JSONObject, val expires: Long)
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
@@ -379,13 +379,16 @@ internal class PocketWebAttachments(
         scopedResultCurrent == null && controller.webPrivateOwnerVisible() && state.fromWorkResult && !state.restoredWorkReturn &&
             state.resultRun == null && !state.deviceOriginalOnly && state.group == null && state.team == null && viewer.matchesOriginal(state.file) &&
             ProjectApkInstallActivity.canReviewManagedWorkFile(state.originalFile, state.taskId, state.file)
-    /** Reader shortcut only after the native reader acknowledged the actual PDF page. */
-    private fun workPdfShare(state: AttachmentOutcomeState): WorkPdfShare? {
-        if (!state.open || state.busy || flow.exportPending || !state.fromWorkResult || state.restoredWorkReturn ||
+    /** The native acknowledged page in the exact original Work. Pairing does not reopen a page. */
+    private fun workPdfPin(state: AttachmentOutcomeState, pairedText: Boolean = false): WorkPdfPin? {
+        if (!state.open || flow.exportPending || !state.fromWorkResult || state.restoredWorkReturn ||
             state.originalReturn != AttachmentOriginalReturn.ENTRY || state.resultRun != null || scopedResultCurrent != null ||
-            state.deviceOriginalOnly || state.group != null || state.team != null || state.choosingSource || state.documentOpen ||
+            state.deviceOriginalOnly || state.group != null || state.team != null || state.choosingSource ||
             state.documentDraft != null || state.processingSource != null || state.comparison != null ||
             !controller.webPrivateOwnerVisible() || controller.conversationReader != null || controller.state.chatAttachmentPickerOpen) return null
+        if (pairedText) {
+            if (!state.documentOpen || state.pdfPageText == null) return null
+        } else if (state.busy || state.documentOpen || state.pdfPageText != null) return null
         val file = state.file ?: return null
         val source = state.originalFile ?: return null
         val work = state.workReturn ?: return null
@@ -401,7 +404,19 @@ internal class PocketWebAttachments(
         val exact = if (snapshot.opt("taskStatus") == "completed") work
             else work.forRecordedDocument(snapshot, file)?.takeIf { it.matchesVerifiedDocument(file, source) } ?: return null
         if (!exact.matchesTask(task)) return null
-        return viewer.displayedPdfPage(file)?.let { WorkPdfShare(exact, it) }
+        return viewer.displayedPdfPage(file)?.takeIf { !pairedText || it==state.pdfPageText }?.let { WorkPdfPin(exact, it) }
+    }
+    private fun workPdfShare(state: AttachmentOutcomeState)=workPdfPin(state)
+    /** Text reuse is narrower than sharing: an ordinary completed private Work only. */
+    private fun workPdfText(state: AttachmentOutcomeState,
+        held: WorkPdfPin? = workPdfPin(state, pairedText = state.pdfPageText != null)): WorkPdfPin? {
+        val pin=held?:return null
+        if (state.snapshot?.opt("taskStatus")!="completed" || state.snapshot?.optJSONObject("documentCapabilities")?.opt("pdfText")!=true)
+            return null
+        val task=controller.state.tasks.singleOrNull { it.id==pin.work.run.taskId }?.raw?:return null
+        return pin.takeIf { task.opt("status")=="completed" && task.opt("kind")=="assistant" && task.opt("executionRole")=="owner_work" &&
+            task.opt("contextAvailable")==true && task.optString("conversationId").isNotBlank() &&
+            listOf("origin","developmentContext","ownerPhoneControl","ownerDeviceWork","teamAssignment").all(task::isNull) }
     }
     fun openOriginalFromDevice(file:dev.pocketengine.ui.ReceivedFileSelection,current:()->Boolean){
         check(controller.webUiCanInteract() && controller.webPrivateOwnerVisible() && current())
@@ -461,11 +476,11 @@ internal class PocketWebAttachments(
         quotedDraft = QuotedDraft(active, library, pin)
         return JSONObject().put("opened", true).put("library", library.id).put("windowId", active.id)
     }
-    fun snapshot(draftPresentation: Boolean = false): JSONObject {
+    fun snapshot(draftPresentation: Boolean = false, workPagePresentation: Boolean = false): JSONObject {
         if(flow.state.deviceOriginalOnly && deviceTaskCurrent?.invoke()!=true ||
             flow.state.liveMessageOriginalOnly&&scopedResultCurrent==null || scopedResultCurrent?.invoke()==false)clear()
         flow.state.pdfPageText?.let { page ->
-            if(!libraryPdfSurface(flow.state,allowPageText=true) ||
+            if(!(libraryPdfSurface(flow.state,allowPageText=true)||workPdfText(flow.state)?.page==page) ||
                 viewer.displayedPdfPage(flow.state.file)!=page)flow.backFromDocument()
         }
         flow.state.wordExcerpt?.let { excerpt ->
@@ -532,7 +547,11 @@ internal class PocketWebAttachments(
         val frameId = UUID.randomUUID().toString()
         val word=if(draftPresentation&&!state.busy)displayedWordExcerpt(state) else null
         val sharePdf = workPdfShare(state)
-        frames[frameId] = Frame(location(state), files, libraryPdfResume, displayedPdfPage,word,sharePdf)
+        // A Work text frame belongs to full owner state, never to an action receipt.
+        val workPagePaired = state.pdfPageText != null && state.taskId != null
+        val workText = if (workPagePresentation && state.pdfPageText == null) workPdfText(state, sharePdf) else null
+        val pairedWorkText = workPagePresentation && workPagePaired && workPdfText(state)?.page == state.pdfPageText
+        frames[frameId] = Frame(location(state), files, libraryPdfResume, displayedPdfPage,word,sharePdf,workText)
         while (frames.size > 16) frames.remove(frames.keys.first())
         if (drafts.isInitialized()) drafts.value.textSource()?.let { attempted ->
             if (!retainsDraftText(attempted)) drafts.value.retireText()
@@ -563,9 +582,9 @@ internal class PocketWebAttachments(
         val ordinaryLibrary=ordinaryLibrary()
         val readableLibrarySources=if(ordinaryLibrary&&state.file==null)JSONArray(files.filter{PocketWebOriginalFiles.libraryDocument(it)}
             .map{JSONObject().put("id",it.getString("id")).put("sha256",it.getString("sha256"))}) else null
-        // Command ACKs also take a snapshot, without full ordinary-owner presentation.
-        // They neither retire a valid paired viewer nor carry its text/receipt.
-        val shownPdfPageText=state.pdfPageText?.takeIf{draftPresentation}
+        // Action snapshots use the default false gates. A still valid Work page
+        // stays mounted, but no page or body goes into this ACK or its replay.
+        val shownPdfPageText=state.pdfPageText?.takeIf{if(workPagePaired)pairedWorkText else draftPresentation}
         val shownWord=state.wordExcerpt?.takeIf{draftPresentation}
         val exposeDocument=(state.pdfPageText==null||shownPdfPageText!=null)&&(state.wordExcerpt==null||shownWord!=null)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
@@ -615,7 +634,8 @@ internal class PocketWebAttachments(
             .put("canReadTeamDifference", state.team != null && flow.canReadTeamDifference())
             .put("teamDifference", state.teamDifference).put("hasPreviousTeamArtifact", state.teamPrevious != null)
             .put("originalFile", viewer.snapshot()).put("originalReturn", state.originalReturn.value).put("comparison", viewer.comparisonSnapshot())
-            .put("canReadPdfPageText", displayedPdfPage!=null)
+            .put("canReadPdfPageText", displayedPdfPage!=null||workText!=null)
+            .put("workPdfTextPage", workText!=null||pairedWorkText)
             .put("canReadWordExcerpt", word!=null)
             .put("wordExcerpt",shownWord?.view())
             .put("wordExcerptSaveAttempted",shownWord!=null&&state.wordSaveAttempted)
@@ -700,7 +720,8 @@ internal class PocketWebAttachments(
             retiredSavedDraft = null // A different explicit use of the Library retires the old editor locator.
             val pairedPdf = flow.state.pdfPageText
             val pairedWord=flow.state.wordExcerpt
-            if(pairedPdf!=null||pairedWord!=null) check(command in setOf("back","close","cancel","saveRead")||
+            if(pairedPdf!=null&&flow.state.taskId!=null)check(command in setOf("back","close","cancel")) { "请先返回原 PDF" }
+            else if(pairedPdf!=null||pairedWord!=null) check(command in setOf("back","close","cancel","saveRead")||
                 pairedPdf!=null&&command=="openOriginal") { "请先返回原件阅读" }
             if (OriginalNodeCompilerDelivery.resultRow(flow.state.file)) {
                 check(command in setOf("close", "back", "cancel", "refresh", "selectFile", "openOriginal", "originalDetails", "export", REPORT_WORK_NAVIGATION)) {
@@ -825,17 +846,22 @@ internal class PocketWebAttachments(
                         flow.state.file===file&&displayedWordExcerpt(flow.state,paired=true)==shown
                     flow.readDisplayedWordExcerpt(shown,::stillOnWord)
                 }else if(args.has("displayedPdfRaster")||args.has("pdfViewerId")){
-                    val shown=frame.displayedPdfPage
+                    val shownWork=frame.workPdfText
+                    val shown=shownWork?.page?:frame.displayedPdfPage
                     val original=flow.state.originalFile
                     val file=flow.state.file
                     check(args.length()==5 && shown!=null && original!=null && file!=null &&
                         shown.viewerId==args.opt("pdfViewerId") && shown.rasterId==args.opt("displayedPdfRaster")) {
                         "当前未核对到这份 PDF 的原页，未读取其他页面"
                     }
-                    fun stillOnPage() = window===current && acceptsWindow(current.ticket) &&
-                        libraryPdfSurface(flow.state,allowPageText=true) && flow.state.originalFile===original &&
-                        flow.state.file===file && viewer.displayedPdfPage(file)==shown
-                    flow.readDisplayedPdfPage(shown,::stillOnPage)
+                    fun stillOnPage():Boolean {
+                        val live=flow.state
+                        return window===current && acceptsWindow(current.ticket) && live.originalFile===original &&
+                            live.file===file && viewer.displayedPdfPage(file)==shown &&
+                            (if(shownWork==null)libraryPdfSurface(live,allowPageText=true) else workPdfText(live)==shownWork)
+                    }
+                    if(shownWork==null)flow.readDisplayedPdfPage(shown,::stillOnPage)
+                    else flow.readDisplayedWorkPdfPage(shownWork.work,shown,::stillOnPage)
                 }else flow.read(DocumentContent.Request(args.optInt("unit", 1), args.optInt("chunk", 0), 4, 12000, 48, "text"))
                 "ocr" -> flow.readImageText()
                 "saveRead" -> if(pairedWord!=null){

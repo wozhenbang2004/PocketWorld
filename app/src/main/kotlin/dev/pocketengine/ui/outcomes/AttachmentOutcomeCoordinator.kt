@@ -884,12 +884,33 @@ internal class AttachmentOutcomeCoordinator(
         val file=checkNotNull(state.file)
         check(privateLibrary() && !state.busy && !exportPending && !state.documentOpen && state.originalFile!=null &&
             file.opt("role")=="source" && file.opt("mimeType")=="application/pdf" && current()){"请先显示这份 PDF 的原页"}
+        readDisplayedPdfText(file,page,null,current)
+    }
+    /** The already opened Work supplies its exact result version. This page does not offer saving. */
+    fun readDisplayedWorkPdfPage(work:AttachmentWorkReturn,page:AttachmentPdfPageText,current:()->Boolean){
+        val file=checkNotNull(state.file);val snapshot=checkNotNull(state.snapshot)
+        check(state.open && state.taskId==work.run.taskId && state.workReturn==work && state.fromWorkResult &&
+            state.originalReturn==AttachmentOriginalReturn.ENTRY && !state.restoredWorkReturn &&
+            state.resultRun==null && state.group==null && state.team==null && !state.deviceOriginalOnly &&
+            !state.busy && !exportPending && !state.documentOpen && state.originalFile!=null &&
+            snapshot.opt("taskStatus")=="completed" && work.matchesResult(snapshot,file) &&
+            file.opt("sourceKind")=="created_document" && file.opt("mimeType")=="application/pdf" && current()){
+            "请先在这件已完成的原工作中显示这份 PDF 的原页"
+        }
+        readDisplayedPdfText(file,page,work.run.taskId,current)
+    }
+    private fun readDisplayedPdfText(file:JSONObject,page:AttachmentPdfPageText,task:String?,current:()->Boolean){
         state=state.copy(pdfPageText=page,document=null)
         val range=DocumentContent.Request(page.page,0,1,12000,48,"text")
-        work(document=true){control,_->
+        work(document=true,completionFailure=if(task!=null)"未核对到本页的本机文字层，原 PDF 未改动。" else null){control,_->
             control.setAuthorityCheck { check(current()) { "原 PDF 阅读位置已变化，未显示其他页面的文字" } }
             control.check()
-            app.ownerOutcomeDocument(null,file.getString("id"),file.getString("sha256"),range,control) to null
+            val read=app.ownerOutcomeDocument(task,file.getString("id"),file.getString("sha256"),range,control)
+            if(task!=null){
+                control.checkpoint()
+                read.remove("readReceiptId")
+            }
+            read to null
         }
     }
     /** One deliberate review of only the native Word fragments already displayed behind the review. */

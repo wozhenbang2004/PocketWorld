@@ -37,6 +37,7 @@ export type CheckoutSaveForBuild = { position: CheckoutSavedPosition; filesHandl
 export type CheckoutWebEntry = {projectId:string;checkoutId:string;sourceDigest:string;root:string;path:string;sha256:string};
 type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:string;selection:{saveId:string}|{readRevision:number}};
 type PythonPackagePicker = {source:string;directoryHandle?:string;hits:number[]};
+type PythonToolsCloseGap = {position:CheckoutSavedPosition;savedHere:boolean;generation:number;projectRevision:number};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
 type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
@@ -134,6 +135,11 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   const [checkingSavedSource, setCheckingSavedSource] = useState(false);
   const [pythonRunReview, setPythonRunReview] = useState<PythonReview>(), [uncertainPythonSource, setUncertainPythonSource] = useState('');
   const pythonReviewNow = useRef<PythonReview | undefined>(undefined), pythonHeading = useRef<HTMLHeadingElement>(null);
+  const [pythonToolsCloseGap,showPythonToolsCloseGap]=useState<PythonToolsCloseGap|null>(null);
+  const pythonCloseGap=useRef<PythonToolsCloseGap|null>(null),pythonCloseHeading=useRef<HTMLHeadingElement>(null);
+  const pythonCloseHeadingId=useId(),filesError=useRef<HTMLParagraphElement>(null);
+  const holdPythonCloseGap=(value:PythonToolsCloseGap|null)=>{pythonCloseGap.current=value;showPythonToolsCloseGap(value)};
+  useLayoutEffect(()=>{if(pythonToolsCloseGap)pythonCloseHeading.current?.focus({preventScroll:true})},[pythonToolsCloseGap]);
   const [pythonPackagePicker,setPythonPackagePicker]=useState<PythonPackagePicker|null>(null);
   const packageHeading=useRef<HTMLHeadingElement>(null), packageTrigger=useRef<HTMLButtonElement>(null);
   const editorHeading = useRef<HTMLHeadingElement>(null);
@@ -797,20 +803,72 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
       latest.current.onOpenPythonWork?.(work);
     });
   };
+  const canRecheckPythonClose = (gap:PythonToolsCloseGap) => {
+    const liveState=bridge.getState(),view=liveState.view as Data|undefined,state=liveState.state;
+    return pythonCloseGap.current===gap&&live(gap.generation)&&liveState.host?.ready===true&&
+      view?.section===null&&view.taskId===null&&state.projectId===projectId&&
+      Number.isSafeInteger(gap.projectRevision)&&state.requestedProjectRevision===gap.projectRevision&&
+      !state.filePath&&!state.fileLoading&&!state.fileSaving&&!state.conversationReader&&!state.queuedInputsPage&&
+      !state.attachmentWorkspace?.open&&!state.chatAttachmentPickerOpen&&!state.localSourceIntake?.window&&!state.projectGitImport?.open&&
+      gap.position.projectId===projectId&&gap.position.checkoutId===checkoutId&&!sourceMember&&!hostFile&&
+      !checkpointArrival&&!originalDirectoryOpening&&savedPythonPath(gap.position.path)&&fileHash(gap.position.savedHash)&&
+      !interfaceDrafts.has(keyFor(gap.position.path))&&['open','read'].every(action=>liveState.capabilities.commands.includes(command+action));
+  };
+  const recheckPythonClose = async (gap:PythonToolsCloseGap) => {
+    if(!canRecheckPythonClose(gap)||entered.current||edits.current||handle.current)return;
+    const current=()=>canRecheckPythonClose(gap);
+    // An explicit read, not a second close. Only the original copy is eligible;
+    // an actual no-longer-matching source leaves its newly checked list, not an editor.
+    const list=await invoke('open',{},value=>{
+      if(value?.readOnly!==true||value.projectId!==projectId||value.checkoutId!==checkoutId||
+        typeof value.filesHandle!=='string'||!value.filesHandle)throw Error('尚未核对到原副本的文件清单。');
+      handle.current=value.filesHandle;
+      clearChangeEditor();setSavedEdit(null);setListingStale(false);setTreeOpen(true);
+      const {directoryPage:_,...fresh}=value;
+      presentOrdinaryListing(value);setListing(fresh);
+    },undefined,current);
+    if(!list||!current()||handle.current!==list.filesHandle)return;
+    const file=await readFile(gap.position.path,{position:gap.position,expectedPythonSha256:gap.position.savedHash,adoptedSourceCurrent:current});
+    if(!current()||handle.current!==list.filesHandle)return;
+    holdPythonCloseGap(null);
+    if(!file){
+      setError(message=>message||'尚未核对到原脚本。这里只显示同一副本的文件清单。');
+      requestAnimationFrame(()=>{if(live(gap.generation)&&handle.current===list.filesHandle&&!currentFile.current)filesError.current?.focus({preventScroll:true})});
+    }
+  };
+  const leavePythonCloseGap = () => {
+    const gap=pythonCloseGap.current;
+    if(!gap||!live(gap.generation)||entered.current||edits.current)return;
+    holdPythonCloseGap(null);latest.current.onClose(gap.savedHere?gap.position:undefined);
+  };
   const preparePythonTools = () => {
     const prepare=latest.current.onPreparePythonTools, source=pythonSource;
-    if(!prepare||!source||!file||!canPreparePythonTools||!exactPythonEditor()||pythonReviewNow.current)return;
+    if(!prepare||!source||!file||!canPreparePythonTools||!exactPythonEditor()||pythonReviewNow.current||pythonCloseGap.current)return;
     const sequence=generation.current, filesHandle=handle.current, token={};
+    const position={projectId,checkoutId,path:source.path,savedHash:source.sha256},savedHere='saveId' in source.selection;
+    const projectRevision=bridge.getState().state.requestedProjectRevision;
     entered.current=token;setBusy(true);setError('');
+    const held=()=>live(sequence)&&entered.current===token&&currentFile.current===file&&currentText.current===source.content;
     const closeEditor=async()=>{
-      if(!live(sequence)||entered.current!==token||handle.current!==filesHandle||currentFile.current!==file||currentText.current!==source.content)
-        throw Error('原脚本编辑器已变化，没有打开工具准备。');
-      handle.current='';
-      const receipt=await bridge.command(command+'close',{viewHandle,filesHandle}).catch(()=>null);
-      return live(sequence)&&entered.current===token&&receipt?.closed===true&&receipt.taskStopped===false;
+      if(!held()||handle.current!==filesHandle||interfaceDrafts.has(keyFor(source.path))||
+        editorInput.current?.value!==textareaText(source.content))throw Error('原脚本编辑器已变化，没有打开工具准备。');
+      handle.current=''; // Unmount must not replay a close whose reply still has not arrived.
+      try{
+        const receipt=await bridge.command(command+'close',{viewHandle,filesHandle});
+        if(!held()||handle.current)return false;
+        if(receipt?.closed===true&&receipt.taskStopped===false)return true;
+      }catch(failure){
+        if(!held()||handle.current)return false;
+        if(failure instanceof Error&&'code' in failure&&failure.code==='not_sent'){
+          handle.current=filesHandle;
+          throw Error('关闭原编辑器的请求未发送，工具准备没有打开。可以继续查看原脚本。');
+        }
+      }
+      holdPythonCloseGap({position,savedHere,generation:sequence,projectRevision});
+      return false;
     };
-    void prepare({position:{projectId,checkoutId,path:source.path,savedHash:source.sha256},savedHere:'saveId' in source.selection,closeEditor})
-      .catch(failure=>{if(live(sequence))setError(failureText(failure))})
+    void prepare({position,savedHere,closeEditor})
+      .catch(failure=>{if(live(sequence)&&!pythonCloseGap.current)setError(failureText(failure))})
       .finally(()=>{if(entered.current===token){entered.current=null;if(alive.current)setBusy(false)}});
   };
   const close = (next?: 'prepare-build') => {
@@ -907,6 +965,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   },[finder,!!file]);
   const closeCurrent = useRef(close);
   closeCurrent.current = () => {
+    if (pythonCloseGap.current) { leavePythonCloseGap(); return; }
     if (moving.current) { leaveUnconfirmedTransfer(); return; }
     if (checkpoints.back()) return;
     if (backFromStaticPreview()) return;
@@ -1070,8 +1129,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   };
   const checkpointEntry = checkpoints.available && !checkpoints.active ? checkpointOrigin() : undefined;
   return <SettingsDialog isOpen title={checkpointMove || checkpoints.active?'这份私人副本':showingStatic?'预览已保存网页':readingMarkdown ? 'Markdown 预览' : finder==='changes' ? '核对副本改动' : sourceMember ? '原工作副本' : hostFile ? '已核对的本机文件' : checkpointArrival?.side==='sibling'?'新私人副本的文件':'这份私人副本的文件'}
-    onClose={() => {if(checkpointSibling||moving.current){closeCurrent.current();return;}if(checkpoints.back()||backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
-    closeLabel={checkpointMove?'返回原项目':checkpoints.active?'返回原文件或上一级':showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
+    onClose={() => {if(pythonCloseGap.current||checkpointSibling||moving.current){closeCurrent.current();return;}if(checkpoints.back()||backFromStaticPreview()||closePythonPackage())return;if(activeMarkdown.current)closeMarkdown();else if(!backFromChanges()&&!browseFromEditor())close();}}
+    closeLabel={checkpointMove||pythonToolsCloseGap?'返回原项目':checkpoints.active?'返回原文件或上一级':showingStatic||readingMarkdown||choosingPackage?'返回编辑':finder==='changes'?changesBackLabel:editorDirectory&&!browsingFolder&&!localFind&&!choice&&!adoption&&!pythonRunReview?'返回所选目录':backLabel}>
     {checkpointMove && <section className="pw-form-flow">
       <p role="status">{checkpointMove === 'returning' ? '正在核对并返回原来的两版比较…' : checkpointMove === 'leaving' ?
         '正在关闭本次副本窗口…' : checkpointMove === 'close_unknown' ? '尚未确认关闭原窗口。可再关闭同一窗口，不会再次创建。' :
@@ -1096,10 +1155,20 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
       <SavedMarkdownBody text={readingMarkdown.content} />
       <Button variant="secondary" onClick={closeMarkdown}>返回编辑</Button>
     </section>}
-    <div hidden={markdownVisible||showingStatic||checkpoints.active||!!checkpointMove} inert={checkpoints.active||!!checkpointMove||undefined}><div className="pw-checkout-files">
+    {pythonToolsCloseGap&&<section className="pw-form-flow" aria-busy={busy} aria-labelledby={pythonCloseHeadingId}>
+      <h3 id={pythonCloseHeadingId} ref={pythonCloseHeading} tabIndex={-1}>核对原脚本</h3>
+      <p role="status">没有打开工具准备，也没有运行脚本。尚未核对原编辑器是否关闭；不会重新写入 <bdi>{pythonToolsCloseGap.position.path}</bdi>。</p>
+      {error&&<p role="alert">{error}</p>}
+      <div className="pw-form-actions">
+        {canRecheckPythonClose(pythonToolsCloseGap)&&<Button disabled={busy} onClick={()=>void recheckPythonClose(pythonToolsCloseGap)}>
+          {busy?'正在核对原脚本…':'重新核对原脚本'}</Button>}
+        <Button variant="secondary" disabled={busy} onClick={leavePythonCloseGap}>返回原项目</Button>
+      </div>
+    </section>}
+    <div hidden={markdownVisible||showingStatic||checkpoints.active||!!checkpointMove||!!pythonToolsCloseGap} inert={checkpoints.active||!!checkpointMove||!!pythonToolsCloseGap||undefined}><div className="pw-checkout-files">
     {finder!=='changes'&&<><p className="pw-muted">{sourceMember ? '保存只改这个副本。原任务的固定包不会改变，也不会重新运行。' : hostFile ? '这是刚核对的手机副本。已有草稿会单独提示；保存只修改手机文件，采纳到本机正式项目仍须另行审阅，不会连回或改写主机。' : '这里是 AI 实际工作的副本，不是“项目文件”中的正式版本。保存只改副本；另行比较并采纳才会导回正式项目，不会运行代码或放开热修改；已有进程和未知回执仍会阻止不安全的保存。'}</p>
     <small className="pw-checkout-identity">{projectId} / {checkoutId}</small></>}
-    {error && <p role="alert">{error}</p>}
+    {error && <p role="alert" ref={filesError} tabIndex={-1}>{error}</p>}
     {checkpoints.refusedFilesHandle === handle.current && <p role="status">这次未能打开源码版本。仍在原文件窗口，没有改动文件。</p>}
     {(checkpointEntry || checkpoints.active) && <Button ref={checkpointTrigger} size="small" variant="ghost" disabled={checkpoints.active} onClick={event => {
       const original = checkpointOrigin(); if (original) checkpoints.open(original, event.currentTarget);

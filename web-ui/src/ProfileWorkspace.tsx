@@ -19,8 +19,10 @@ type Run = (action: string, args?: Record<string, unknown>) => Promise<any>;
 type LeaveGuard = (next: () => void) => boolean;
 export type OriginalMemoryConversation = { id: string; key: string; epoch: number; revision: number; resumeRevision: number };
 type OriginalMemoryEntry = { conversation: OriginalMemoryConversation; current: () => boolean };
+export type AnswerMemoryForgetReceipt = { id: string; revision: number };
+type AnswerMemoryForgetEntry = AnswerMemoryForgetReceipt & { current: () => boolean };
 export type PersonalTarget = { view: 'home' | 'memories' | 'memory-settings' } | {
-  view: 'memory'; id: string; candidate: boolean; expectedRevision?: number; originalAnswer?: OriginalMemoryEntry
+  view: 'memory'; id: string; candidate: boolean; expectedRevision?: number; originalAnswer?: OriginalMemoryEntry; originalForget?: AnswerMemoryForgetEntry
 };
 export type PersonalProfile = {
   revision: number;
@@ -40,7 +42,7 @@ type Props = {
   state: Data;
   supported: (action: string) => boolean;
   run: Run;
-  onBack: () => void;
+  onBack: (forget?: AnswerMemoryForgetReceipt) => void;
   onSettings: () => void;
   registerBack: (handler: (() => boolean) | null) => void;
   registerBeforeLeave: (guard: LeaveGuard | null) => void;
@@ -66,7 +68,7 @@ type Removal = 'forget' | 'reject';
 type MemoryDirectory = 'memories' | 'memory-history';
 type ConfirmedManualSave = { id: string; revision: 1 };
 type CorrectionSubmission = { beforeRevision: number; draft: string };
-type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave; correction?: CorrectionSubmission };
+type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave; correction?: CorrectionSubmission; answerForget?: AnswerMemoryForgetEntry };
 type MemoryOpenPin = { kind: 'answer'; revision: number; conversation: string; originalAnswer?: OriginalMemoryEntry }
   | { kind: 'receipt'; revision: number; feedback: MemoryFeedback };
 type AvatarPicker = { id: string; editor: number };
@@ -224,6 +226,16 @@ function recoveredCorrectionPin(feedback: MemoryFeedback | null) {
   const pin = memoryReceiptPin(feedback);
   return pin && !pin.candidate && pin.revision === submitted.beforeRevision + 1 ? pin : null;
 }
+function confirmedAnswerForget(feedback: MemoryFeedback | null, entry?: AnswerMemoryForgetEntry): AnswerMemoryForgetReceipt | undefined {
+  if (!entry || !feedback || feedback.answerForget !== entry || feedback.operation !== 'forget' || feedback.needsQuery ||
+      feedback.targetId !== entry.id || !entry.current()) return;
+  const receipt = feedback.value, removed = rows(receipt.removedRefs), ref = removed[0];
+  if (receipt.status !== 'saved' || receipt.undoAvailable !== false || !string(receipt.receiptHandle) ||
+      !Number.isSafeInteger(receipt.deleted) || receipt.deleted < 1 || removed.length !== 1 ||
+      ref.recordId !== entry.id || ref.revision !== entry.revision || ref.ownerId !== 'owner' || ref.spaceId !== 'private') return;
+  // The native receipt handle and original source refs stay on the Profile side.
+  return { id: entry.id, revision: entry.revision };
+}
 function feedbackLabel(feedback: MemoryFeedback): string {
   if (feedback.priorSave) return '这条记忆先前已保存';
   if (feedback.needsQuery || feedback.value.status === 'unknown') return feedback.operation === 'forget' ? '这次遗忘的结果待核对' : '这次修改的结果待核对';
@@ -308,6 +320,7 @@ function Segmented({ label, value, options, disabled, onChange }: { label: strin
 export function ProfileWorkspace({ state, supported, run, onBack, onSettings, registerBack, registerBeforeLeave, presentationKey, initialTarget, targetRequestKey, onOpenAdvancedMemory, onOpenCommitments, onOpenReminders }: Props) {
   const directVersion = initialTarget?.view === 'memory' && initialTarget.expectedRevision !== undefined;
   const originalAnswer = initialTarget?.view === 'memory' && initialTarget.expectedRevision !== undefined ? initialTarget.originalAnswer : undefined;
+  const originalForget = initialTarget?.view === 'memory' ? initialTarget.originalForget : undefined;
   const [profile, setProfile] = useState<PersonalProfile | null>(null);
   const [savedReceipt, setSavedReceipt] = useState<{section: Section; revision: number} | null>(null);
   const [memories, setMemories] = useState<Memories>(emptyMemories);
@@ -658,7 +671,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       if (directEntry.current && directEntry.current.conversation !== current.current.conversation) {
         directEntry.current = null; clearSelection(); setEditor(null); go('home'); setNotice('进入时的对话已变化，未打开其他对话。'); return;
       }
-      onBack(); return;
+      onBack(confirmedAnswerForget(current.current.feedback, originalForget)); return;
     }
     if (current.current.editor && preferenceFromMemory.current) { preferenceFromMemory.current = false; setEditor(null); go('memories'); return; }
     if (current.current.view === 'memory') { clearSelection(); go(memoryParent.current); }
@@ -1058,6 +1071,10 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       reviewHandle.current = ''; setReview(null);
       const before = frozen.value.before;
       const pending: MemoryFeedback = { value: { receiptHandle: frozen.value.receiptHandle, undoAvailable: false }, operation: frozen.operation, targetId: frozen.id, needsQuery: true };
+      if (frozen.operation === 'forget' && frozen.value.operation === 'forget' && frozen.value.reviewHandle === handle &&
+          frozen.value.receiptHandle === handle && originalForget && originalForget.id === frozen.id &&
+          originalForget.revision === before?.revision && before.id === frozen.id && before.ownerId === 'owner' && before.spaceId === 'private' &&
+          before.assertion?.subjectId === 'owner' && before.assertion?.subjectType === 'owner' && originalForget.current()) pending.answerForget = originalForget;
       if (removesFromList(frozen.operation)) pending.directory = frozen.operation === 'forget' && memoryParent.current === 'memory-history' ? 'memory-history' : 'memories';
       if (frozen.operation === 'accept' && before?.id === frozen.id && before.status === 'pending' && Number.isSafeInteger(before.revision) && before.revision > 0 && Number.isSafeInteger(before.expiresAt) && before.expiresAt > 0)
         pending.candidateTerm = { revision: before.revision, expiresAt: before.expiresAt };
@@ -1385,6 +1402,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       : removalFeedback ? selection?.id === feedback.targetId && selection?.candidate === (feedback.operation === 'reject')
       : !['shorten', 'core'].includes(feedback.operation) || selection?.id === feedback.targetId
     : view === 'memory-new' && (createUnknown || feedback.value.status === 'settings_required'));
+  const returnForgottenToAnswer = feedbackVisible && atDirectEntry() && !!confirmedAnswerForget(feedback, originalForget);
   const preferenceSection = feedback && !feedback.needsQuery ? preferenceSectionOf(feedback.value) : null;
   const headingLabel = view === 'memory' && selection?.candidate ? '记忆建议' : view === 'memory' && selection?.historical ? '记忆详情' : labels[view];
   const missingDirectVersion = directVersion && view === 'memory' && !selection;
@@ -1425,6 +1443,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
           {retention && <p>{retention}</p>}
           {feedback.value.undoUnavailableReason && <p>{string(feedback.value.undoUnavailableReason)}</p>}
           <div className="pw-profile-actions">
+            {returnForgottenToAnswer && <Button variant="secondary" size="small" leadingIcon={IconArrowLeft} disabled={locked} onClick={requestBack}>返回原回答</Button>}
             {view === 'memories' && retention && string(feedback.value.shortenReviewHandle) && <Button variant="secondary" size="small" disabled={locked || !supported('profile.memory.confirm')} onClick={shortenDuplicate}>仅缩短这条原记忆</Button>}
             {preferenceSection && <Button variant="secondary" size="small" trailingIcon={IconChevronRight} disabled={locked} onClick={() => openEditor(preferenceSection)}>去{preferenceSection === 'communication' ? '交流偏好' : '做事偏好'}</Button>}
             {receiptPin && !atReceiptRecord && <Button variant="secondary" size="small" disabled={locked || !supported('profile.memory.get') || !!feedback.priorSave && !privateProfileReadWindow()}

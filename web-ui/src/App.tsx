@@ -51,7 +51,7 @@ import type {OriginalChatReminderRuleVisit,ReminderNoticeVisit} from './Reminder
 import {OriginalChatReminderReview} from './OriginalChatReminderReview';
 import type {SettingsDirectoryOrigin} from './SettingsDirectory';
 import type {PlanSettingsAnchor,PlanSettingsReturn,RegisterPlanSettingsAnchor} from './PlansWorkspace';
-import ProfileWorkspace,{type OriginalMemoryConversation,type PersonalTarget} from './ProfileWorkspace';
+import ProfileWorkspace,{type AnswerMemoryForgetReceipt,type OriginalMemoryConversation,type PersonalTarget} from './ProfileWorkspace';
 import {ConversationMemorySettings,type ConversationMemoryControls} from './ConversationMemorySettings';
 import {ConversationReferenceShelf} from './ConversationReferenceShelf';
 import {NewConversationMemory} from './NewConversationMemory';
@@ -236,7 +236,10 @@ type ProvidedMemoryAnswerProof=Pick<CurrentProvidedMemoryTarget,'taskId'|'runId'
 type ProvidedMemoryAnswerOrigin={document:number;conversation:string;message:string;revision:number;navigation:number;resume:number;
  proof?:ProvidedMemoryAnswerProof;inline?:{trigger:HTMLButtonElement;draftEpoch:number;dismissed?:true}};
 type OriginalMemoryProfileVisit={origin:ProvidedMemoryAnswerOrigin; anchor:ChatWorkReturn; answerCurrent:()=>boolean;
- profileCurrent:()=>boolean; returnCurrent:()=>boolean};
+ profileCurrent:()=>boolean; returnCurrent:()=>boolean; proof:ProvidedMemoryAnswerProof;
+ forget?:AnswerMemoryForgetReceipt&{attention:number}};
+type ReturnedProvidedMemoryForget=Pick<ProvidedMemoryAnswerOrigin,'document'|'conversation'|'message'|'revision'|'resume'|'navigation'>&{
+ proof:ProvidedMemoryAnswerProof; recordRevision:number};
 type ChatMessageOriginalKind='messagePdf'|'messageInputDocument'|'replyDocument';
 type AnswerInputFormat='PDF'|'Word'|'TXT';
 type OriginalAnswerInput={answerId:string;revision:1;replyId:string;work:WorkIdentity;source:MessageAttachmentSource;format:AnswerInputFormat};
@@ -1295,6 +1298,19 @@ export default function App(){
  const [providedMemoryMessage,setProvidedMemoryMessage]=useState<string|null>(null);
  const providedMemoryOrigin=useRef<ProvidedMemoryAnswerOrigin|null>(null);
  const originalMemoryProfile=useRef<OriginalMemoryProfileVisit|null>(null);
+ const providedForgetAttention=useRef(0);
+ const [returnedProvidedForget,setReturnedProvidedForget]=useState<ReturnedProvidedMemoryForget|null>(null);
+ useEffect(()=>{
+  const retire=()=>{providedForgetAttention.current++;setReturnedProvidedForget(null)};
+  const hidden=()=>{if(document.hidden)retire()};
+  const off=bridge.subscribeDocumentEpoch(retire);
+  document.addEventListener('visibilitychange',hidden);window.addEventListener('pagehide',retire);
+  return()=>{off();document.removeEventListener('visibilitychange',hidden);window.removeEventListener('pagehide',retire)};
+ },[]);
+ useEffect(()=>{
+  setReturnedProvidedForget(prior=>prior&&(route!=='chat'||state.conversationId!==prior.conversation||
+   navigationRevision!==prior.navigation||snapshot?.view?.resumeRevision!==prior.resume||snapshot?.view?.taskId!==null)?null:prior);
+ },[route,state.conversationId,navigationRevision,snapshot?.view?.resumeRevision,snapshot?.view?.taskId]);
  const providedMemoryBack=useRef<(()=>boolean)|null>(null);
  const registerProvidedMemoryBack=useCallback((handler:(()=>boolean)|null)=>{providedMemoryBack.current=handler},[]);
  useEffect(()=>{providedMemoryOrigin.current=null;setProvidedMemoryMessage(null)},[route,state.conversationId]);
@@ -2058,12 +2074,20 @@ export default function App(){
   return commit();
  },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
- const returnFromProfile=()=>{
+ const providedForgetProfileCurrent=(visit:OriginalMemoryProfileVisit)=>{
+  const live=bridge.getState();
+  return !!visit.forget&&visit.forget.attention===providedForgetAttention.current&&originalMemoryProfile.current===visit&&
+   visit.profileCurrent()&&visit.answerCurrent()&&live.host?.ready===true&&obj(live.view).section==='profile';
+ };
+ const returnFromProfile=(receipt?:AnswerMemoryForgetReceipt)=>{
   const visit=originalMemoryProfile.current;
   if(visit&&visit.origin.navigation+1===navigationWindow.current){
    if(visit.profileCurrent()){
+    const forget=visit.forget&&receipt?.id===visit.forget.id&&receipt.revision===visit.forget.revision&&
+     providedForgetProfileCurrent(visit)?visit.forget:undefined;
     void navigate('chat',()=>{
      originalMemoryProfile.current=null;
+     if(visit.forget)setPersonalTarget({view:'home'});
      // Profile already closes its native window on unmount. Reuse that state, not a chat reselect or another read.
      void awaitPickerProjection(visit.returnCurrent,()=>obj(bridge.getState().view).section===null?true:undefined).then(closed=>{
       if(!closed)return;
@@ -2072,7 +2096,13 @@ export default function App(){
        const position=visit.answerCurrent()?chatWorkLocation(visit.anchor,undefined,true):undefined;
        if(!position){setLocalStatus('已回到原对话，当前窗口未找到原回复。');return;}
        const trigger=providedMemoryOpener(position.article,visit.origin);
-       restoreChatWorkAt(trigger?{...visit.anchor,trigger}:visit.anchor);
+       const restored=restoreChatWorkAt(trigger?{...visit.anchor,trigger}:visit.anchor);
+       if(restored&&forget&&forget.attention===providedForgetAttention.current&&visit.returnCurrent()&&visit.answerCurrent()){
+        const {document,conversation,message,revision,navigation,resume}=visit.origin;
+        // Historical confirmation only: retain neither the forgotten text nor a native handle.
+        setReturnedProvidedForget({document,conversation,message,revision,navigation:navigation+2,resume,
+         proof:visit.proof,recordRevision:forget.revision});
+       }
       });
      });
     },{stillCurrent:()=>originalMemoryProfile.current===visit&&visit.profileCurrent()});
@@ -4220,7 +4250,7 @@ export default function App(){
   providedMemoryOrigin.current=origin;
   setMessageMenu(null);setProvidedMemoryMessage(message.id||null);
  };
- const captureProvidedMemoryProfile=(origin:ProvidedMemoryAnswerOrigin,proof:ProvidedMemoryAnswerProof)=>{
+ const captureProvidedMemoryProfile=(origin:ProvidedMemoryAnswerOrigin,proof:ProvidedMemoryAnswerProof,forget?:AnswerMemoryForgetReceipt)=>{
   const live=bridge.getState(),draft=live.composer,input=modelSetupInput(live,origin.document),node=scroll.current;
   const article=Array.from(chatMessageList.current?.children||[]).find((row):row is HTMLElement=>
    row instanceof HTMLElement&&row.dataset.messageId===origin.message);
@@ -4251,12 +4281,20 @@ export default function App(){
   const anchor:ChatWorkReturn={document:origin.document,conversation:origin.conversation,message:origin.message,revision:origin.revision,
    replyRun:{taskId:proof.taskId,runId:proof.runId,epoch:proof.coordinatorEpoch},top:node.scrollTop,
    offset:article.getBoundingClientRect().top-node.getBoundingClientRect().top,trigger};
-  const visit:OriginalMemoryProfileVisit={origin,anchor,answerCurrent,profileCurrent:()=>sameDraft('profile'),returnCurrent:()=>sameDraft('return')};
+  const {taskId,runId,coordinatorEpoch,requestId,answerId,receiptId}=proof;
+  const visit:OriginalMemoryProfileVisit={origin,anchor,proof:{taskId,runId,coordinatorEpoch,requestId,answerId,receiptId},answerCurrent,
+   profileCurrent:()=>sameDraft('profile'),returnCurrent:()=>sameDraft('return'),
+   forget:forget?{...forget,attention:providedForgetAttention.current}:undefined};
   return {pin,visit,fromAnswer};
  };
+ const bindProvidedForget=(pin:OriginalMemoryProfileVisit['forget'])=>pin?{
+  id:pin.id,revision:pin.revision,current:()=>{
+   const visit=originalMemoryProfile.current;
+   return !!visit&&visit.forget===pin&&providedForgetProfileCurrent(visit);
+  }}:undefined;
  const openOriginalCurrentMemory=(origin:ProvidedMemoryAnswerOrigin,target:CurrentProvidedMemoryTarget)=>{
   if(!can('profile.memory.get'))return false;
-  const captured=captureProvidedMemoryProfile(origin,target);
+  const captured=captureProvidedMemoryProfile(origin,target,{id:target.id,revision:target.currentRevision});
   if(!captured)return false;
   const {pin,visit}=captured;
   const fromAnswer=()=>captured.fromAnswer()&&target.expires>Date.now();
@@ -4265,7 +4303,8 @@ export default function App(){
   void navigate('profile',()=>{
    setProvidedMemoryMessage(null);providedMemoryOrigin.current=null;
    setPersonalTarget({view:'memory',id:target.id,candidate:false,expectedRevision:target.currentRevision,
-    originalAnswer:{conversation:pin,current:()=>originalMemoryProfile.current===visit&&visit.profileCurrent()&&visit.answerCurrent()&&target.expires>Date.now()}});
+    originalAnswer:{conversation:pin,current:()=>originalMemoryProfile.current===visit&&visit.profileCurrent()&&visit.answerCurrent()&&target.expires>Date.now()},
+    originalForget:bindProvidedForget(visit.forget)});
    setPersonalTargetKey(key=>key+1);
   },{stillCurrent:()=>originalMemoryProfile.current===visit&&fromAnswer()}).then(opened=>{
    if(!opened&&originalMemoryProfile.current===visit){originalMemoryProfile.current=null;
@@ -4273,16 +4312,16 @@ export default function App(){
   });
   return true;
  };
- const manageProvidedMemory=(original?:{id:string;revision:number})=>{
+ const manageProvidedMemory=(original?:AnswerMemoryForgetReceipt)=>{
   const target:PersonalTarget=original?{view:'memory',id:original.id,candidate:false,expectedRevision:original.revision}:{view:'memories'};
-  const origin=providedMemoryOrigin.current,captured=origin?.proof?captureProvidedMemoryProfile(origin,origin.proof):undefined;
+  const origin=providedMemoryOrigin.current,captured=origin?.proof?captureProvidedMemoryProfile(origin,origin.proof,original):undefined;
   if(!captured?.fromAnswer()){
    providedMemoryOrigin.current=null;setProvidedMemoryMessage(null);openPersonalMemory(target);return;
   }
   // Keep the existing manager/record route; the original proof is for Back only.
   void navigate('profile',()=>{
    originalMemoryProfile.current=captured.visit;providedMemoryOrigin.current=null;setProvidedMemoryMessage(null);
-   setPersonalTarget(target);setPersonalTargetKey(key=>key+1);
+   setPersonalTarget(target.view==='memory'?{...target,originalForget:bindProvidedForget(captured.visit.forget)}:target);setPersonalTargetKey(key=>key+1);
   },{stillCurrent:captured.fromAnswer}).then(opened=>{
    if(!opened&&providedMemoryOrigin.current===origin)setLocalStatus('原回复或草稿已变化，没有切换页面。');
   });
@@ -9741,6 +9780,18 @@ export default function App(){
    onBrowseHistory={chatHistoryAvailable?trigger=>{void openChatHistory(trigger,'browse')}:undefined}
    onResumeHistory={chatHistoryResumeAvailable?trigger=>{void openChatHistory(trigger,'resume')}:undefined}/>;
  const latestSavedMessage=messages.at(-1),latestSavedWork=savedReplyDetails.at(-1);
+ const visibleProvidedForget=(()=>{
+  const receipt=returnedProvidedForget;
+  if(!receipt||route!=='chat'||intent!=='chat'||taskOpen||taskOpening||document.hidden||
+     receipt.document!==personalDocumentEpoch||receipt.navigation!==navigationRevision||receipt.resume!==snapshot?.view?.resumeRevision||
+     snapshot?.view?.taskId!==null||snapshot?.host?.ready!==true||state.chatAttachmentPickerOpen||
+     !ordinaryMessageWorkChat(snapshot,receipt.conversation,draftEpoch))return null;
+  const rows=messages.filter(message=>message.id===receipt.message);
+  if(rows.length!==1||rows[0].sourceRevision!==receipt.revision)return null;
+  const proof=providedMemoryAnswerProof(rows[0]),expected=receipt.proof;
+  return proof&&proof.taskId===expected.taskId&&proof.runId===expected.runId&&proof.coordinatorEpoch===expected.coordinatorEpoch&&
+   proof.requestId===expected.requestId&&proof.answerId===expected.answerId&&proof.receiptId===expected.receiptId?receipt:null;
+ })();
  const chatReports=useMemo(()=>route==='chat'&&intent==='chat'&&ready&&
   ordinaryMessageWorkChat(snapshot,conversation,draftEpoch)&&['tasks.open','tasks.close','ownerWork.report.read'].every(can)?
   originalChatReportLinks(snapshot,conversation):new Map<string,ChatReportLink>(),[route,intent,ready,snapshot,conversation,draftEpoch,can]);
@@ -9971,6 +10022,8 @@ export default function App(){
       {memoryReceiptShortcut&&<Button variant="ghost" size="small" className="pw-message-trace" leadingIcon={IconMemory}
         aria-haspopup="dialog" aria-label="本次记忆，核对提供给模型的个人记忆" data-inline-memory-receipt
         onClick={event=>openProvidedMemoryAnswer(m,event.currentTarget)}>本次记忆</Button>}
+      {visibleProvidedForget&&visibleProvidedForget.message===m.id&&visibleProvidedForget.revision===m.sourceRevision&&
+        <p className="pw-muted" role="status">已从个人记忆移除所选条目（第 {visibleProvidedForget.recordRevision} 版）。原回答未重新生成。</p>}
       <PopoverTrigger isOpen={messageMenu===id} onOpenChange={value=>setMessageMenu(value?id:null)}>
        <IconButton icon={IconMore} size="small" aria-label="消息操作与来源"/>
        <Popover className="pw-message-popover" aria-label="消息操作与来源"><div className="pw-message-menu">

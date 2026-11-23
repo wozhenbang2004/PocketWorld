@@ -926,7 +926,9 @@ internal class PocketWebBridge(
             projection?.getJSONObject("state")?.put("remoteInbox", remoteInbox.snapshot())
             projection?.getJSONObject("state")?.put("modelDiagnostics", modelDiagnostics.snapshot())
             projection?.getJSONObject("state")?.put("attachmentWorkspace", attachmentPages.snapshot(
-                draftPresentation = documentId != null && section == null && taskViewId == null))
+                draftPresentation = documentId != null && section == null && taskViewId == null,
+                workPagePresentation = documentId != null && section == null && taskViewId != null &&
+                    taskReturnSection == null && controller.webPrivateOwnerVisible()))
             projection?.getJSONObject("state")?.put("taskCapabilityExport", taskCapabilities.exportSnapshot() ?: JSONObject.NULL)
             if (section == "teams" && controller.webPrivateOwnerVisible()) projection?.getJSONObject("state")?.put("teamFinalPackageExport", teamPages.finalPackageExportSnapshot() ?: JSONObject.NULL)
             projection?.getJSONObject("state")?.put("systemSpeech", presentation.speechInfo())

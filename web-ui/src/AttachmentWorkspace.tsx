@@ -61,6 +61,49 @@ function privateLibraryWindow(view:Json){
   view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.fromWorkResult===false&&view.resultFilesOnly===false&&
   view.historyResultOnly===false&&view.reportResultOnly===false&&view.choosingSource===false;
 }
+function workPdfTextWindow(view:Json,taskId:string|undefined){
+ const work=obj(view.snapshot),file=obj(view.file);
+ return !!taskId&&view.workPdfTextPage===true&&view.open===true&&view.ready===true&&typeof view.windowId==='string'&&!!view.windowId&&
+  view.taskId===taskId&&work.taskId===taskId&&work.taskStatus==='completed'&&view.fromWorkResult===true&&view.originalReturn==='entry'&&
+  view.restoredWorkReturn===false&&view.resultFilesOnly===false&&view.historyResultOnly===false&&view.reportResultOnly===false&&
+  view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&view.choosingSource===false&&
+  file.role==='result'&&file.availability==='available'&&file.sourceKind==='created_document'&&file.mimeType==='application/pdf'&&
+  !!exactFileTarget(file)&&file.sourceTaskId===taskId&&typeof work.taskRunId==='string'&&!!work.taskRunId&&
+  file.sourceTaskRunId===work.taskRunId&&Number.isSafeInteger(work.coordinatorEpoch)&&work.coordinatorEpoch>0;
+}
+function pairedPdfPage(view:Json){
+ const pair=obj(view.pdfPageText),reader=obj(view.originalFile),shown=obj(reader.information),file=obj(view.file);
+ return view.documentOpen===true&&reader.kind==='pdf'&&reader.sourceUnavailable===false&&
+  reader.id===pair.viewerId&&reader.sha256===file.sha256&&typeof pair.rasterId==='string'&&shown.pdfRasterId===pair.rasterId&&
+  Number.isSafeInteger(pair.page)&&pair.page>0&&shown.page===pair.page?pair.page as number:undefined;
+}
+function matchesPdfPageText(view:Json,taskId:string,page:number){
+ const read=obj(view.document),file=obj(view.file);
+ return read.attachmentId===file.id&&read.sha256===file.sha256&&read.taskId===taskId&&
+  read.readContext==='native_owner_preview'&&read.format==='pdf'&&read.extraction==='text'&&read.coverage==='pdf_text_layer'&&
+  Array.isArray(read.chunks)&&read.chunks.every((chunk:Json)=>obj(chunk).unit===page);
+}
+function workPdfTextResult(view:Json,taskId:string|undefined){
+ if(!taskId||!workPdfTextWindow(view,taskId)||view.busy!==false||view.exportPending!==false||view.error)return;
+ const page=pairedPdfPage(view),read=obj(view.document);
+ if(!page)return;
+ const file=obj(view.file),scope=obj(view.snapshot),pair=obj(view.pdfPageText);
+ const key=JSON.stringify([view.windowId,taskId,scope.taskRunId,scope.coordinatorEpoch,file.id,file.sha256,pair.viewerId,pair.rasterId,page]);
+ const unavailable={key,text:'',message:'暂不能核对本页的本机文字层。可返回原 PDF。'};
+ if(read.attachmentId!==file.id||read.sha256!==file.sha256||read.taskId!==taskId||read.readContext!=='native_owner_preview')return unavailable;
+ if(read.extractionStatus==='limit_exceeded')return {key,text:'',message:'本次文字读取超过限制，没有提供本页文字。可返回原 PDF。'};
+ if(!matchesPdfPageText(view,taskId,page)||!['ok','partial'].includes(read.extractionStatus)||
+    !Number.isSafeInteger(read.totalUnits)||read.totalUnits<page)return unavailable;
+ const chunks=rows(read.chunks);
+ if(chunks.length!==read.chunks.length||chunks.length>48||!chunks.every(chunk=>chunk.kind==='pdf_text'&&typeof chunk.text==='string'))return unavailable;
+ const text=chunks.map(chunk=>chunk.text).join('\n');
+ if(text.length>12048)return unavailable;
+ const pageLimited=read.truncated===true&&read.nextUnit===page;
+ if(!text.trim())return {key,text:'',message:pageLimited?
+  '本页文字达到读取上限，未读到可显示的文字。可返回原 PDF。':
+  '没有提取到本页的文字层。这不代表本页空白；未做图片识别。'};
+ return {key,text,message:pageLimited?'本页文字达到读取上限，仅显示已读部分。':'仅显示本页的本机文字层，未做图片识别。'};
+}
 function privateTxtPositionScope(view:Json){
  const file=obj(view.file),version=exactFileTarget(file);
  return privateLibraryWindow(view)&&view.originalReturn==='list'&&typeof file.name==='string'&&/\.txt$/i.test(file.name)&&version?
@@ -308,20 +351,16 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const documentParentFlight=useRef(false),generatedDraftFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
  const [readerActionMenu,setReaderActionMenu]=useState('');
+ const [workPdfCopyFeedback,setWorkPdfCopyFeedback]=useState<{key:string;message:string;error?:true}>();
  useEffect(()=>{if(!view.open){setPreviewContinuation('');setCatalogFilter(null)}},[view.open]);
  const scroller=useRef<HTMLDivElement>(null),heading=useRef<HTMLDivElement>(null),positions=useRef(new Map<string,number>()),returningToSearch=useRef(false);
  const continuationHeading=useRef<HTMLDivElement>(null);
  const hasOriginal=Object.keys(obj(view.originalFile)).length>0;
  const nativePdfPage=obj(view.pdfPageText),pairedOriginal=obj(view.originalFile),acknowledgedPage=obj(pairedOriginal.information);
- const pdfPageText=privateLibraryWindow(view)&&view.documentOpen===true&&pairedOriginal.kind==='pdf'&&
-  pairedOriginal.sourceUnavailable===false&&pairedOriginal.id===nativePdfPage.viewerId&&pairedOriginal.sha256===file.sha256&&
-  typeof nativePdfPage.rasterId==='string'&&acknowledgedPage.pdfRasterId===nativePdfPage.rasterId&&
-  Number.isSafeInteger(nativePdfPage.page)&&nativePdfPage.page>0&&acknowledgedPage.page===nativePdfPage.page?nativePdfPage.page as number:undefined;
+ const workPdfText=workPdfTextWindow(view,openTaskId);
+ const pdfPageText=privateLibraryWindow(view)||workPdfText?pairedPdfPage(view):undefined;
  const pdfTextRead=obj(view.document);
- const pdfTextCurrent=!!pdfPageText&&pdfTextRead.attachmentId===file.id&&pdfTextRead.sha256===file.sha256&&
-  pdfTextRead.taskId===''&&pdfTextRead.readContext==='native_owner_preview'&&pdfTextRead.format==='pdf'&&
-  pdfTextRead.extraction==='text'&&pdfTextRead.coverage==='pdf_text_layer'&&Array.isArray(pdfTextRead.chunks)&&
-  pdfTextRead.chunks.every((chunk:Json)=>obj(chunk).unit===pdfPageText);
+ const pdfTextCurrent=!!pdfPageText&&matchesPdfPageText(view,workPdfText?String(view.taskId):'',pdfPageText);
  const nativeWord=obj(view.wordExcerpt),wordRead=obj(view.document);
  const wordExcerpt=privateLibraryWindow(view)&&view.documentOpen===true&&pairedOriginal.kind==='office'&&
   pairedOriginal.sourceUnavailable===false&&pairedOriginal.id===nativeWord.viewerId&&pairedOriginal.sha256===file.sha256&&
@@ -1172,12 +1211,31 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    {privateLibrary?(offerDraftDesk?'直接生成文件':'直接生成 Word / PDF'):'创建文档'}</Button>
   {view.taskId&&!view.choosingSource&&<Button variant="ghost" disabled={busy} onClick={()=>run('chooseSource')}>从附件库关联</Button>}
  </div>;
- const offerPdfPageText=privateLibrary&&mode==='original'&&view.canReadPdfPageText===true&&!busy&&!draftBusy&&!view.exportPending;
+ const offerPdfPageText=(privateLibrary||workPdfText)&&mode==='original'&&view.canReadPdfPageText===true&&!busy&&!draftBusy&&!view.exportPending;
  const requestPdfPageText=(viewerId:string,rasterId:string)=>{
   const live=bridge.getState(),current=obj(live.state.attachmentWorkspace),reader=obj(current.originalFile);
-  if(!offerPdfPageText||document.hidden||!ordinaryLibraryOwner(live)||current.windowId!==view.windowId||
+  const workHere=workPdfText&&workPdfTextWindow(current,openTaskId)&&obj(live.view).taskId===openTaskId&&obj(live.view).section===null;
+  if(!offerPdfPageText||document.hidden||!(workPdfText?workHere:ordinaryLibraryOwner(live))||current.windowId!==view.windowId||
      current.canReadPdfPageText!==true||reader.id!==viewerId||obj(reader.information).pdfRasterId!==rasterId)return;
   run('read',{pdfViewerId:viewerId,displayedPdfRaster:rasterId});
+ };
+ const workTextResult=workPdfTextResult(view,openTaskId),workCopy=!error&&workTextResult?.text?workTextResult:undefined;
+ const copyWorkPdfPage=async()=>{
+  if(!workCopy||busy||draftBusy)return;
+  const epoch=bridge.getDocumentEpoch();
+  const current=()=>{
+   const native=bridge.getState(),window=obj(native.view),page=workPdfTextResult(obj(native.state.attachmentWorkspace),openTaskId);
+   if(alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&window.section===null&&window.taskId===openTaskId&&
+      page?.key===workCopy.key&&page.text===workCopy.text)return page;
+  };
+  const shown=current();if(!shown)return;
+  try{
+   if(!navigator.clipboard?.writeText)throw new Error('clipboard unavailable');
+   await navigator.clipboard.writeText(shown.text);
+   if(current())setWorkPdfCopyFeedback({key:shown.key,message:'已复制本页显示的文字。'});
+  }catch{
+   if(current())setWorkPdfCopyFeedback({key:shown.key,message:'复制未完成，可长按选中文字后复制。',error:true});
+  }
  };
  const savePdfPagePending=!!pdfPageText&&pdfTextCurrent&&typeof pdfTextRead.readReceiptId==='string';
  const savedPdfPageTxt=(current:Json)=>{
@@ -1228,8 +1286,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const savedPdfDraft=['SAVED','VERIFIED'].includes(pdfDraft.state)&&Number.isSafeInteger(pdfDraft.savedAt)&&pdfDraft.savedAt>0;
  const pdfPageTextView=pdfPageText&&<section aria-label={`原 PDF 第 ${pdfPageText} 页的文字`}>
   {pdfPageTxt&&<p role="status">本页文字已保存为 TXT。可返回原 PDF 继续阅读。</p>}
-  {pdfTextCurrent?<DocumentProjection value={pdfTextRead} pdfPage={pdfPageText}/>:
+  {workPdfText?workTextResult&&!error&&!view.error&&<>
+   <p className="pw-muted" role="status">{workTextResult.message}</p>
+   {workCopy&&<div className="pw-file-projection"><pre className="pw-file-text" tabIndex={0} data-vaul-no-drag
+    style={{userSelect:'text',WebkitUserSelect:'text'}}>{workCopy.text}</pre></div>}
+  </>:pdfTextCurrent?<DocumentProjection value={pdfTextRead} pdfPage={pdfPageText}/>:
    !view.busy&&!error&&!view.error&&<p role="status">本页文字尚未读到。可返回原 PDF。</p>}
+  {workCopy&&<Button variant="primary" disabled={busy||draftBusy} onClick={()=>void copyWorkPdfPage()}>复制本页显示的文字</Button>}
+  {workCopy&&workPdfCopyFeedback?.key===workCopy.key&&<p role={workPdfCopyFeedback.error?'alert':'status'}>{workPdfCopyFeedback.message}</p>}
   {pdfTextCurrent&&view.canSaveRead===true&&<div className="pw-action-row">
    {pdfPageTxt?<Button variant="primary" disabled={busy||draftBusy} onClick={openPdfPageTxt}>打开已保存的 TXT</Button>:
     <Button variant="primary" disabled={busy||draftBusy} onClick={()=>run('saveRead')}>保存本页文字为 TXT</Button>}
