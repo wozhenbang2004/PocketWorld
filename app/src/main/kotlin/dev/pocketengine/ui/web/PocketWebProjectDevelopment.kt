@@ -312,6 +312,15 @@ internal class PocketWebProjectDevelopment(
                 shownCheckout(original, checkout, allowSole = true)
         }
     }
+    fun offlineFieldsEditor(args:JSONObject, ownerEditorVisible:()->Boolean):PocketWebCheckoutFiles.OfflineFieldsEditor {
+        val original=selected(args)
+        return files.offlineFieldsEditor(args){ checkout->
+            current(original) && ownerEditorVisible() && !busy && restoreFailure==null &&
+                review==null && directReview==null && dependencyReview==null && dependencyCopyReview==null &&
+                shownCheckout(original,checkout,allowSole=true)
+        }
+    }
+
     fun sourceCheckpointFiles(args: JSONObject, shellFast: () -> Boolean, shellMain: () -> Boolean): SourceCheckpointFilesPin {
         val original = selected(args)
         return files.sourceCheckpointPin(args,

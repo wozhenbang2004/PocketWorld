@@ -27,6 +27,7 @@ internal class PocketWebKeptStaticPages(
     private val captureWindow: () -> PocketWebWindowTicket,
     private val acceptsWindow: (PocketWebWindowTicket) -> Boolean,
     private val portableRoute: (String) -> (() -> Boolean),
+    private val fieldsEditor: (JSONObject) -> PocketWebCheckoutFiles.OfflineFieldsEditor,
     private val portableChanged: () -> Unit,
 ) {
     companion object {
@@ -36,6 +37,9 @@ internal class PocketWebKeptStaticPages(
         private const val OPEN=PREFIX+"open"
         private const val COMPARE=PREFIX+"compare"
         private const val CLOSE=PREFIX+"close"
+        private const val SELECT_FIELDS=PREFIX+"text.select"
+        private const val READ_FIELDS=PREFIX+"text.read"
+        private const val CANCEL_FIELDS=PREFIX+"text.cancel"
         private const val REVIEW=PREFIX+"pending.review"
         private const val ABANDON=PREFIX+"pending.abandon"
         private const val DISMISS=PREFIX+"pending.dismiss"
@@ -50,13 +54,14 @@ internal class PocketWebKeptStaticPages(
         private const val PORTABLE_LEAVE=PREFIX+"portable.leave"
         private val portableCommands=setOf(PORTABLE_PREPARE,PORTABLE_PICK,PORTABLE_CANCEL,PORTABLE_WRITE,PORTABLE_CLEAR,PORTABLE_LEAVE)
         private val portableKey=setOf("versionId","manifestIdentity","requestId","sha256")
-        val COMMANDS=setOf(KEEP,LIST,OPEN,COMPARE,CLOSE,REVIEW,ABANDON,DISMISS,REVIEW_REMOVAL,REMOVE,DISMISS_REMOVAL)+portableCommands
+        val COMMANDS=setOf(KEEP,LIST,OPEN,COMPARE,CLOSE,REVIEW,ABANDON,DISMISS,REVIEW_REMOVAL,REMOVE,DISMISS_REMOVAL,SELECT_FIELDS,READ_FIELDS,CANCEL_FIELDS)+portableCommands
         fun mayMutate(action:String)=action==KEEP||action==ABANDON||action==REMOVE||action==PORTABLE_PICK||action==PORTABLE_WRITE
         private val uuid=Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
         private val digest=Regex("[a-f0-9]{64}")
         private val shelfFields=setOf("projectId","visitId","shelfHandle")
         private val exactVersion=setOf("versionId","manifestIdentity")
         private const val IO_WINDOW_MS=20_000L
+        private const val FIELDS_WINDOW_MS=120_000L
         private const val RETIRED_LIMIT=16
         private const val LOST_READ="原项目窗口已关闭，请重新选择原本机网页"
         private const val LOST_EFFECT="本次动作尚未核对，请回同一项目查看；没有重试"
@@ -113,11 +118,22 @@ internal class PocketWebKeptStaticPages(
         }
     }
 
+    /** One ephemeral selection from the exact published shelf, never another checkout or URI. */
+    private class FieldsSelection(
+        val id:String,val window:PocketWebWindowTicket,val visit:Visit,val route:()->Boolean,
+        val catalog:OwnerKeptStaticPages.Catalog,val page:OwnerKeptStaticPages.Page,val registration:Registration,
+        val until:Long,
+    ){
+        lateinit var expiry:Runnable
+        var flight:Flight?=null
+    }
+
     private val main=Handler(Looper.getMainLooper())
     private val fence=KeptStaticMainFence(main)
     private val storage by lazy { OwnerKeptStaticPages(controller.webPresentationActivity().applicationContext) }
     private val delivery=lazy{KeptPortablePageDelivery(controller.webPresentationActivity(),portableChanged)}
     private var shelf:Shelf?=null
+    private var selectedFields:FieldsSelection?=null
     private val retired=LinkedHashSet<Visit>()
 
     private fun mainThread(){check(Looper.myLooper()==main.looper){"请在原项目界面核对保留网页"}}
@@ -132,8 +148,22 @@ internal class PocketWebKeptStaticPages(
         main.removeCallbacks(flight.timeout)
         if(value.flight===flight)value.flight=null
     }
+    private fun fieldsLive(value:FieldsSelection)=selectedFields===value && shelf==null &&
+        document()==value.visit.document && acceptsWindow(value.window) && value.route() &&
+        SystemClock.elapsedRealtime()<value.until
+    private fun retireFields(){
+        val old=selectedFields?:return
+        selectedFields=null
+        main.removeCallbacks(old.expiry)
+        old.flight?.let{flight->
+            old.flight=null
+            main.removeCallbacks(flight.timeout)
+            flight.reject(LOST_READ)
+        }
+    }
     fun clear(){
         mainThread()
+        retireFields()
         val old=shelf?:return
         shelf=null
         remember(old.one)
@@ -144,7 +174,10 @@ internal class PocketWebKeptStaticPages(
         }
         renderer()?.retireKept(old.preview)
     }
-    fun retireLostOwner(){if(shelf?.let{!live(it)}==true)clear()}
+    fun retireLostOwner(){
+        if(shelf?.let{!live(it)}==true)clear()
+        else if(selectedFields?.let{!fieldsLive(it)}==true)retireFields()
+    }
     fun portableSnapshot()=delivery.takeIf{it.isInitialized()}?.value?.snapshot()
     fun portableBackground(){if(delivery.isInitialized())delivery.value.background()}
     fun retirePortable(){if(delivery.isInitialized())delivery.value.retire()}
@@ -165,20 +198,101 @@ internal class PocketWebKeptStaticPages(
         return Registration(workspace,created)
     }
 
-    private fun portableCopy(book:OwnerKeptStaticPages,catalog:OwnerKeptStaticPages.Catalog,
-                             page:OwnerKeptStaticPages.Page,registered:Registration,admitted:()->Boolean):PortableOfflinePage.Copy{
+    private fun <T> verifiedStarter(page:OwnerKeptStaticPages.Page,registered:Registration,admitted:()->Boolean,
+                                    read:(OwnerKeptStaticPages.ProjectWindow)->T):T {
         val project=page.projectId()
         check(admitted()&&projectRegistration(project)==registered){"原项目登记已变化"}
         val local=controller.nativeButlerHost().features.module("local") as? LocalModule
             ?:error("原内置项目登记不可核对")
         local.requireKeptPagePortableStarterForOwner(project,page.checkoutId())
-        val copy=book.portableCopy(object:OwnerKeptStaticPages.ProjectWindow{
+        val result=read(object:OwnerKeptStaticPages.ProjectWindow{
             override fun projectId()=project
             override fun current()=admitted()
-        },catalog,page)
+        })
         local.requireKeptPagePortableStarterForOwner(project,page.checkoutId())
         check(admitted()&&projectRegistration(project)==registered){"原项目登记已变化"}
-        return copy
+        return result
+    }
+
+    private fun portableCopy(book:OwnerKeptStaticPages,catalog:OwnerKeptStaticPages.Catalog,
+                             page:OwnerKeptStaticPages.Page,registered:Registration,admitted:()->Boolean):PortableOfflinePage.Copy =
+        verifiedStarter(page,registered,admitted){window->book.portableCopy(window,catalog,page)}
+
+    private fun selectFields(shelf:Shelf,args:JSONObject):JSONObject{
+        check(shelf.review==null && shelf.removal==null && shelf.portableOffer==null &&
+            (!delivery.isInitialized() || delivery.value.snapshot()?.opt("projectId")!=shelf.one.project)){
+            "请先完成当前网页操作"
+        }
+        val catalog=checkNotNull(shelf.catalog)
+        val id=text(args,"versionId")
+        val manifest=text(args,"manifestIdentity",digest)
+        val version=catalog.versions().singleOrNull{
+            it.versionId()==id && it.manifestIdentity()==manifest && it.projectId()==shelf.one.project && it.resourceCount()==3
+        }?:error("请从原目录选择确切的内置网页版本")
+        val selected=FieldsSelection(UUID.randomUUID().toString(),shelf.window,shelf.one,portableRoute(shelf.one.project),
+            catalog,version,checkNotNull(shelf.registration),SystemClock.elapsedRealtime()+FIELDS_WINDOW_MS)
+        check(selected.route() && renderer()?.keptShelfCanRead()==true){"原项目网页目录已变化"}
+        val reply=present(shelf,JSONObject().put("kind","owner_kept_page_text_selected").put("continuationId",selected.id)
+            .put("versionId",id).put("manifestIdentity",manifest).put("checkoutId",version.checkoutId()))
+        clear() // Close exactly this admitted shelf before the stock Files route takes ownership.
+        selected.expiry=Runnable{if(selectedFields===selected)retireFields()}
+        selectedFields=selected
+        main.postDelayed(selected.expiry,FIELDS_WINDOW_MS)
+        return reply
+    }
+
+    private fun readFields(project:String,args:JSONObject,done:(JSONObject?,String?)->Unit){
+        fields(args,setOf("projectId","continuationId","editor"))
+        val id=text(args,"continuationId")
+        val held=selectedFields?.takeIf{it.id==id && it.visit.project==project && it.flight==null && fieldsLive(it)}
+            ?:error("原保留版本选择已失效，请返回原项目重新选择")
+        val editor=try{
+            fieldsEditor(args.getJSONObject("editor")).also {
+                check(it.project==project && it.checkout==held.page.checkoutId() && it.current()){
+                    "请从同一原手机副本打开干净的已保存网页"
+                }
+            }
+        }catch(failure:Exception){
+            retireFields()
+            throw failure
+        }
+        val flight=Flight(minOf(held.until,SystemClock.elapsedRealtime()+IO_WINDOW_MS),null){message->done(null,message)}
+        flight.timeout=Runnable{if(selectedFields===held && held.flight===flight)retireFields()}
+        held.flight=flight
+        main.postDelayed(flight.timeout,(flight.until-SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+        fun admitted()=held.flight===flight && fieldsLive(held) && SystemClock.elapsedRealtime()<flight.until && editor.current()
+        try{
+            val book=storage
+            controller.runPluginCatalogWork(Runnable{
+                val result=runCatching{
+                    verifiedStarter(held.page,held.registration,{fence.call(::admitted)}){window->
+                        book.continuationFields(window,held.catalog,held.page)
+                    }
+                }
+                main.post{
+                    if(selectedFields!==held || held.flight!==flight)return@post
+                    val current=runCatching{admitted()}.getOrDefault(false)
+                    held.flight=null
+                    main.removeCallbacks(flight.timeout)
+                    retireFields()
+                    val literal=result.getOrNull()
+                    if(!current || literal==null){
+                        done(null,"未核对到原保留版或当前已保存网页，未带入文字。")
+                    }else{
+                        done(JSONObject().put("kind","owner_kept_page_text_read")
+                            .put("projectId",project).put("checkoutId",editor.checkout)
+                            .put("versionId",held.page.versionId()).put("manifestIdentity",held.page.manifestIdentity())
+                            .put("continuationId",id).put("currentFileSha256",editor.sha)
+                            .put("title",literal.title()).put("intro",literal.intro()),null)
+                    }
+                }
+            })
+        }catch(failure:Exception){
+            held.flight=null
+            main.removeCallbacks(flight.timeout)
+            retireFields()
+            throw failure
+        }
     }
 
     private fun <T> work(
@@ -246,6 +360,7 @@ internal class PocketWebKeptStaticPages(
     fun dispatch(action:String,args:JSONObject,done:(JSONObject?,String?)->Unit){
         mainThread()
         if(action==KEEP){
+            retireFields()
             fields(args,setOf("sessionId","documentGeneration","manifestIdentity"))
             val rawGeneration=args.opt("documentGeneration")
             require(rawGeneration is Int || rawGeneration is Long)
@@ -259,6 +374,17 @@ internal class PocketWebKeptStaticPages(
         }
         require(action in COMMANDS)
         val project=text(args,"projectId")
+        if(action==READ_FIELDS){
+            readFields(project,args,done)
+            return
+        }
+        if(action==CANCEL_FIELDS){
+            fields(args,setOf("projectId","continuationId"))
+            val id=text(args,"continuationId")
+            if(selectedFields?.let{it.id==id && it.visit.project==project && it.visit.document==document()}==true)retireFields()
+            done(JSONObject().put("kind","owner_kept_page_text_cancelled").put("continuationId",id),null)
+            return
+        }
         if(action==PORTABLE_LEAVE){
             // Navigation only revokes the exact returned chooser grant, even after the old shelf
             // retired on pause. This path cannot choose, write, or bind another destination.
@@ -277,6 +403,7 @@ internal class PocketWebKeptStaticPages(
             fields(args,setOf("projectId","visitId"))
             val selected=shelf
             if(selected?.one==visit)clear()
+            else if(selectedFields?.visit==visit)retireFields()
             else if(visit !in retired){
                 // Exact cancellation is possible even before the first list was admitted.
                 check(selected==null && projectVisible(project)){"未确认关闭这次原项目窗口"}
@@ -289,7 +416,7 @@ internal class PocketWebKeptStaticPages(
         val first=action==LIST&&!args.has("shelfHandle")
         if(first)fields(args,setOf("projectId","visitId"))
         else fields(args,shelfFields + when(action){
-            OPEN,REVIEW_REMOVAL->exactVersion
+            OPEN,REVIEW_REMOVAL,SELECT_FIELDS->exactVersion
             COMPARE->setOf("beforeVersionId","beforeManifestIdentity","afterVersionId","afterManifestIdentity")
             ABANDON->setOf("reviewId","confirmed")
             DISMISS->setOf("reviewId")
@@ -304,6 +431,7 @@ internal class PocketWebKeptStaticPages(
         check(projectVisible(project) && renderer()?.keptShelfCanRead()==true){"请回到当前私人项目的工作台"}
         val selected=if(first){
             check(visit !in retired){"这次项目网页窗口已关闭，请使用新的选择"}
+            retireFields()
             shelf?.let{
                 check(!live(it)){"请先退出原本机网页窗口"}
                 clear()
@@ -320,6 +448,7 @@ internal class PocketWebKeptStaticPages(
         check(action==LIST || !selected.removalNeedsList){"请先核对原项目保留列表"}
         check(selected.removal==null || action in setOf(LIST,REMOVE,DISMISS_REMOVAL)){"请先退出原保留网页的移除确认"}
         if(action in portableCommands){portable(action,args,selected,done);return}
+        if(action==SELECT_FIELDS){done(selectFields(selected,args),null);return}
         selected.portableOffer=null
         when(action){
             LIST->{

@@ -8,7 +8,7 @@ import {checkoutPathPage,ProjectCheckoutPathSearch,type CheckoutPathHit,type Che
 import {checkoutDirectoryPage,checkoutFileParent,ProjectCheckoutDirectory,type DirectoryFile,type DirectorySelection} from './ProjectCheckoutDirectory';
 import {checkoutGitView, ProjectCheckoutGitChanges, type CheckoutGitView} from './ProjectCheckoutGitChanges';
 import { canOpenSavedStaticPreview, ProjectSavedStaticPreview, type SavedStaticEditor } from './ProjectSavedStaticPreview';
-import { offlinePageDraftText, ProjectOfflinePageFields, readOfflinePageFields, type OfflinePageFields } from './ProjectOfflinePageFields';
+import { offlinePageDraftText, ProjectOfflinePageFields, readKeptPageText, readOfflinePageFields, type KeptPageTextSelection, type OfflinePageFields } from './ProjectOfflinePageFields';
 import { offlinePagePaletteFor, offlinePagePaletteStylesheet, ProjectOfflinePagePalette, type OfflinePagePaletteId } from './ProjectOfflinePagePalette';
 import { bridge } from './bridge';
 import { ProjectSourceCheckpointScreen, ReturnedSourceCheckpointComparison } from './ProjectSourceCheckpointScreen';
@@ -42,7 +42,7 @@ type PythonEditorSource = {path:string;sha256:string;content:string;clickKey:str
 type PythonPackagePicker = {source:string;directoryHandle?:string;hits:number[]};
 type PythonToolsCloseGap = {position:CheckoutSavedPosition;savedHere:boolean;generation:number;projectRevision:number};
 type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: CheckoutSavedPosition; pythonTaskId?: string; expectedPythonSha256?: string; priorSavedFileId?: string; draftOnlyListId?: string; currentOnly?: boolean; entry?: CheckoutWebEntry; adoptedSourceCurrent?:()=>boolean };
-type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
+type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition; keptPageText?:KeptPageTextSelection };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   reopenedProjectDirectory?: boolean;
   preferOfflinePagePreviewAfterSave?: boolean; // Presentation only, never file or preview authority.
@@ -127,6 +127,14 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   const [searchVersion,setSearchVersion]=useState(0);
   const editorContainer=useRef<HTMLElement>(null), editorInput=useRef<HTMLTextAreaElement>(null);
   const [pageFieldsVisit,setPageFieldsVisit]=useState<OfflinePageFieldsVisit|null>(null);
+  const pageFieldsVisitNow=useRef<OfflinePageFieldsVisit|null>(null);
+  const retirePageFields=(visit:OfflinePageFieldsVisit|null,paint=true)=>{
+    if(!visit||pageFieldsVisitNow.current!==visit)return false;
+    // Retire authority before any async reply can observe the still-mounted React form.
+    pageFieldsVisitNow.current=null;
+    if(paint)setPageFieldsVisit(previous=>previous===visit?null:previous);
+    return true;
+  };
   const pageFieldsTrigger=useRef<HTMLButtonElement>(null);
   const [fileFind,setFileFind]=useState<FileFind|null>(null);
   const findId=useId(), findTrigger=useRef<HTMLButtonElement>(null);
@@ -575,32 +583,63 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     const source=currentFile.current;
     return !!source&&live(visit.generation)&&source.text===visit.source&&pageFieldsEditorKey(source)===visit.editor&&pageFieldsEligible(source);
   };
-  const showingPageFields=!!pageFieldsVisit&&!!pageFieldsInitial&&samePageFields(pageFieldsVisit);
+  const showingPageFields=!!pageFieldsVisit&&pageFieldsVisitNow.current===pageFieldsVisit&&!!pageFieldsInitial&&samePageFields(pageFieldsVisit);
   const pageFieldsReady=(visit:OfflinePageFieldsVisit)=>{
     const area=editorInput.current;
     return !entered.current&&!edits.current&&samePageFields(visit)&&area?.isConnected===true&&area.value===textareaText(visit.source);
   };
+  const textDirectory=originalDirectoryOpening;
+  const keptTextSelection=textDirectory?.keptPageText;
+  const currentKeptTextForm=(visit:OfflinePageFieldsVisit)=>pageFieldsVisitNow.current===visit&&
+    textDirectory?.current()===true&&pageFieldsReady(visit);
+  const keptTextOffer=pageFieldsVisit&&showingPageFields&&keptTextSelection&&currentKeptTextForm(pageFieldsVisit)&&
+    keptTextSelection.projectId===projectId&&keptTextSelection.checkoutId===checkoutId&&
+    bridge.getState().capabilities.commands.includes(readKeptPageText)?{
+      selection:keptTextSelection,
+      current:()=>currentKeptTextForm(pageFieldsVisit),
+      read:async():Promise<OfflinePageFields|null>=>{
+        const original=currentFile.current,visit=pageFieldsVisit,selection=keptTextSelection;
+        const same=()=>currentKeptTextForm(visit);
+        if(!original||!same())return null;
+        const sha256=original.baseHash;
+        const result=await bridge.command<Data>(readKeptPageText,{projectId,continuationId:selection.continuationId,
+          editor:{viewHandle,filesHandle:original.filesHandle,fileHandle:original.fileHandle,revision:original.revision,
+            editSequence:original.editSequence,sha256}});
+        if(!same()||!result||result.kind!=='owner_kept_page_text_read'||result.projectId!==projectId||result.checkoutId!==checkoutId||
+          result.continuationId!==selection.continuationId||result.versionId!==selection.versionId||
+          result.manifestIdentity!==selection.manifestIdentity||result.currentFileSha256!==sha256||
+          typeof result.title!=='string'||typeof result.intro!=='string')return null;
+        const literal:OfflinePageFields={title:result.title,intro:result.intro};
+        return offlinePageDraftText(literal)!==null?literal:null;
+      }
+    }:undefined;
   const openPageFields=()=>{
-    if(!file||!pageFieldsInitial)return;
+    const previous=pageFieldsVisitNow.current;
+    if(!file||!pageFieldsInitial||previous&&samePageFields(previous))return;
     const visit={editor:pageFieldsEditorKey(file),generation:generation.current,source:file.text};
-    if(pageFieldsReady(visit))setPageFieldsVisit(visit);
+    if(!pageFieldsReady(visit))return;
+    pageFieldsVisitNow.current=visit;
+    setPageFieldsVisit(visit);
   };
-  const closePageFields=()=>{
-    const visit=pageFieldsVisit;
-    if(!visit||!showingPageFields)return false;
-    setPageFieldsVisit(null);
-    requestAnimationFrame(()=>{if(samePageFields(visit))pageFieldsTrigger.current?.focus()});
-    return true;
+  const closePageFields=(visit=pageFieldsVisitNow.current)=>{
+    if(!visit||pageFieldsVisitNow.current!==visit)return false;
+    const returning=samePageFields(visit);
+    if(!retirePageFields(visit))return false;
+    if(returning)requestAnimationFrame(()=>{
+      if(!pageFieldsVisitNow.current&&samePageFields(visit))pageFieldsTrigger.current?.focus();
+    });
+    return returning;
   };
   const syncPageFields=(fields:OfflinePageFields)=>{
     const visit=pageFieldsVisit,source=currentFile.current,next=offlinePageDraftText(fields);
-    if(!visit||!showingPageFields||!source||!next||next===visit.source||!pageFieldsReady(visit))return false;
+    if(!visit||pageFieldsVisitNow.current!==visit||!showingPageFields||!source||!next||next===visit.source||!pageFieldsReady(visit))return false;
     const sequence=editSequence.current;
     edit(next); // Existing editable draft path only. Save still requires its own action and native receipt.
     if(editSequence.current!==sequence+1||currentText.current!==next)return false;
-    setPageFieldsVisit(null);
+    retirePageFields(visit);
     requestAnimationFrame(()=>{
-      if(live(visit.generation)&&currentFile.current?.fileHandle===source.fileHandle)editorHeading.current?.focus();
+      if(!pageFieldsVisitNow.current&&live(visit.generation)&&currentFile.current?.fileHandle===source.fileHandle)
+        editorHeading.current?.focus();
     });
     return true;
   };
@@ -1064,6 +1103,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
   useEffect(() => {
     alive.current = true; originalWindow.current = windowKey();
     const retire = () => {
+      retirePageFields(pageFieldsVisitNow.current,false);
       const skip = departed.current || !!moving.current;
       const checkpointClosed = skip ? undefined : checkpoints.beforeFilesExit(), epoch = bridge.getDocumentEpoch();
       generation.current++; entered.current = null; initialDirectoryRead.current = null; pythonReviewNow.current=undefined; reviewedStaticRoot.current=null; const old = handle.current; handle.current = '';
@@ -1242,7 +1282,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
       onLeave={()=>leaveStaticPreview(staticPreview)} onVerifiedRoot={paths=>rememberStaticRoot(staticPreview,paths)}
       registerBack={closer=>{staticPreviewClose.current=closer}} />}
     {file&&pageFieldsInitial&&<ProjectOfflinePageFields key={pageFieldsEditorKey(file)} initial={pageFieldsInitial}
-      source={file.text} visible={showingPageFields} busy={locked} back={closePageFields} sync={syncPageFields} />}
+      source={file.text} visible={showingPageFields} busy={locked} back={()=>closePageFields(pageFieldsVisit)} sync={syncPageFields} keptText={keptTextOffer} />}
     {readingMarkdown && <section className="pw-checkout-files">
       <header><h3 ref={markdownHeading} tabIndex={-1} dir="auto">{readingMarkdown.path}</h3>
         <small>已核对保存版本 · <code>{readingMarkdown.sha256.slice(0,8)}</code> · 不加载图片，不打开链接</small></header>
@@ -1273,6 +1313,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     </div>}
     {finder==='changes' ? <>
       {!file ? <section className="pw-form-flow" aria-busy={busy} aria-label="已保存的副本改动">
+        {keptTextSelection&&<p className="pw-field-hint">选择当前已保存的 index.html，再打开「填写网页内容」带入保留版文字。不会改动文件。</p>}
         <h3 ref={changesHeading} tabIndex={-1}>已保存的改动</h3>
         <p className="pw-field-hint">本次读取对照这份副本的源码基线，不含未保存草稿。点新增或修改的文件可与正式项目比较；缺失项只列出，不会在这里删除正式文件。</p>
         {!changes&&(busy?<p role="status">正在读取这份副本的改动…</p>:
@@ -1408,6 +1449,8 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
               `${localMatch.wrapped?'已回到开头 · ':''}第 ${localMatch.line} 行`}</p>}
           </section>}
         </>}
+        {keptTextSelection&&file.path==='index.html'&&!pageFieldsInitial&&
+          <p className="pw-field-hint">未带入保留版文字。当前文件需是干净、已保存的起步网页。没有替换你的草稿。</p>}
         {pageFieldsInitial&&<div className="pw-form-actions"><Button ref={pageFieldsTrigger} variant="secondary" disabled={locked}
           onClick={openPageFields}>填写网页内容</Button></div>}
         <TextAreaField ref={editorInput} label="副本文件内容" value={text} onChange={edit} isReadOnly={busy || !!adoption || !!pythonRunReview || !!choosingPackage || orphan !== null} className="pw-code-editor" />

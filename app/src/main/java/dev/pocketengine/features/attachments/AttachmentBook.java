@@ -87,6 +87,66 @@ public final class AttachmentBook {
                 !"pdf".equals(source.opt("documentFormat")))throw new SecurityException("原 PDF 登记暂不可核对");
         control.checkpoint();return visible(actual);
     }
+    /** Presentation only: an exact committed ordinary import, never a new URI/source grant. */
+    record ImportedLibraryPdf(String id,String sha256,String name,long size) {
+        ImportedLibraryPdf {
+            if(id==null||!UUID.fromString(id).toString().equals(id)||UUID.fromString(id).version()!=4||
+                    sha256==null||!sha256.matches("[0-9a-f]{64}")||
+                    name==null||!name.equals(displayName(name))||!name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")||
+                    size<5||size>MAX_FILE_BYTES)throw new IllegalArgumentException("原 PDF 记录暂不可核对");
+        }
+    }
+    private JSONObject importedLibraryPdfIndex(ImportedLibraryPdf pin,RunControl read)throws Exception{
+        read.checkpoint();String id=pin.id();
+        for(String suffix:new String[]{".part",".json.pending",".import",".import.pending"})
+            if(Files.exists(new File(root,id+suffix).toPath(),LinkOption.NOFOLLOW_LINKS))
+                throw new SecurityException("原 PDF 未完整登记");
+        JSONObject row=readIndex(new File(root,id+".json").toPath(),new IndexReadBudget()),origin=row.optJSONObject("source");
+        if(!id.equals(row.opt("id"))||!pin.sha256().equals(row.opt("sha256"))||!pin.name().equals(row.opt("name"))||
+                row.getLong("size")!=pin.size()||!"application/octet-stream".equals(row.opt("mimeType"))||
+                !privateOutputSource(row)||row.has("groupSource")||origin==null||!"content_uri".equals(origin.opt("kind"))||
+                origin.length()!=3||!(origin.opt("uri") instanceof String)||
+                !(origin.opt("persistentReadPermission") instanceof Boolean))
+            throw new SecurityException("原 PDF 记录已变化");
+        return row;
+    }
+    private BasicFileAttributes importedLibraryPdfStat(Path blob,ImportedLibraryPdf pin)throws Exception{
+        BasicFileAttributes stat=Files.readAttributes(blob,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!stat.isRegularFile()||stat.size()!=pin.size())throw new SecurityException("原 PDF 不可读取");
+        return stat;
+    }
+    /** Like the historical presentation reader, neither of these uses internal(), verifies
+     * execution eligibility, or repairs a pending registration on success or failure. */
+    synchronized JSONObject importedLibraryPdfMetadata(ImportedLibraryPdf pin,RunControl read)throws Exception{
+        JSONObject row=importedLibraryPdfIndex(pin,read);
+        importedLibraryPdfStat(new File(root,pin.id()+".blob").toPath(),pin);
+        read.checkpoint();return visible(row);
+    }
+    synchronized byte[] importedLibraryPdfBytes(ImportedLibraryPdf pin,RunControl read)throws Exception{
+        JSONObject row=importedLibraryPdfIndex(pin,read);
+        Path blob=new File(root,pin.id()+".blob").toPath();
+        BasicFileAttributes before=importedLibraryPdfStat(blob,pin);
+        byte[] bytes=new byte[Math.toIntExact(pin.size())];boolean verified=false;
+        try{
+            MessageDigest digest=MessageDigest.getInstance("SHA-256");
+            try(InputStream input=Files.newInputStream(blob,LinkOption.NOFOLLOW_LINKS)){
+                int offset=0;
+                while(offset<bytes.length){
+                    read.checkpoint();int n=input.read(bytes,offset,Math.min(32768,bytes.length-offset));
+                    if(n<=0)throw new SecurityException("原 PDF 不完整");
+                    digest.update(bytes,offset,n);offset+=n;
+                }
+                read.checkpoint();
+                if(input.read()!=-1||!pin.sha256().equals(hex(digest.digest())))throw new SecurityException("原 PDF 版本不符");
+            }
+            BasicFileAttributes after=importedLibraryPdfStat(blob,pin);
+            JSONObject reread=importedLibraryPdfIndex(pin,read);
+            if(!java.util.Objects.equals(before.fileKey(),after.fileKey())||
+                    !before.lastModifiedTime().equals(after.lastModifiedTime())||!row.toString().equals(reread.toString()))
+                throw new SecurityException("原 PDF 在读取中发生变化");
+            read.checkpoint();verified=true;return bytes;
+        }finally{if(!verified)Arrays.fill(bytes,(byte)0);}
+    }
     /** Presentation-only fixed reply document. Unlike internal()/verifiedBytes(), this
      * neither publishes nor revokes native output eligibility, even on a failed read. */
     private JSONObject historicalReplyDocumentIndex(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{

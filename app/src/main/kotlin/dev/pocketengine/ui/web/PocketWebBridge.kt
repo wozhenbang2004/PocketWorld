@@ -460,7 +460,7 @@ internal class PocketWebBridge(
         ::captureWindow, ::acceptsWindow, ::captureRetainedDraftOriginal, ::captureSuppliedViteLockRoute)
     private val keptStaticPages=lazy {
         PocketWebKeptStaticPages(controller,{projectPreview},{documentId},::keptStaticProjectVisible,::captureWindow,::acceptsWindow,
-            ::captureKeptPortableRoute){publishState()}
+            ::captureKeptPortableRoute,::captureKeptFieldsEditor){publishState()}
     }
     private val sourceCheckpoints=lazy {
         PocketWebSourceCheckpoints(controller,{documentId},::captureSourceCheckpointFiles,SOURCE_CHECKPOINT_CONTINUE_ENABLED){publishState()}
@@ -921,6 +921,19 @@ internal class PocketWebBridge(
             controller.state.conversationId==conversation&&!controller.hasChannelPhoneOrigin&&!phoneComposer.intent&&
             taskReturnSection==null&&controller.conversationReader==null}
     }
+    private fun captureKeptFieldsEditor(args:JSONObject):PocketWebCheckoutFiles.OfflineFieldsEditor{
+        val project=checkNotNull(controller.state.projectId)
+        val shell=captureKeptPortableRoute(project)
+        fun owner()=shell() && controller.webPrivateOwnerVisible() &&
+            !controller.state.chatAttachmentPickerOpen && !controller.state.attachmentImporting &&
+            !attachmentPages.hasOpenWorkspace && !controller.attachmentOutcomes.state.open &&
+            controller.queuedInputsPage==null && localSourceIntake.snapshot()?.isNull("window")!=false &&
+            projectGitImport.snapshot()?.optBoolean("open")!=true && projectLivePreview?.snapshot()?.optBoolean("mounted")!=true &&
+            projectPreview?.keptShelfCanRead()==true
+        check(owner()){"请回到原本机项目编辑器"}
+        return projectDevelopment.offlineFieldsEditor(args,::owner)
+    }
+
     private fun freshLibraryEntry(): (() -> Boolean)? {
         val document = documentId ?: return null
         val ticket = captureWindow()
@@ -1653,10 +1666,11 @@ internal class PocketWebBridge(
                     }
                     return
                 }
-                // Only a no-locator open starts a Library visit. An explicit query may use the same owner check,
-                // but does not start or restore a draft lease.
+                // Only a no-locator open starts a Library visit. An explicit query or View in file
+                // details may recheck that same owner window, without starting or restoring a draft lease.
                 val libraryEntry = if (action == "attachmentWorkspace.open" && args.length() == 0 ||
-                    action == "attachmentWorkspace.action" && draftCommand == "queryDocument") freshLibraryEntry() else null
+                    action == "attachmentWorkspace.action" && (draftCommand == "queryDocument" ||
+                        draftCommand == "openOriginal" && args.length() == 3)) freshLibraryEntry() else null
                 if (action == "attachmentWorkspace.open" && (args.has("messagePdf") || args.has("messageInputDocument"))) {
                     val key=if(args.has("messagePdf"))"messagePdf" else "messageInputDocument"
                     val kind=if(key=="messagePdf")AttachmentMessageInput.PDF else AttachmentMessageInput.WORD_OR_TEXT

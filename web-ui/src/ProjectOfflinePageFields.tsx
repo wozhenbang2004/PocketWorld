@@ -1,8 +1,19 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { Accordion, AccordionItem, Button, TextField } from './forms-library';
 import { InlineDiff } from './shell-library';
+import { bridge } from './bridge';
 
 export type OfflinePageFields = { title: string; intro: string };
+export const selectKeptPageText='projects.keptStaticPages.text.select';
+export const readKeptPageText='projects.keptStaticPages.text.read';
+const cancelKeptPageText='projects.keptStaticPages.text.cancel';
+export const supportsKeptPageText=(can:(action:string)=>boolean)=>[selectKeptPageText,readKeptPageText,cancelKeptPageText].every(can);
+export type KeptPageTextSelection = { projectId:string; checkoutId:string; continuationId:string; versionId:string; manifestIdentity:string; savedAt:number };
+export function retireKeptPageText(selection:KeptPageTextSelection){
+  if(!bridge.getState().capabilities.commands.includes(cancelKeptPageText))return;
+  void bridge.command(cancelKeptPageText,{projectId:selection.projectId,continuationId:selection.continuationId}).catch(()=>{});
+}
+type KeptPageTextOffer={selection:KeptPageTextSelection;current:()=>boolean;read:()=>Promise<OfflinePageFields|null>};
 const titleLimit=80, introLimit=240;
 
 // The exact built-in saved-page v2 wrapper in ProjectLiveProjectTemplate.
@@ -47,22 +58,61 @@ export function readOfflinePageFields(text:string):OfflinePageFields|null {
   return offlinePageDraftText(fields)===text?fields:null;
 }
 
-export function ProjectOfflinePageFields({initial,source,visible,busy,back,sync}:{
-  initial:OfflinePageFields;source:string;visible:boolean;busy:boolean;back:()=>void;sync:(value:OfflinePageFields)=>boolean;
+export function ProjectOfflinePageFields({initial,source,visible,busy,back,sync,keptText}:{
+  initial:OfflinePageFields;source:string;visible:boolean;busy:boolean;back:()=>boolean;sync:(value:OfflinePageFields)=>boolean;
+  keptText?:KeptPageTextOffer;
 }) {
   const [fields,setFields]=useState(initial);
   const [declined,setDeclined]=useState(false);
-  const id=useId(), heading=useRef<HTMLHeadingElement>(null);
-  useLayoutEffect(()=>{if(visible)heading.current?.focus()},[visible]);
+  const [transfer,setTransfer]=useState<{id:string;status:'loading'|'brought'|'same'|'unavailable'|'left';current?:()=>boolean}>();
+  const id=useId(), heading=useRef<HTMLHeadingElement>(null), gesture=useRef(0), used=useRef('');
+  const latest=useRef({visible,keptText});latest.current={visible,keptText};
+  useLayoutEffect(()=>{
+    if(visible)heading.current?.focus();
+    else setTransfer(previous=>previous?.status==='loading'?{...previous,status:'left'}:previous);
+    return()=>{gesture.current+=1};
+  },[visible]);
   if(!visible)return null;
   const changed=fields.title!==initial.title||fields.intro!==initial.intro;
   const proposal=changed?offlinePageDraftText(fields):null;
   const update=(key:keyof OfflinePageFields,value:string)=>{
+    gesture.current+=1;
+    setTransfer(previous=>previous?.status==='loading'?{...previous,status:'left'}:previous);
     setDeclined(false);setFields(previous=>({...previous,[key]:value}));
   };
+  const bring=()=>{
+    const offer=keptText,selection=offer?.selection,original=selection?.continuationId;
+    if(!offer||!original||used.current===original||busy||changed||!offer.current())return;
+    const request=++gesture.current;
+    const current=()=>request===gesture.current&&latest.current.visible&&latest.current.keptText?.selection===selection&&offer.current();
+    used.current=original;setTransfer({id:original,status:'loading',current});
+    void offer.read().then(value=>{
+      if(!current())return;
+      if(!value){setTransfer({id:original,status:'unavailable'});return;}
+      const same=value.title===initial.title&&value.intro===initial.intro;
+      setFields(previous=>current()?value:previous);
+      setTransfer(previous=>current()?{id:original,status:same?'same':'brought'}:previous);
+    }).catch(()=>{if(current())setTransfer({id:original,status:'unavailable'})});
+  };
+  const closing=()=>{
+    if(!back())return; // The parent synchronously retires this exact visit, never a newer one.
+    gesture.current+=1;
+    setTransfer(previous=>previous?.status==='loading'?{...previous,status:'left'}:previous);
+    setDeclined(false);
+  };
+  const status=keptText&&transfer?.id===keptText.selection.continuationId?
+    transfer.status==='loading'&&transfer.current?.()!==true?'left':transfer.status:undefined;
   return <section className="pw-form-flow" aria-labelledby={id}>
     <h3 id={id} ref={heading} tabIndex={-1}>网页文字</h3>
     <p className="pw-field-hint">只修改标题和简介。同步只放进编辑草稿，保存和预览仍由你决定。</p>
+    {keptText&&<div className="pw-form-flow">
+      <p className="pw-field-hint">选择的保留版：{new Date(keptText.selection.savedAt).toLocaleString()}。只支持原始「跟随系统」样式的起步网页。只带入标题和简介，不还原文件或配色。</p>
+      {!status&&<Button variant="secondary" disabled={busy||changed} onClick={bring}>带入保留版文字</Button>}
+      {!status&&changed&&<p className="pw-field-hint">当前表单有未同步文字，不会替换。</p>}
+      {status&&<p role="status">{status==='loading'?'正在核对原保留版和当前已保存网页…':
+        status==='brought'?'已带入当前表单，尚未同步或保存。':status==='same'?'两版文字相同，不需要同步。':
+        status==='left'?'未带入，当前表单文字保留。':'未核对到原保留版或当前已保存网页，未带入。可返回原项目重新选择。'}</p>}
+    </div>}
     <TextField label="页面标题" inputDir="auto" value={fields.title} onChange={value=>update('title',value)} />
     <TextField label="一句简介" inputDir="auto" value={fields.intro} onChange={value=>update('intro',value)} />
     {changed&&!proposal&&<p role="status">请填写标题（最多 {titleLimit} 字符），简介可留空（最多 {introLimit} 字符）。两项都只接受单行文字。</p>}
@@ -71,7 +121,7 @@ export function ProjectOfflinePageFields({initial,source,visible,busy,back,sync}
     </AccordionItem></Accordion>}
     {declined&&<p role="alert">未同步这次表单。可返回源码编辑器核对，未保存文件。</p>}
     <div className="pw-form-actions">
-      <Button variant="secondary" onClick={()=>{setDeclined(false);back()}}>返回源码编辑器</Button>
+      <Button variant="secondary" onClick={closing}>返回源码编辑器</Button>
       <Button disabled={busy||!proposal} onClick={()=>{if(proposal&&!sync(fields))setDeclined(true)}}>同步到编辑草稿</Button>
     </div>
     {changed&&<p className="pw-field-hint">未同步的表单文字只在当前文件版本保留。</p>}

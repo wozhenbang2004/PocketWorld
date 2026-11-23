@@ -3,6 +3,7 @@ import { bridge, type PocketSnapshot } from './bridge';
 import { Accordion, AccordionItem, Button, SelectField, SettingsDialog } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { useProjectPreviewViewport } from './ProjectPreviewPane';
+import { retireKeptPageText, selectKeptPageText, supportsKeptPageText, type KeptPageTextSelection } from './ProjectOfflinePageFields';
 import { exactKeptPortableDelivery, leaveKeptPortableCopy, ProjectKeptPortableCopy, supportsKeptPortableCopy } from './ProjectKeptPortableCopy';
 
 const prefix='projects.keptStaticPages.';
@@ -133,7 +134,7 @@ type RemovalRecheck={page:Page;unknown:boolean};
 type Visit=Binding&{document:number;revisions:string;inactiveRenderer:string;trigger:HTMLButtonElement;catalog:Catalog|null;
   catalogPublished?:true;catalogTimer?:number;
   reader?:ReadVisit;review?:Review;removal?:RemovalReview;removalRecheck?:RemovalRecheck;pair?:PairSelection;
-  busy?:'list'|'compare'|'review'|'abandon'|'dismiss'|'review-removal'|'remove'|'dismiss-removal';notice:string;problem:boolean;
+  busy?:'list'|'compare'|'review'|'abandon'|'dismiss'|'review-removal'|'remove'|'dismiss-removal'|'text-select';notice:string;problem:boolean;
   closing?:Promise<boolean>;closeUnconfirmed?:true;retired?:true;focusOnClose?:boolean};
 type Presentation=Pick<Visit,'catalog'|'notice'|'problem'|'busy'|'pair'|'review'|'removal'|'removalRecheck'> & {reader?:ReadVisit;closing:boolean};
 
@@ -192,8 +193,9 @@ function KeptManifestPair({catalog,selection,disabled,loading,choose,compare,ope
   </Accordion>;
 }
 
-export function ProjectKeptStaticPages({project,active,registerNavigation}:{project:{id:string;name:string};active:boolean;
-  registerNavigation:(control:KeptStaticShelfNavigation|null)=>void}){
+export function ProjectKeptStaticPages({project,active,registerNavigation,continueText}:{project:{id:string;name:string};active:boolean;
+  registerNavigation:(control:KeptStaticShelfNavigation|null)=>void;
+  continueText?:{checkoutId:string;open:(selection:KeptPageTextSelection)=>boolean}}){
   const visit=useRef<Visit|null>(null), latest=useRef(active),mounted=useRef(false);
   const [shown,setShown]=useState<Presentation|null>(null);
   const nextFocus=useRef<Focus|null>(null), panelHeading=useRef<HTMLHeadingElement>(null);
@@ -309,7 +311,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   };
   const checkCatalog=(original:Visit)=>{
     const catalog=original.catalog;
-    if(!catalog||original.closing||original.closeUnconfirmed)return;
+    if(!catalog||original.closing||original.closeUnconfirmed||original.busy==='text-select')return;
     const value=row(bridge.getState().state.keptStaticPageShelf);
     if(sameShelf(value,original,catalog)){
       if(!original.catalogPublished){
@@ -568,6 +570,30 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
         '未提交移除。请先核对列表，再查看其他版本。');
     });
   };
+  const chooseText=(original:Visit,page:Page,trigger:HTMLButtonElement)=>{
+    const catalog=original.catalog, landing=continueText;
+    if(!landing||!supportsKeptPageText(available)||portable||!catalog||!current(original)||!publishedCatalog(original)||
+      original.reader||original.busy||original.closing||original.closeUnconfirmed||original.review||original.removal||original.removalRecheck||
+      !focusable(trigger)||page.resourceCount!==3||page.checkoutId!==landing.checkoutId||!catalog.versions.includes(page))return;
+    original.busy='text-select';note(original,'',false);
+    const stillHere=()=>current(original)&&original.busy==='text-select'&&!original.closing&&!original.closeUnconfirmed;
+    void bridge.command(selectKeptPageText,{...wire(original),shelfHandle:catalog.shelfHandle,
+      versionId:page.versionId,manifestIdentity:page.manifestIdentity}).then(value=>{
+      const r=row(value);
+      if(r.kind!=='owner_kept_page_text_selected'||!sameShelf(r,original,catalog)||!id(r.continuationId)||
+        r.versionId!==page.versionId||r.manifestIdentity!==page.manifestIdentity||r.checkoutId!==page.checkoutId)throw Error();
+      const selection:KeptPageTextSelection={projectId:original.projectId,checkoutId:page.checkoutId,continuationId:r.continuationId,
+        versionId:page.versionId,manifestIdentity:page.manifestIdentity,savedAt:page.savedAt};
+      if(!stillHere()){retireKeptPageText(selection);return;}
+      retire(original); // Native positively closed only this shelf; the later editor must recheck A and B.
+      if(!landing.open(selection))retireKeptPageText(selection);
+    }).catch(()=>{
+      if(!stillHere())return;
+      original.busy=undefined;
+      if(!publishedCatalog(original))original.closeUnconfirmed=true;
+      note(original,'未确认这次保留版选择，未带入文字。请核对原保留列表。');
+    });
+  };
   const back=()=>{
     const original=visit.current;
     if(!original)return false;
@@ -625,7 +651,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   },[shown]);
   const original=visit.current;
   const showing=!!(shown&&original&&current(original)&&
-    (!original.catalogPublished||original.closing||original.closeUnconfirmed||publishedCatalog(original)));
+    (!original.catalogPublished||original.closing||original.closeUnconfirmed||original.busy==='text-select'||publishedCatalog(original)));
   const native=bridge.getState();
   const canEnter=active&&id(project.id)&&ownerRevisions(native,project.id)!==null&&inactiveRenderer(native.state.projectPreview)!==null;
   const frame=showing&&!shown?.closing&&!shown?.reader?.returnRequested?shown?.reader?.frame:undefined;
@@ -645,6 +671,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
             {catalog&&<p className="pw-field-hint">每个项目最多保留 {catalog.maxVersions} 版，合计不超过 {catalog.maxStoredBytes/(1024*1024)} MiB。不会自动替换已有版本。</p>}
             {shown.busy==='list'&&<p role="status">正在核对保留的网页…</p>}
             {shown.busy==='review-removal'&&<p role="status">正在核对所选保留版本…</p>}
+            {shown.busy==='text-select'&&<p role="status">正在确认所选保留版…</p>}
             {catalog?.versions.length===0&&<p>这个项目还没有确认保留的网页。</p>}
             {catalog&&catalog.versions.length>0&&<ul className="pw-form-flow">{catalog.versions.map((page,index)=>{
               const when=new Date(page.savedAt);
@@ -654,6 +681,9 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
                 <div className="pw-form-actions">
                   <Button variant="secondary" size="small" aria-label={`打开第 ${index+1} 项保留的网页，${when.toLocaleString()}`}
                     disabled={rowsDisabled} onClick={event=>open(original,page,event.currentTarget)}>打开这版网页</Button>
+                  {continueText?.checkoutId===page.checkoutId&&page.resourceCount===3&&!portable&&supportsKeptPageText(available)&&
+                    <Button variant="ghost" size="small" aria-label={`用第 ${index+1} 项保留网页的文字继续，${when.toLocaleString()}`}
+                      disabled={rowsDisabled} onClick={event=>chooseText(original,page,event.currentTarget)}>用这版文字继续</Button>}
                   {supportsRemoval()&&<Button variant="ghost" size="small" aria-label={`核对移除第 ${index+1} 项保留网页，${when.toLocaleString()}`}
                     disabled={rowsDisabled} onClick={event=>requestRemoval(original,page,event.currentTarget)}>移除…</Button>}
                 </div>

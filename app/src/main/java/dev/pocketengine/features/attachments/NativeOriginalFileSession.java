@@ -19,16 +19,23 @@ import java.util.*;
 import org.json.*;
 
 /** A foreground reader of an original host-issued source. Ordinary readers keep their
- * existing snapshot cache; a historical reply uses only its own unlinked PDF or in-memory DOCX. */
+ * existing snapshot cache; historical originals and generic Library PDFs have isolated sessions. */
 public final class NativeOriginalFileSession implements AutoCloseable {
     public static final int MAX_RASTER_PIXELS=4*1024*1024;
     private final Context context;private final AttachmentViewSnapshots views;private final String token;
     private final OwnerFilePreviewSource original;private final RunControl lifetime;private final Runnable cancel=this::close;
+    private final boolean libraryPdfRasterOnly;
     public final boolean hasRecognizedBinaryHeader;
     private boolean closed;private PdfRenderer pdf;private final List<ParcelFileDescriptor> descriptors=new ArrayList<>();
-    private NativeOriginalFileSession(Context context,AttachmentViewSnapshots views,String token,OwnerFilePreviewSource original,RunControl lifetime,boolean hasRecognizedBinaryHeader){this.hasRecognizedBinaryHeader=hasRecognizedBinaryHeader;this.context=context.getApplicationContext();this.views=views;this.token=token;this.original=original;this.lifetime=lifetime;}
+    private NativeOriginalFileSession(Context context,AttachmentViewSnapshots views,String token,OwnerFilePreviewSource original,RunControl lifetime,boolean hasRecognizedBinaryHeader){
+        this(context,views,token,original,lifetime,hasRecognizedBinaryHeader,false);
+    }
+    private NativeOriginalFileSession(Context context,AttachmentViewSnapshots views,String token,OwnerFilePreviewSource original,RunControl lifetime,boolean hasRecognizedBinaryHeader,boolean libraryPdfRasterOnly){
+        this.hasRecognizedBinaryHeader=hasRecognizedBinaryHeader;this.libraryPdfRasterOnly=libraryPdfRasterOnly;this.context=context.getApplicationContext();this.views=views;this.token=token;this.original=original;this.lifetime=lifetime;
+    }
     public static NativeOriginalFileSession open(Context context,OwnerFilePreviewSource original,RunControl lifetime)throws Exception {
-        worker();original.requireCurrent(lifetime);if(original.tombstone)throw new IllegalStateException("原删除修订没有文件正文，不打开空文件");byte[] bytes=original.bytes(lifetime);AttachmentViewSnapshots views=new AttachmentViewSnapshots(context);Intent prepared=null;
+        worker();if(original.privateLibraryRasterOnly)throw new SecurityException("请在原私人文件库查看此 PDF");
+        original.requireCurrent(lifetime);if(original.tombstone)throw new IllegalStateException("原删除修订没有文件正文，不打开空文件");byte[] bytes=original.bytes(lifetime);AttachmentViewSnapshots views=new AttachmentViewSnapshots(context);Intent prepared=null;
         try{
             prepared=views.prepare(original.name,original.mimeType,original.sha256,bytes,lifetime);original.requireCurrent(lifetime);
             NativeOriginalFileSession session=new NativeOriginalFileSession(context,views,prepared.getData().getLastPathSegment(),original,lifetime,DocumentReader.hasRecognizedBinaryHeader(bytes));lifetime.onCancel(session.cancel);session.current();return session;
@@ -43,7 +50,7 @@ public final class NativeOriginalFileSession implements AutoCloseable {
         byte[] bytes=original.bytes(lifetime);PdfRenderer renderer=null;NativeOriginalFileSession session=null;boolean ready=false;
         try{
             if(isPdf) {
-                try{renderer=unlinkedHistoryPdf(context,bytes,lifetime);}
+                try{renderer=unlinkedPdf(context,bytes,lifetime,"owner-history-reply-");}
                 catch(InterruptedException retired){throw retired;}
                 catch(Exception unavailable){throw new IOException("暂不能在本机查看这条历史答复的原 PDF",unavailable);}
             }
@@ -57,10 +64,43 @@ public final class NativeOriginalFileSession implements AutoCloseable {
             if(!ready&&session!=null)session.close();
         }
     }
+    /** Metadata eligibility for the original read only. It does not change the saved MIME or grant. */
+    public static boolean matchesGenericLibraryPdf(OwnerFilePreviewSource original,String id,String sha)throws Exception{
+        if(original==null||!original.privateLibraryRasterOnly||id==null||!id.matches("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")||sha==null||
+                !sha.equals(original.sha256)||original.tombstone||original.sizeBytes<5||original.sizeBytes>AttachmentBook.MAX_FILE_BYTES||
+                !"application/octet-stream".equals(original.mimeType)||!original.name.toLowerCase(Locale.ROOT).endsWith(".pdf"))return false;
+        JSONObject meta=original.metadata(),provenance=meta.optJSONObject("source");
+        return id.equals(meta.opt("id"))&&sha.equals(meta.opt("sha256"))&&"application/octet-stream".equals(meta.opt("mimeType"))&&
+                "owner".equals(meta.opt("principalId"))&&"private".equals(meta.opt("spaceId"))&&!meta.optBoolean("outputSourceRetired")&&
+                provenance!=null&&"content_uri".equals(provenance.opt("kind"))&&provenance.isNull("taskId")&&provenance.isNull("runId")&&
+                provenance.isNull("operationId")&&provenance.isNull("projectId")&&provenance.isNull("groupSpaceId")&&
+                provenance.isNull("archiveEvidence")&&provenance.isNull("nativePublication");
+    }
+    /** Only the explicit, same-file private Library visit can use this raster-only reader. */
+    public static NativeOriginalFileSession openGenericLibraryPdf(Context context,OwnerFilePreviewSource original,String id,String sha,RunControl lifetime)throws Exception{
+        worker();if(!matchesGenericLibraryPdf(original,id,sha))throw new SecurityException("原私人文件或版本已变化，没有换用其他文件");
+        byte[] bytes=original.bytes(lifetime);PdfRenderer renderer=null;NativeOriginalFileSession session=null;boolean ready=false;
+        try{
+            // Same exact byte-zero signature as the existing DocumentReader, never a name-only decode.
+            if(bytes.length<5||bytes[0]!='%'||bytes[1]!='P'||bytes[2]!='D'||bytes[3]!='F'||bytes[4]!='-')
+                throw new IOException("原件没有可核对的 PDF 文件头，不能按 PDF 预览。");
+            try{renderer=unlinkedPdf(context,bytes,lifetime,"owner-library-pdf-");}
+            catch(InterruptedException retired){throw retired;}
+            catch(Exception unavailable){throw new IOException("本机未能打开这份 PDF 原件，文件内容未改动。",unavailable);}
+            original.requireCurrent(lifetime);
+            session=new NativeOriginalFileSession(context,null,null,original,lifetime,true,true);
+            session.pdf=renderer;renderer=null;
+            lifetime.onCancel(session.cancel);session.current();ready=true;return session;
+        }finally{
+            Arrays.fill(bytes,(byte)0);
+            if(renderer!=null)renderer.close();
+            if(!ready&&session!=null)session.close();
+        }
+    }
     /** PdfRenderer needs a seekable descriptor. Create an exclusive empty local file,
      * get each owned FD, then unlink before any payload. Only the renderer can keep it alive. */
-    private static PdfRenderer unlinkedHistoryPdf(Context context,byte[] bytes,RunControl lifetime)throws Exception{
-        lifetime.checkpoint();String scratch=new File(context.getCacheDir(),"owner-history-reply-"+UUID.randomUUID()+".tmp").getAbsolutePath();
+    private static PdfRenderer unlinkedPdf(Context context,byte[] bytes,RunControl lifetime,String privatePrefix)throws Exception{
+        lifetime.checkpoint();String scratch=new File(context.getCacheDir(),privatePrefix+UUID.randomUUID()+".tmp").getAbsolutePath();
         int privateFlags=OsConstants.O_NOFOLLOW|OsConstants.O_CLOEXEC;
         FileDescriptor writer=Os.open(scratch,OsConstants.O_WRONLY|OsConstants.O_CREAT|OsConstants.O_EXCL|privateFlags,0600);
         ParcelFileDescriptor reader=null;StructStat created=null;boolean unlinked=false;
@@ -124,7 +164,7 @@ public final class NativeOriginalFileSession implements AutoCloseable {
         }finally{if(!valid){if(opened==null)descriptor.close();else opened.close();}}
     }
     private PdfRenderer pdf()throws Exception {
-        worker();if(!"application/pdf".equals(original.mimeType))throw new IllegalArgumentException("所选原件不是PDF");
+        worker();if(!"application/pdf".equals(original.mimeType)&&!libraryPdfRasterOnly)throw new IllegalArgumentException("所选原件不是PDF");
         if(views==null){current();synchronized(this){if(closed||pdf==null)throw new IllegalStateException("原PDF已关闭");return pdf;}}
         File file=file();
         synchronized(this){if(closed)throw new IllegalStateException("原PDF已关闭");if(pdf==null){ParcelFileDescriptor descriptor=ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY);try{pdf=new PdfRenderer(descriptor);}catch(Exception failure){descriptor.close();throw failure;}if(pdf.getPageCount()>1000000){pdf.close();pdf=null;throw new IllegalArgumentException("PDF页数超过阅读范围");}}return pdf;}
@@ -136,7 +176,7 @@ public final class NativeOriginalFileSession implements AutoCloseable {
                 int sourceWidth=page.getWidth(),sourceHeight=page.getHeight();if(sourceWidth<1||sourceHeight<1)throw new IllegalArgumentException("原PDF页尺寸无效");double scale=Math.min((double)requestedWidth/sourceWidth,Math.sqrt((double)MAX_RASTER_PIXELS/((double)sourceWidth*sourceHeight)));int width=Math.max(1,(int)Math.floor(sourceWidth*scale)),height=Math.max(1,(int)Math.floor(sourceHeight*scale));image=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);image.eraseColor(Color.WHITE);page.render(image,null,null,PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
             }}current();return image;}catch(Exception invalid){if(image!=null)image.recycle();throw invalid;}
     }
-    public boolean pdfSearchAvailable(){return Build.VERSION.SDK_INT>=35;}
+    public boolean pdfSearchAvailable(){return !libraryPdfRasterOnly&&Build.VERSION.SDK_INT>=35;}
     /** Native PDF search over at most twenty original pages. No text layer is not an OCR result. */
     public JSONObject pdfSearch(String query,int firstPage,RunControl control)throws Exception {
         worker();if(!pdfSearchAvailable())throw new IllegalStateException("此设备未提供PDF原文搜索API；原页查看仍可用，也可明确选择原OCR入口");if(query==null||query.isEmpty()||query.length()>256)throw new IllegalArgumentException("PDF查找文字为1至256字符");

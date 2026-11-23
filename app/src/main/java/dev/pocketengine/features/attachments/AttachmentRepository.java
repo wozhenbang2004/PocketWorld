@@ -30,6 +30,28 @@ public final class AttachmentRepository {
         if(!"owner".equals(meta.optString("principalId"))||!"private".equals(meta.optString("spaceId"))||meta.optBoolean("outputSourceRetired")||source!=null&&(source.has("groupSpaceId")||source.optString("kind").startsWith("group_")))throw new SecurityException("此输入不是原私人附件，群只读权限不会转为私人服务上传授权");
         book.requireUnchanged(id,sha,control);return new OwnerFilePreviewSource("attachments",meta,c->book.verifiedBytes(id,sha,c),c->{JSONObject current=book.get(id);if(!"owner".equals(current.optString("principalId"))||!"private".equals(current.optString("spaceId"))||current.optBoolean("outputSourceRetired"))throw new SecurityException("原私人附件已撤回");book.requireUnchanged(id,sha,c);});
     }
+    /** Native fixed Library-details presenter only. No URI, eligibility, export, or task admission. */
+    public OwnerFilePreviewSource privateImportedPdfForLibraryPreview(String id,String sha,String name,long size,
+            RunControl control,java.util.function.BooleanSupplier owner)throws Exception{
+        RunControl.AuthorityCheck current=()->{
+            if(!owner.getAsBoolean())throw new SecurityException("原私人文件窗口已变化");
+        };
+        var pin=new AttachmentBook.ImportedLibraryPdf(id,sha,name,size);
+        JSONObject original=withImportedPdfPreview(control,current,()->book.importedLibraryPdfMetadata(pin,control));
+        return new OwnerFilePreviewSource("private-library-imported-pdf",original,
+                read->withImportedPdfPreview(read,current,()->book.importedLibraryPdfBytes(pin,read)),
+                read->{withImportedPdfPreview(read,current,()->book.importedLibraryPdfMetadata(pin,read));},
+                (destination,read)->{throw new SecurityException("这个本机预览仅用于查看 PDF 页面");},true);
+    }
+    private static <T> T withImportedPdfPreview(RunControl read,RunControl.AuthorityCheck current,
+            java.util.concurrent.Callable<T> readback)throws Exception{
+        try(var scope=read.retainAuthorityCheck(current)){return readback.call();}
+        catch(InterruptedException stopped){throw stopped;}
+        catch(Exception|StackOverflowError unavailable){
+            // Filesystem, index and provider-locator error details never enter a Web viewer response.
+            throw new SecurityException("原 PDF 登记或版本暂不能核对。",unavailable);
+        }
+    }
     public synchronized JSONObject importUri(Uri uri,int receivedFlags,String taskId,String projectId)throws Exception{
         requireContent(uri);if(context.getPackageName().concat(".attachments").equals(uri.getAuthority()))throw new SecurityException("外部文件选择结果不能引用应用私有附件");boolean prior=persisted(uri),kept=prior;
         if((receivedFlags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0&&(receivedFlags&Intent.FLAG_GRANT_READ_URI_PERMISSION)!=0)try{context.getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);kept=persisted(uri);}catch(SecurityException unsupported){kept=prior;}

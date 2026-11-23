@@ -66,14 +66,16 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     data class LibraryPdfResume(val fileId: String, val sha256: String, val identity: String, val page: Int) {
         fun view() = JSONObject().put("fileId", fileId).put("sha256", sha256)
     }
+    /** Only a fresh, explicit native Library-details visit can supply this raster-only identity. */
+    data class GenericLibraryPdf(val fileId: String, val sha256: String)
     /** This is an input from the native reader, not a Web-supplied body or an output lineage. */
     class MarkdownDraftSeed(val viewerId: String, val source: OwnerFilePreviewSource, val fields: Fields,
         internal val decoded: JSONObject)
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
         val rememberLibraryPdf: (() -> Boolean)?, val wordOrigin: AttachmentWordOrigin?, val rememberPosition:Boolean,
-        val historicalReply: Boolean, val accepts: (PocketWebWindowTicket) -> Boolean) {
+        val historicalReply: Boolean, val genericLibraryPdf: GenericLibraryPdf?, val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
-        val kind = declaredKind(source)
+        val kind = if (genericLibraryPdf != null) "pdf" else declaredKind(source)
         val fileId = source.metadata().optString("id")
         var sourceUnavailable = false
         val lifetime = RunControl()
@@ -125,14 +127,18 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     fun bind(source: OwnerFilePreviewSource?, compared: Pair<OwnerFilePreviewSource, OwnerFilePreviewSource>?,
         ticket: PocketWebWindowTicket, rememberLibraryPdf: (() -> Boolean)? = null,
         wordOrigin: AttachmentWordOrigin? = null, rememberPosition:Boolean = true, historicalReply:Boolean = false,
+        genericLibraryPdf: GenericLibraryPdf? = null,
         accepts: (PocketWebWindowTicket) -> Boolean) {
         check(!historicalReply || compared==null && rememberLibraryPdf==null && wordOrigin==null && !rememberPosition)
+        check(genericLibraryPdf==null || source!=null && compared==null && !historicalReply &&
+            rememberLibraryPdf==null && wordOrigin==null && !rememberPosition)
         val same = primary?.source === source && (source==null || primary?.historicalReply==historicalReply) &&
+            primary?.genericLibraryPdf == genericLibraryPdf &&
             comparison?.first?.source === compared?.first && comparison?.second?.source === compared?.second
         if (same) return
         clear()
-        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, rememberPosition, historicalReply, accepts).also { pins[it.id] = it }
-        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, rememberPosition, false, accepts), Pin(compared.second, ticket, null, null, rememberPosition, false, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
+        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, rememberPosition, historicalReply, genericLibraryPdf, accepts).also { pins[it.id] = it }
+        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, rememberPosition, false, null, accepts), Pin(compared.second, ticket, null, null, rememberPosition, false, null, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
         if (pins.isNotEmpty()) main.postDelayed(watchdog, 1500)
     }
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
@@ -141,10 +147,13 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         .put("url", if (pin.sourceUnavailable) "" else "https://pocketengine.local/pocket-files/${pin.id}/content")
         .put("information", pin.information)
     fun snapshot(): JSONObject? = primary?.let(::view)
+    fun boundGenericPdf(source: OwnerFilePreviewSource?, scope: GenericLibraryPdf, viewerId: String): Boolean =
+        primary?.let { it.source === source && it.id == viewerId && it.genericLibraryPdf == scope &&
+            !it.sourceUnavailable && !it.lifetime.isCancelled } == true
     /** This information is assigned only after the exact rendered native raster is acknowledged. */
     fun displayedPdfPage(file:JSONObject?): AttachmentPdfPageText? {
         val pin=primary?:return null
-        if(pin.kind!="pdf" || pin.busy || pin.error!=null || pin.pdfRaster!=null || !matchesOriginal(file) ||
+        if(pin.kind!="pdf" || pin.genericLibraryPdf!=null || pin.busy || pin.error!=null || pin.pdfRaster!=null || !matchesOriginal(file) ||
             runCatching { requireCurrent(pin) }.isFailure)return null
         val info=pin.information?:return null
         val raster=info.opt("pdfRasterId") as? String?:return null
@@ -224,7 +233,12 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     }
     private fun session(pin: Pin): NativeOriginalFileSession = synchronized(pin) {
         requireCurrent(pin)
-        pin.session ?: (if (pin.historicalReply)
+        val generic = pin.genericLibraryPdf
+        pin.session ?: (if (generic != null)
+            pin.lifetime.retainAuthorityCheck { requireBoundPin(pin) }.use {
+                NativeOriginalFileSession.openGenericLibraryPdf(context, pin.source, generic.fileId, generic.sha256, pin.lifetime)
+            }
+            else if (pin.historicalReply)
             pin.lifetime.retainAuthorityCheck { requireBoundPin(pin) }.use {
                 NativeOriginalFileSession.openHistoricalReplyDocument(context, pin.source, pin.lifetime)
             }
@@ -238,6 +252,11 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         catch (failure: Exception) { done(null, failure.message); return }
         val command = args.optString("command")
         if (command !in setOf("load", "read", "find", "check")) { done(null, "不支持这项原件操作"); return }
+        if (pin.genericLibraryPdf != null && !(command=="load" && args.length()==3 ||
+                command=="read" && args.length()==4 && (args.opt("page") as? Int ?: 0)>0 ||
+                command=="check" && args.length()==4 && args.has("displayedPdfRaster"))) {
+            done(null, "此原件只支持在当前私人文件库查看页面"); return
+        }
         if (command == "check" && args.has("displayedPdfRaster")) {
             val raster = pin.pdfRaster
             if (raster == null || !raster.rendered || raster.id != args.opt("displayedPdfRaster")) {

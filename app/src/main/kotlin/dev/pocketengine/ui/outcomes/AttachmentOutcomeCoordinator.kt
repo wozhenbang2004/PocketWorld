@@ -1150,6 +1150,24 @@ internal class AttachmentOutcomeCoordinator(
             JSONObject() to null
         }
     }
+    /** The Web Library has already pinned one visible ordinary import. No fallback to the
+     * ordinary original resolver: that resolver also refreshes attachment reuse eligibility. */
+    fun openImportedLibraryPdfPreview(file:JSONObject,current:()->Boolean,finished:(Boolean)->Unit){
+        fun stillSelected()=privateLibrary()&&state.file===file&&state.originalReturn==AttachmentOriginalReturn.DETAILS&&current()
+        val unavailable="暂不能核对这份本机 PDF，没有打开其他文件。可在文件信息中核对原件。"
+        check(!state.busy&&!exportPending&&state.originalFile==null&&stillSelected()){unavailable}
+        var opened:OwnerFilePreviewSource?=null
+        work(onSuccess={
+            if(stillSelected())opened?.let{state=state.copy(originalFile=it)}
+        },onFinished={same->finished(same&&opened!=null&&state.originalFile===opened)},completionFailure=unavailable){control,_->
+            opened=AttachmentRepository.get(app).privateImportedPdfForLibraryPreview(
+                file.getString("id"),file.getString("sha256"),file.getString("name"),file.getLong("size"),control,::stillSelected)
+            JSONObject() to null
+        }
+    }
+    fun retireImportedLibraryPdfPreview(){
+        if(state.originalFile?.privateLibraryRasterOnly==true)state=state.copy(originalFile=null)
+    }
     fun backFromOriginalFile(){
         when(state.originalReturn){
             AttachmentOriginalReturn.ENTRY->close()
@@ -1517,7 +1535,9 @@ internal class AttachmentOutcomeCoordinator(
             val shown=state.originalFile
             val privateOriginal=state.group==null&&state.team==null&&!state.deviceOriginalOnly&&shown!=null&&
                 shown.sha256==file.optString("sha256")&&shown.metadata().optString("id")==file.optString("id")
-            val showOriginal=restoreFile?.optBoolean("showOriginal")==true || shown!=null&&(state.fromWorkResult||result!=null||privateOriginal)
+            // A passive Library preview has no reopen authority; only the existing exact file-details locator can survive.
+            val showOriginal=shown?.privateLibraryRasterOnly!=true &&
+                (restoreFile?.optBoolean("showOriginal")==true || shown!=null&&(state.fromWorkResult||result!=null||privateOriginal))
             value.put("file",JSONObject().put("id",file.optString("id")).put("sha256",file.optString("sha256")).put("showOriginal",showOriginal))
         }
         state.group?.let{s->value.put("group",JSONObject().put("requestId",s.requestId).put("taskId",s.taskId).put("spaceId",s.spaceId).put("outputId",s.outputId).put("artifactId",s.artifactId).put("audience",s.audience).put("visibility",s.visibility).put("operation",s.sourceOperationHint).put("sourceRun",s.sourceRunHint))}

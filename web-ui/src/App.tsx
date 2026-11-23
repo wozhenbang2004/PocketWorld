@@ -116,6 +116,7 @@ import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFo
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import {ProjectKeptStaticPages,supportsKeptStaticPages,type KeptStaticShelfNavigation} from './ProjectKeptStaticPages';
+import {retireKeptPageText,type KeptPageTextSelection} from './ProjectOfflinePageFields';
 import {canOpenSavedStaticPreview} from './ProjectSavedStaticPreview';
 import type {ProjectDraftReturn} from './ProjectConventionDraftAction';
 import {ContinuedProjectBinding} from './ProjectWorkBinding';
@@ -11050,15 +11051,16 @@ export default function App(){
  };
  const savedStaticFolder=currentProject&&route==='projects'&&!projectPreview.expanded&&
    canEditImportedCheckout(can)&&canOpenSavedStaticPreview()?originalSavedStaticFolder(currentProject.id):null;
- const chooseSavedStaticFile=(source:ProjectImportedEditor)=>{
+ const chooseSavedStaticFile=(source:ProjectImportedEditor,keptPageText?:KeptPageTextSelection)=>{
   const projectId=currentProject?.id,initial=bridge.getState(), view=obj(initial.view);
   const navigation=navigationWindow.current,taskRequest=reviewRequest.current;
   const resume=view.resumeRevision,revision=initial.state.requestedProjectRevision;
-  if(!projectId||source.projectId!==projectId||route!=='projects'||projectSection!=='preview'||viteResultLookupNow.current)return;
+  if(!projectId||source.projectId!==projectId||route!=='projects'||projectSection!=='preview'||viteResultLookupNow.current||
+    keptPageText&&(source.exactSavedPageStarter!==true||keptPageText.projectId!==projectId||keptPageText.checkoutId!==source.checkoutId))return false;
   if(previewBlocked||taskOpening||projectPreview.expanded||!Number.isSafeInteger(resume)||!Number.isSafeInteger(revision)||
      projectDraftReturn||projectBuildReturn||projectImportedEditor||projectLocalFilesIntent||pythonSetupReturn||dependencyBuildReturn||
      viteToolsReturn||projectWorkDrafts[projectId]?.operation||projectWorkDrafts[projectId]?.expanded){
-   setLocalError('请先完成原项目的选择或审阅。没有打开其他文件。');return;
+   setLocalError('请先完成原项目的选择或审阅。没有打开其他文件。');return false;
   }
   const owner=()=>{
    const live=bridge.getState(),place=obj(live.view),state=live.state;
@@ -11070,12 +11072,13 @@ export default function App(){
     canEditImportedCheckout(action=>live.capabilities.commands.includes(action))&&canOpenSavedStaticPreview()&&
     sameImportedEditor(source,originalSavedStaticFolder(projectId));
   };
-  if(!owner()){setLocalError('原手机副本已变化，没有读取其他文件。');return;}
+  if(!owner()){setLocalError('原手机副本已变化，没有读取其他文件。');return false;}
   const before=projectWorkPresentations[projectId],temporary:ProjectWorkPresentation={open:true,mode:'default'};
-  const original:ProjectViteResultLookup={kind:'phone-source',projectId,source,
+  const original:ProjectViteResultLookup={kind:'phone-source',projectId,source,keptPageText,
    current:()=>viteResultLookupNow.current===original&&owner(),
    finish:reason=>{
     if(viteResultLookupNow.current!==original)return;
+    if(keptPageText)retireKeptPageText(keptPageText);
     // Undo only this visit's presentation. Restore Preview before dropping
     // the hold that blocks ordinary Work inspection.
     setProjectSections(previous=>previous[projectId]==='work'?{...previous,[projectId]:'preview'}:previous);
@@ -11091,6 +11094,7 @@ export default function App(){
   viteResultLookupNow.current=original;setViteResultLookup(original);
   setProjectSections(previous=>({...previous,[projectId]:'work'}));
   setProjectWorkPresentations(previous=>({...previous,[projectId]:temporary}));
+  return true;
  };
  const dismissProjectDraftReturn=(id:string)=>{setProjectDraftReturn(null);setProjectWorkPresentations(previous=>({...previous,[id]:{open:false,mode:'default'}}));};
  const openStagedProjectDraft=(target:ProjectDraftReturn)=>{
@@ -11346,7 +11350,9 @@ export default function App(){
   <ProjectKeptStaticPages key={currentProject.id} project={currentProject}
     active={ready&&route==='projects'&&!projectPreview.expanded&&!previewBlocked&&!taskOpening&&
       !packageOpening&&!choosingSavedStaticFile&&!projectStartDraft?.expanded}
-    registerNavigation={registerKeptStaticShelf}/>:null;
+    registerNavigation={registerKeptStaticShelf}
+    continueText={projectSection==='preview'&&savedStaticFolder?.exactSavedPageStarter===true?
+      {checkoutId:savedStaticFolder.checkoutId,open:selection=>chooseSavedStaticFile(savedStaticFolder,selection)}:undefined}/>:null;
  const shownModelWorkArrival=route==='projects'&&modelWorkArrival?.navigation===navigationRevision?modelWorkArrival:null;
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}

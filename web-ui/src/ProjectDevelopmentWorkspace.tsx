@@ -9,6 +9,7 @@ import { savedPythonPath, type OriginalPythonRun } from './owner-python-run';
 import { ownerPythonRepairObservation, type OwnerPythonRepairObservation } from './setup-contract';
 import type {DirectNodeDependencyPin} from './project-execution';
 import { ProjectCheckoutFiles, checkoutWebEntry, type CheckoutBuildEditorResume, type CheckoutSavedPosition, type CheckoutPythonToolsDeparture, type CheckoutSaveForBuild, type CheckoutWebEntry } from './ProjectCheckoutFiles';
+import type { KeptPageTextSelection } from './ProjectOfflinePageFields';
 import { hasCheckpointContinue, type CheckpointFilesArrival } from './project-source-checkpoint-continue-files';
 import { ProjectSavedWebLink } from './ProjectSavedBuildWeb';
 import type { ProjectViteResultTarget } from './FirstNodeWebOutput';
@@ -45,7 +46,7 @@ export type ProjectViteToolsPosition = {projectId:string;checkoutId:string;sourc
 export type ProjectViteToolsReturn = {position:ProjectViteToolsPosition;runtimeIdentity:string; current:()=>boolean; take:()=>boolean};
 type ProjectStoredWebResultLookup = {kind:'built';projectId:string;current:()=>boolean;finish:(result?:ProjectViteResultTarget)=>void};
 type ProjectPhoneFolderVisit = {kind:'phone-source';projectId:string;source:ProjectImportedEditor;current:()=>boolean;finish:(reason?:string)=>void;
-  chosenSavedFile?:CheckoutSavedPosition; awaitingFormalClose?:()=>boolean};
+  chosenSavedFile?:CheckoutSavedPosition; awaitingFormalClose?:()=>boolean; keptPageText?:KeptPageTextSelection};
 export type ProjectViteResultLookup = ProjectStoredWebResultLookup | ProjectPhoneFolderVisit;
 export const modelSettingsWorkDraftPurpose='model_settings_work_draft';
 export type ModelSettingsWorkDraft={purpose:typeof modelSettingsWorkDraftPurpose;handle:string;projectId:string;checkoutId:string};

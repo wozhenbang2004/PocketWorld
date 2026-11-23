@@ -11,12 +11,16 @@ public final class OwnerFilePreviewSource {
     interface Current {void check(RunControl control)throws Exception;}
     interface Copy {void write(java.io.OutputStream destination,RunControl control)throws Exception;}
     private final JSONObject metadata;private final Read read;private final Current current;private final Copy copy;
-    public final String identity,sha256,mimeType,name;public final long sizeBytes;public final boolean tombstone;
+    public final String identity,sha256,mimeType,name;public final long sizeBytes;
+    public final boolean tombstone,privateLibraryRasterOnly;
     OwnerFilePreviewSource(String provider,JSONObject original,Read read,Current current)throws Exception {
         this(provider,original,read,current,null);
     }
     OwnerFilePreviewSource(String provider,JSONObject original,Read read,Current current,Copy copy)throws Exception {
-        this.copy=copy;
+        this(provider,original,read,current,copy,false);
+    }
+    OwnerFilePreviewSource(String provider,JSONObject original,Read read,Current current,Copy copy,boolean privateLibraryRasterOnly)throws Exception {
+        this.copy=copy;this.privateLibraryRasterOnly=privateLibraryRasterOnly;
         this.metadata=ProjectSources.copy(original);this.metadata.remove("content");this.metadata.remove("contentBase64");this.read=java.util.Objects.requireNonNull(read);this.current=java.util.Objects.requireNonNull(current);
         tombstone=original.optBoolean("tombstone")||"file_tombstone".equals(original.optString("kind"));sha256=original.getString("sha256");mimeType=original.optString("mimeType","application/octet-stream");name=original.optString("name",original.optString("path","原文件"));sizeBytes=original.has("sizeBytes")?original.getLong("sizeBytes"):original.getLong("size");
         if(tombstone?(!sha256.equals("absent")||sizeBytes!=0):(!sha256.matches("[a-f0-9]{64}")||sizeBytes<0||sizeBytes>AttachmentBook.MAX_FILE_BYTES))throw new SecurityException("原文件预览版本或字节范围无效");

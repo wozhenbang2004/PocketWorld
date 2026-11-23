@@ -168,6 +168,31 @@ internal class PocketWebCheckoutFiles(private val controller: PocketWorldControl
             receipt
         }
     }
+    data class OfflineFieldsEditor(val project:String,val checkout:String,val sha:String,val current:()->Boolean)
+
+    /** Observe only the original clean editor. Do not open a file, retire a checkpoint or read its resources. */
+    fun offlineFieldsEditor(args:JSONObject, selectedCheckout:(String)->Boolean):OfflineFieldsEditor {
+        require(args.keys().asSequence().toSet()==setOf("viewHandle","filesHandle","fileHandle","revision","editSequence","sha256"))
+        val original=selected(args)
+        val file=opened(original,args)
+        val revision=number(args,"revision")
+        val sequence=number(args,"editSequence")
+        val sha=text(args,"sha256",64)
+        val held=file.draft
+        fun currentEditor():Boolean = current(original) && !busy && original.ordinaryListShown &&
+            original.sourcePath==null && !original.checkpointSibling && original.checkpointPin==null &&
+            original.savedStaticPageEligible && original.adoption==null && original.python==null &&
+            original.opened===file && file.draft===held && file.sequence==sequence && !file.saveUnknown && file.formal==null &&
+            held.projectId==original.project && held.checkoutId==original.checkout &&
+            held.revision==revision && held.baseHash==sha && store.holdsExact(held) && store.persistenceError(held).isNullOrBlank() &&
+            LocalModule.savedStaticEditorEntry(held) && selectedCheckout(original.checkout)
+        check(currentEditor()){"请先在原私人副本核对当前已保存的 index.html"}
+        // This also refuses arbitrary/structural HTML in the current saved editor.
+        dev.pocketengine.features.local.project.PortableOfflinePage.readStarterIndexFields(held.baseContent)
+        check(currentEditor()){"原已保存文件已变化"}
+        return OfflineFieldsEditor(original.project,original.checkout,sha,::currentEditor)
+    }
+
     /** Held only by the original editor and its taskless renderer, never returned over the bridge. */
     class SavedStaticPage(val project: String, val checkout: String, val entrySha256: String,
         val current: () -> Boolean, val missingReview: (List<String>) -> JSONObject,

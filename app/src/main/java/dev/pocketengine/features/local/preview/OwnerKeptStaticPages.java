@@ -433,6 +433,17 @@ public final class OwnerKeptStaticPages {
      * The caller separately proves the native original starter registration; no renderer is mounted. */
     public dev.pocketengine.features.local.project.PortableOfflinePage.Copy portableCopy(
             ProjectWindow window,Catalog shown,Page page)throws Exception{
+        return readStarter(window,shown,page,dev.pocketengine.features.local.project.PortableOfflinePage::fromVerifiedStarter);
+    }
+    /** Read two literal strings from one still-committed exact slot; does not construct portable HTML. */
+    public dev.pocketengine.features.local.project.PortableOfflinePage.LiteralFields continuationFields(
+            ProjectWindow window,Catalog shown,Page page)throws Exception{
+        return readStarter(window,shown,page,dev.pocketengine.features.local.project.PortableOfflinePage::readOriginalStockStyleFields);
+    }
+    @FunctionalInterface private interface StarterRead<T>{
+        T read(byte[] entry,byte[] css,byte[] script)throws Exception;
+    }
+    private <T> T readStarter(ProjectWindow window,Catalog shown,Page page,StarterRead<T> consumer)throws Exception{
         String project=project(window);
         if(!project.equals(shown.projectId)||!project.equals(page.projectId)||page.resourceCount!=3)
             throw new SecurityException("只保存原保留版的入口、样式和计数器");
@@ -447,7 +458,7 @@ public final class OwnerKeptStaticPages {
                 var css=bundle.resource(bundle.origin+"src/style.css");
                 var script=bundle.resource(bundle.origin+"src/main.js");
                 if(entry==null||css==null||script==null)throw new SecurityException("原保留版缺少确切起步资源");
-                var result=dev.pocketengine.features.local.project.PortableOfflinePage.fromVerifiedStarter(entry.bytes(),css.bytes(),script.bytes());
+                T result=consumer.read(entry.bytes(),css.bytes(),script.bytes());
                 requireSame(slot.identity,leaf(slot.path));requireRoot(shown.root);requireCurrent(window,project);
                 return result;
             }

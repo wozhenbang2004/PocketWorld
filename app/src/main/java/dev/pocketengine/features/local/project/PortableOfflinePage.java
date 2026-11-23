@@ -53,6 +53,23 @@ public final class PortableOfflinePage {
         return new Copy(result,ProjectSources.sha256(result));
     }
 
+    public record LiteralFields(String title,String intro){}
+
+    /** Text continuation in this tranche accepts only the original, stock v2 stylesheet. */
+    public static LiteralFields readOriginalStockStyleFields(byte[] entry,byte[] css,byte[] js)throws Exception{
+        var original=ProjectLiveProjectTemplate.builtinSavedPageStarterFiles();
+        if(entry.length>MAX_INPUT_BYTES||!Arrays.equals(css,utf8(original.get("src/style.css")))||
+                !Arrays.equals(js,utf8(original.get("src/main.js"))))throw unavailable();
+        String html=StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(entry)).toString();
+        return requireLiteralFields(html,original.get("index.html"));
+    }
+
+    /** A separate, exact structured editor check; does not read or restore its CSS. */
+    public static LiteralFields readStarterIndexFields(String html){
+        if(html.length()>MAX_INPUT_BYTES||utf8(html).length>MAX_INPUT_BYTES)throw unavailable();
+        return requireLiteralFields(html,ProjectLiveProjectTemplate.builtinSavedPageStarterFiles().get("index.html"));
+    }
+
     private static String verifiedStylesheet(byte[] saved,String stock){
         if(saved.length>MAX_INPUT_BYTES)return null;
         for(String known:new String[]{stock,stock+PAPER_CSS_SUFFIX,stock+INK_CSS_SUFFIX})
@@ -60,7 +77,7 @@ public final class PortableOfflinePage {
         return null;
     }
 
-    private static void requireLiteralFields(String html,String template){
+    private static LiteralFields requireLiteralFields(String html,String template){
         // Split the app-owned scaffold, then require the entire retained HTML to round trip.
         int first=template.indexOf(DEFAULT_TITLE),next=template.indexOf(DEFAULT_TITLE,first+DEFAULT_TITLE.length());
         int intro=template.indexOf(DEFAULT_INTRO,next+DEFAULT_TITLE.length());
@@ -78,6 +95,7 @@ public final class PortableOfflinePage {
         String title=decode(escapedTitle),description=decode(escapedIntro);
         if(title.isBlank()||!literal(title,80)||!literal(description,240)||
                 !html.equals(start+encode(title)+between+encode(title)+after+encode(description)+end))throw unavailable();
+        return new LiteralFields(title,description);
     }
 
     private static boolean literal(String value,int limit){
