@@ -31,6 +31,7 @@ import dev.pocketengine.features.teams.TeamCoordinator
 import dev.pocketengine.ui.AttachmentMessageInput
 import dev.pocketengine.ui.AttachmentResultRun
 import dev.pocketengine.ui.ChatInputRules
+import dev.pocketengine.ui.ConversationReadPage
 import dev.pocketengine.ui.MediaOwnerUi
 import dev.pocketengine.ui.PhoneCapabilityState
 import dev.pocketengine.ui.PocketWorldController
@@ -341,7 +342,7 @@ internal class PocketWebBridge(
     private var pauseNoteReview: PauseNoteReview? = null
     @Volatile private var pauseReadSerial = 0L
     private var taskReturnSection: String? = null
-    private var workspaceResumeRevision = 0L
+    @Volatile private var workspaceResumeRevision = 0L
     // UI exit ownership only. Carry neither memory data nor a private read/write window through Tasks.
     private data class ManualMemoryProfileExit(val visit: String, val document: String, val suspendedTask: String? = null)
     private var manualMemoryProfileExit: ManualMemoryProfileExit? = null
@@ -546,7 +547,7 @@ internal class PocketWebBridge(
             "app.ready", "app.refresh", "notice.dismiss", "notice.task.close", "phone.notice.refresh", "phone.notice.close", "error.dismiss", "execution.read", "execution.review", "execution.confirm",
             "composer.edit", "composer.send", "composer.mode", "composer.intent", "composer.reading", "composer.query", "composer.retry", "composer.returnPending", "composer.releasePreparedFirst", "composer.readSavedFirst", "composer.team.replace",
             "chat.cancel", "ownerWork.input", "ownerWork.control", "message.origin", "conversation.new", "conversation.select", "conversation.directory", "conversation.reader.open", "conversation.reader.close", "conversation.reader.earlier", "conversation.reader.refresh", "conversation.reader.position", "conversation.reader.select", "conversation.reader.attachment",
-            "conversation.reader.searchFiles", "conversation.reader.openSearchFile",
+            "conversation.reader.searchFiles", "conversation.reader.openSearchFile", "conversation.reader.openOriginalReplyDocument",
             "ownerWork.teamReport.read", "ownerWork.deliveryText.read", "ownerWork.deliveryText.release", "ownerWork.deliverySpan.stage", "ownerWork.deliverySpan.remove", "composer.retireRetainedSpanSend", "ownerWork.supplement.read", "ownerWork.supplement.edit", "ownerWork.supplement.send", "ownerWork.supplement.query", "ownerWork.report.history", "ownerWork.report.followUp.prepare", "ownerWork.report.followUp.resume", "ownerWork.report.followUp.discardEmpty",
             "attachments.pick", "attachments.pickForDraft", "attachments.openPicker", "attachments.closePicker", "attachments.toggle", "attachments.remove", "attachments.open", "sources.open", "sources.read", "sources.close",
             "phone.request.original", "phone.result.taskOriginal",
@@ -1045,7 +1046,9 @@ internal class PocketWebBridge(
             val exactPicker=currentReplyPicker()
             firstVisit = ordinaryFirstVisit()
             projection = PocketWebState.snapshot(controller, ::canReadProjectGoal, ::canReadOriginalViteEditorResume,
-                ordinaryFirstTurnPresentation = if (firstVisit != null && firstVisit == ordinaryFirstRead) ordinaryFirstFailure else null) {
+                ordinaryFirstTurnPresentation = if (firstVisit != null && firstVisit == ordinaryFirstRead) ordinaryFirstFailure else null,
+                historicalReplyDocuments={ page,row -> if(ordinaryHistoryReplyPage(page))
+                    page.historicalReplyDocuments(row).map { it.file } else emptyList() }) {
                 liveReplyDocuments(it,inOwnReader=controller.attachmentOutcomes.state.messageReplyDocumentOnly,allowSummary=true,includeText=true).orEmpty()
                     .map{original->PocketWebState.ReplyDocument(original.file,original.checkFirst)}
             }
@@ -2154,6 +2157,9 @@ internal class PocketWebBridge(
                     complete(id,value,error,retainValue=false,replayHint="请从同一原私聊重新核对阅读位置");publishState()
                 }
                 return
+            }
+            if(action=="conversation.reader.openOriginalReplyDocument"){
+                openHistoricalReplyDocument(id,args);return
             }
             if(action=="conversation.reader.searchFiles"||action=="conversation.reader.openSearchFile"){
                 searchAnchorFiles(id,action,args);return
@@ -5677,6 +5683,52 @@ internal class PocketWebBridge(
                 complete(id,page,failure,retainValue=false)
             }
         }
+    }
+
+    /** Only a consciously browsed/resumed ordinary History of the active private chat.
+     * Contextual Search, report, reminder, device and detached foreign-chat windows do not qualify. */
+    private fun ordinaryHistoryReplyPage(page:ConversationReadPage):Boolean =
+        !closed&&documentId!=null&&section==null&&taskViewId==null&&taskReturnSection==null&&
+            controller.webPrivateOwnerVisible()&&!phoneComposer.intent&&!controller.hasChannelPhoneOrigin&&
+            controller.canReadConversationWindow(page)&&page.initialized&&!page.loading&&page.error==null&&!page.limited&&
+            page.reportAnchor==null&&page.workRequestAnchor==null&&page.searchAnchor==null&&page.reminderSource==null&&page.readingKey==null&&
+            page.detachedHistoryEpoch==controller.composerViewEpoch&&controller.state.conversationId==page.conversation&&
+            controller.state.filePath==null&&controller.queuedInputsPage==null&&!controller.state.chatAttachmentPickerOpen&&
+            controller.composerDraft?.let { it.key=="conversation:${page.conversation}"&&it.conversationId==page.conversation }==true
+
+    private fun openHistoricalReplyDocument(request:String,args:JSONObject) {
+        checkedPayload(args,setOf("window","conversationId","messageId","sourceRevision","fileId","sha256","visit"))
+        val reader=requiredLong(args,"window");val conversation=requiredString(args,"conversationId")
+        val message=requiredString(args,"messageId");val revision=requiredLong(args,"sourceRevision")
+        val fileId=requiredString(args,"fileId");val sha=requiredString(args,"sha256");val visit=requiredString(args,"visit")
+        check(reader>0&&revision==1L&&listOf(conversation,message,fileId,visit).all { OriginalReplyDocument.uuid(it) }&&
+            sha.matches(Regex("[a-f0-9]{64}"))) { "原历史文档位置不可核对" }
+        val unavailable="历史中的原答复或文件版本已变化，没有打开其他文件。"
+        fun selected()=controller.conversationReader?.takeIf { page ->
+            page.window==reader&&page.conversation==conversation&&ordinaryHistoryReplyPage(page)
+        }?.let { page ->
+            page.messages.singleOrNull { it.id==message }?.takeIf { it.sourceRevision==revision }
+                ?.let(page::historicalReplyDocuments)?.singleOrNull { it.file.id==fileId&&it.file.sha256==sha }
+        }
+        val original=selected()?:error(unavailable)
+        check(!attachmentPages.hasOpenWorkspace&&!controller.attachmentOutcomes.state.open) { unavailable }
+        val document=requireNotNull(documentId)
+        val ticket=PocketWebWindowTicket(commandFence.ticket(),controller.webPhoneViewerWindowTicket())
+        val owner=controller.displayedPhoneWindowVersion()
+        val composerEpoch=controller.composerViewEpochForScopedRead
+        val source=controller.historicalReplyReadVersion()
+        val resume=workspaceResumeRevision
+        fun fast()=!closed&&documentId==document&&workspaceResumeRevision==resume&&commandFence.accepts(ticket.bridge)&&
+            controller.displayedPhoneWindowAlive(owner)&&controller.composerViewEpochForScopedRead==composerEpoch&&
+            controller.conversationReaderRevision==reader&&controller.historicalReplyReadVersion()==source
+        fun current()=fast()&&ticket.accepts(commandFence.ticket(),controller.webPhoneViewerWindowTicket())&&selected()==original
+        fun viewerCurrent()=if(Looper.myLooper()==Looper.getMainLooper())current() else fast()
+        check(current()){unavailable}
+        val opened=attachmentPages.openHistoricalReplyDocument(original.file,original.target,
+            PocketWebAttachments.HistoricalReplyVisit(reader,visit),ticket,::viewerCurrent)
+        complete(request,opened.put("reader",reader).put("visit",visit),null,retainValue=false,
+            replayHint="仅从这条历史原答复重新打开文件")
+        publishState()
     }
 
     private data class SearchAnchorFileOffer(val handle:String,val original:TaskStore.SearchAnchorWorkResult,

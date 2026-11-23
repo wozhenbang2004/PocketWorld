@@ -389,6 +389,10 @@ internal class AttachmentOutcomeCoordinator(
             else app.attachmentOutcomes.originalReplyDocument(target,control)
         }
     }
+    internal fun openHistoricalReplyDocument(file:UiChatAttachment,
+        target:dev.pocketengine.features.attachments.OriginalReplyDocument.Target,current:()->Boolean) {
+        openMessageOriginal(file,null,current){control->app.attachmentOutcomes.historicalReplyDocument(target,control){current()}}
+    }
     internal fun openSearchAnchorFile(file:UiChatAttachment,current:()->Boolean,
         read:(RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource) =
         openMessageOriginal(file,null,current,searchAnchor=true,read=read)

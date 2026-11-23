@@ -22,7 +22,7 @@ type BookReplyLink={current:(shown:Json)=>boolean;restore:()=>void};
 type BookReplyExit={windowId:string;link:BookReplyLink;accepted:boolean;exited:boolean;scheduled?:true};
 type Props={
  onOriginalBookReply?:(shown:Json)=>BookReplyLink|undefined;
- state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event,messagePdfWindow?:string)=>void;returnToDeliveredFiles?:boolean;openTaskId?:string;
+ state:Json;registerBack:(handler:(()=>boolean)|null)=>void;onReturnToSearch?:()=>void;onReturnFocus?:(event:Event,messagePdfWindow?:string,historicalReply?:{reader:number;visit:string})=>void;returnToDeliveredFiles?:boolean;openTaskId?:string;
  canReturnToOpenWork?:(current:Json)=>boolean;
  draftTarget?:FileDraftTarget;resultTopic?:FileResultTopic;keepResultReadingDraft?:FileDraftTarget;
  onStageFile?:(reference:Json,target:FileDraftTarget,stillCurrent:()=>boolean)=>Promise<boolean>;
@@ -317,8 +317,13 @@ const isLiveMessageOriginal=(view:Json)=>view.messagePdfOnly===true||view.messag
 export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onReturnFocus,returnToDeliveredFiles,openTaskId,canReturnToOpenWork,draftTarget,resultTopic,keepResultReadingDraft,onStageFile,onOpenDraft,onUseResult,onChooseResultAttachment,onAdoptFileNote,onVerifyReportFileWork,onChooseAttachment,standaloneDocumentAttachmentDraft,replyAttachmentDraft,readWorkTextVisit,quotedDraftArrival,onOriginalBookReply}:Props) {
  const incoming=obj(state.attachmentWorkspace),retained=useRef<Json|null>(null);
  const lastLiveMessageFileWindow=useRef<string|undefined>(undefined);
- if(incoming.open===true&&incoming.ready===true)
+ const lastHistoricalReply=useRef<{reader:number;visit:string}|undefined>(undefined);
+ if(incoming.open===true&&incoming.ready===true){
   lastLiveMessageFileWindow.current=isLiveMessageOriginal(incoming)&&typeof incoming.windowId==='string'?incoming.windowId:undefined;
+  const history=obj(incoming.historicalReply);
+  lastHistoricalReply.current=Number.isSafeInteger(history.reader)&&history.reader>0&&typeof history.visit==='string'?
+   {reader:history.reader,visit:history.visit}:undefined;
+ }
  if(!incoming.open)retained.current=null;else if(incoming.ready)retained.current=incoming;
  // Keep the same editor mounted while native window authority is temporarily revoked.
  const view=incoming.open&&!incoming.ready&&retained.current?{...retained.current,ready:false}:incoming,file=obj(view.file),snapshot=obj(view.snapshot);
@@ -376,6 +381,8 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const replyDocumentOnly=view.messageReplyDocumentOnly===true, liveMessageOriginalOnly=isLiveMessageOriginal(view);
  const searchFileOriginal=liveMessageOriginalOnly&&Number.isSafeInteger(view.searchAnchorReader)&&view.searchAnchorReader>0;
  const replyTextOnly=replyDocumentOnly&&file.mimeType==='text/plain';
+ const historicalReplyOriginal=replyDocumentOnly&&Number.isSafeInteger(view.historicalReply?.reader)&&
+  view.historicalReply.reader>0&&typeof view.historicalReply.visit==='string';
  const reportOnly=view.reportResultOnly===true,scopedResultOnly=reportOnly||view.historyResultOnly===true||liveMessageOriginalOnly;
  const privateFiles=!view.group&&!view.team&&!view.deviceOriginalOnly;
  const listScope=privateFiles&&!view.choosingSource?JSON.stringify([view.taskId||'',snapshot.taskRunId||'',snapshot.coordinatorEpoch||0,
@@ -826,7 +833,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    draftHasFile&&<p className="pw-file-draft-status" role="status">文件位置已关联到「{draftTarget.label}」；未作为附件。</p>}
  </>;
  const original=obj(view.originalFile),canSaveOriginal=privateFiles&&hasFile&&view.canSaveOriginal===true;
- const offerReplyAttachment=mode==='original'&&replyDocumentOnly&&!replyTextOnly&&!searchFileOriginal&&view.ready===true&&!!replyAttachmentDraft&&
+ const offerReplyAttachment=mode==='original'&&replyDocumentOnly&&!replyTextOnly&&!searchFileOriginal&&!historicalReplyOriginal&&view.ready===true&&!!replyAttachmentDraft&&
   !!selection&&original.sourceUnavailable===false&&original.busy===false&&!original.error&&typeof original.id==='string'&&
   original.sha256===selection.sha256&&original.mimeType===file.mimeType&&original.size===file.size;
  const chooseReplyAttachment=async()=>{
@@ -1001,7 +1008,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    {privateFiles&&<ContextMenuItem id="share" icon={IconShare}>系统分享…</ContextMenuItem>}
   </ContextMenu>
  </>}</ContextMenuTrigger>;
- const sourceReturnLabel=liveMessageOriginalOnly?(replyDocumentOnly&&returnToDeliveredFiles?'返回文件成果':'返回原消息'):reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
+ const sourceReturnLabel=liveMessageOriginalOnly?(historicalReplyOriginal?'返回原历史消息':replyDocumentOnly&&returnToDeliveredFiles?'返回文件成果':'返回原消息'):reportOnly?'返回原汇报':scopedResultOnly?'返回原历史消息':
   focusedDraft||quotedDraftArrival?.windowId===view.windowId&&quotedDraftArrival?.current()?'返回原消息':
   view.resultFilesOnly===true&&!view.fromWorkResult&&view.taskId!==openTaskId?returnToDeliveredFiles?'返回文件成果':'返回原消息':view.taskId?'返回原工作':'返回原工作区';
  const entryBack=(mode==='original'||mode==='detail')&&(view.originalReturn==='entry'||mode==='detail'&&view.savedChatLinkedOnly===true);
@@ -1375,7 +1382,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  };
  return <Drawer.Root open={view.open===true} onOpenChange={open=>{if(!open)close()}} direction="right" handleOnly dismissible={false} shouldScaleBackground={false}><Drawer.Portal><Drawer.Overlay className="pw-file-page-underlay"/><Drawer.Content className="pw-drawer pw-file-workspace pw-file-page" data-file-object-id={file.id||undefined} data-file-version={file.sha256||undefined} data-file-view={mode} onOpenAutoFocus={event=>{event.preventDefault();heading.current?.focus({preventScroll:true})}} onCloseAutoFocus={event=>{
   if(returningToSearch.current)event.preventDefault();
-  const window=lastLiveMessageFileWindow.current;lastLiveMessageFileWindow.current=undefined;onReturnFocus?.(event,window);
+  const window=lastLiveMessageFileWindow.current,history=lastHistoricalReply.current;
+  lastLiveMessageFileWindow.current=undefined;lastHistoricalReply.current=undefined;
+  if(history)event.preventDefault(); // Never let the drawer retarget a different History/Chat opener.
+  onReturnFocus?.(event,window,history);
   const book=bookReplyExit.current;
   if(book&&bridge.getState().state.attachmentWorkspace?.open===false){
    book.exited=true;finishBookReplyExit(book);

@@ -60,15 +60,28 @@ function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource,eligi
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
 export type ConfirmedHistoryWordTarget={window:number;conversationId:string;messageId:string;sourceRevision:number};
+type HistoricalReplyFile={id:string;sha256:string;mimeType:string};
+export type HistoricalReplyFileOpen={window:number;conversationId:string;messageId:string;sourceRevision:number;
+ file:HistoricalReplyFile;current:()=>boolean;restore:()=>boolean};
+const historicalReplyFile=(file:Json):file is HistoricalReplyFile=>typeof file?.id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(file.id)&&
+ typeof file.sha256==='string'&&/^[a-f0-9]{64}$/.test(file.sha256)&&
+ (file.mimeType==='application/pdf'||file.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+const historicalReplyFiles=(row:Json|null):HistoricalReplyFile[]=>{
+ const files=row?.historicalReplyDocuments;
+ return row?.role==='assistant'&&row.sourceRevision===1&&!row.taskResult&&!row.phoneResult&&!row.originalHostFinal&&!row.hostGoalTaskId&&
+  Array.isArray(files)&&files.length>0&&files.length<=2&&files.every(historicalReplyFile)&&
+  new Set(files.map(file=>file.id)).size===files.length&&new Set(files.map(file=>file.mimeType)).size===files.length?files:[];
+};
 type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
  onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void;
  onChooseConfirmedWord?:(source:ConfirmedHistoryWordTarget)=>Promise<void>;isCheckableConfirmedWord?:(result:TaskResult)=>boolean;
+ onOpenHistoricalReplyFile?:(source:HistoricalReplyFileOpen)=>Promise<void>;
  onSearchReturn?:(windowId:number)=>void;searchReturnToChatWindow?:number;
  registerSearchFileReturn?:(handler:((windowId:string)=>boolean)|null)=>void;
  workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onChooseConfirmedWord,isCheckableConfirmedWord,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,registerSearchFileReturn,workReportWindow,onWorkReportReturn}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onChooseConfirmedWord,isCheckableConfirmedWord,onOpenHistoricalReplyFile,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,registerSearchFileReturn,workReportWindow,onWorkReportReturn}:Props){
  const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const workReportOnly=workReportWindow!==undefined&&workReportWindow===shown.window&&typeof shown.originalReportMessageId==='string';
@@ -539,6 +552,23 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    if(current())setError(failure instanceof Error?failure.message:'未能核对这轮原 Word，没有加入附件。');
   }finally{sending.current=false;setPending(false)}
  };
+ const openHistoricalReplyFile=async(message:Json,file:HistoricalReplyFile,trigger:HTMLButtonElement)=>{
+  const original=live.current,node=scroll.current;
+  if(!readyPage(original)||original.detachedHistory!==true||!node?.contains(trigger)||
+     sending.current||!onOpenHistoricalReplyFile||!can('conversation.reader.openOriginalReplyDocument'))return;
+  const originalScope=readerScope(original);
+  const matching=(page:Json|null)=>readyPage(page)&&page.detachedHistory===true&&!page.searchAnchor&&!page.workRequest&&!page.reminderSource&&
+   page.originalReportMessageId==null&&readerScope(page)===originalScope&&page.cursor===original.cursor&&
+   historicalReplyFiles(exactRow(page,message.id,message.sourceRevision)).some(row=>row.id===file.id&&row.sha256===file.sha256&&row.mimeType===file.mimeType);
+  const current=()=>!document.hidden&&matching(live.current)&&matching(bridge.getState().state.conversationReader);
+  if(!current()||bridge.getState().state.attachmentWorkspace?.open!==false)return;
+  const restore=restoreReaderRow(original,message,trigger,node);
+  sending.current=true;setPending(true);setError('');
+  try{await onOpenHistoricalReplyFile({window:original.window,conversationId:original.conversation,messageId:message.id,
+   sourceRevision:message.sourceRevision,file,current,restore});}
+  catch(failure){if(current())setError(failure instanceof Error?failure.message:'这条历史原答复的文件暂不可读取。');}
+  finally{sending.current=false;setPending(false)}
+ };
  const openHistoryResultFiles=async(message:Json,result:TaskResult,trigger:HTMLButtonElement,index?:LoadedFileIndex)=>{
   const original=live.current;
   if(!original||sending.current||!onOpenResultFiles)return;
@@ -639,6 +669,8 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
    {shown.loading&&<p className="pw-muted" role="status">正在读取原消息…</p>}
    {rows.map((message,index)=>{const phone=!workReportOnly&&message.id&&message.sourceRevision===1?messagePhoneResult(message):null,readPhone=!!phone&&can('phone.result.original');
     const result=messageTaskResult(message),fileResult=!workReportOnly&&!searchOnly&&onOpenResultFiles&&message.sourceRevision>0&&result?.kind==='owner_work'&&result.status==='completed'&&!result.noticeKind?result:null;
+    const historyOriginalFiles=onOpenHistoricalReplyFile&&!workOverlay&&!searchOnly&&readyPage(page)&&page.detachedHistory===true&&
+     can('conversation.reader.openOriginalReplyDocument')?historicalReplyFiles(message):[];
     const canSelectQuote=canQuoteNew&&!pending&&!!newQuoteTarget(message);
     const readingFiles=!resultNotice?.index&&resultNotice?.window===shown.window&&resultNotice?.messageId===message.id&&resultNotice?.revision===message.sourceRevision?resultNotice:null;
     return <article key={message.id} className={`pw-history-window-message pw-message-${message.role}`} tabIndex={-1} data-reader-index={index} data-reader-id={message.id} data-reader-revision={message.sourceRevision} aria-label={message.role==='assistant'?'助手回复':'你的消息'}>
@@ -693,6 +725,9 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
       onClick={event=>openHistoryMemory(message,event.currentTarget)}>本次记忆</Button>}
      {message.hostGoalTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" leadingIcon={IconTool} disabled={pending} onClick={()=>void openLinkedTask(message,'overview')}>打开原主机工作</Button>}
      {message.role==='user'&&typeof message.readerInputTaskId==='string'&&message.readerInputTaskId&&can('tasks.open')&&<Button variant="ghost" size="small" className="pw-input-work" leadingIcon={IconTool} data-input-work={message.readerInputTaskId} data-input-revision={message.sourceRevision} aria-busy={loadingInput(message.id)} disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{loadingInput(message.id)?'正在读取…':'查看原工作'}</Button>}
+     {historyOriginalFiles.map(file=><Button key={file.id} variant="secondary" size="small" leadingIcon={IconFolder} disabled={pending}
+      onClick={event=>void openHistoricalReplyFile(message,file,event.currentTarget)}>
+      核对并查看原{file.mimeType==='application/pdf'?' PDF':' Word'}</Button>)}
      {fileResult&&<Button variant="ghost" size="small" leadingIcon={IconFolder} disabled={!page||pending||page.loading||page.error||page.limited}
       aria-busy={!!readingFiles&&!readingFiles.error||undefined} onClick={event=>void openHistoryResultFiles(message,fileResult,event.currentTarget)}>{readingFiles&&!readingFiles.error?'正在读取本次文件…':'查看本次文件'}</Button>}
      {!searchOnly&&onChooseConfirmedWord&&activeDraft?.conversation===shown.conversation&&message.role==='assistant'&&

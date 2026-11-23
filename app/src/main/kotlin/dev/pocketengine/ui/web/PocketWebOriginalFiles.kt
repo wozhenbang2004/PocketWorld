@@ -71,7 +71,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         internal val decoded: JSONObject)
     private class Pin(val source: OwnerFilePreviewSource, val ticket: PocketWebWindowTicket,
         val rememberLibraryPdf: (() -> Boolean)?, val wordOrigin: AttachmentWordOrigin?, val rememberPosition:Boolean,
-        val accepts: (PocketWebWindowTicket) -> Boolean) {
+        val historicalReply: Boolean, val accepts: (PocketWebWindowTicket) -> Boolean) {
         val id = UUID.randomUUID().toString()
         val kind = declaredKind(source)
         val fileId = source.metadata().optString("id")
@@ -124,12 +124,15 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     }.getOrNull()
     fun bind(source: OwnerFilePreviewSource?, compared: Pair<OwnerFilePreviewSource, OwnerFilePreviewSource>?,
         ticket: PocketWebWindowTicket, rememberLibraryPdf: (() -> Boolean)? = null,
-        wordOrigin: AttachmentWordOrigin? = null, rememberPosition:Boolean = true, accepts: (PocketWebWindowTicket) -> Boolean) {
-        val same = primary?.source === source && comparison?.first?.source === compared?.first && comparison?.second?.source === compared?.second
+        wordOrigin: AttachmentWordOrigin? = null, rememberPosition:Boolean = true, historicalReply:Boolean = false,
+        accepts: (PocketWebWindowTicket) -> Boolean) {
+        check(!historicalReply || compared==null && rememberLibraryPdf==null && wordOrigin==null && !rememberPosition)
+        val same = primary?.source === source && (source==null || primary?.historicalReply==historicalReply) &&
+            comparison?.first?.source === compared?.first && comparison?.second?.source === compared?.second
         if (same) return
         clear()
-        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, rememberPosition, accepts).also { pins[it.id] = it }
-        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, rememberPosition, accepts), Pin(compared.second, ticket, null, null, rememberPosition, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
+        if (source != null) primary = Pin(source, ticket, rememberLibraryPdf, wordOrigin, rememberPosition, historicalReply, accepts).also { pins[it.id] = it }
+        if (compared != null) comparison = Pair(Pin(compared.first, ticket, null, null, rememberPosition, false, accepts), Pin(compared.second, ticket, null, null, rememberPosition, false, accepts)).also { pins[it.first.id] = it.first; pins[it.second.id] = it.second }
         if (pins.isNotEmpty()) main.postDelayed(watchdog, 1500)
     }
     private fun view(pin: Pin): JSONObject = JSONObject().put("id", pin.id).put("identity", pin.source.identity)
@@ -212,15 +215,22 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     }
     fun canOpenInReader(file: JSONObject?) = matchesOriginal(file) && primary?.source?.let { !packageFile(it) } == true
     fun comparisonSnapshot(): JSONArray? = comparison?.let { JSONArray().put(view(it.first)).put(view(it.second)) }
-    private fun requireCurrent(pin: Pin) {
+    private fun requireBoundPin(pin: Pin) {
         check(!closed && pins[pin.id] === pin && visible() && pin.accepts(pin.ticket)) { "原文件查看已关闭" }
+    }
+    private fun requireCurrent(pin: Pin) {
+        requireBoundPin(pin)
         pin.lifetime.check()
     }
     private fun session(pin: Pin): NativeOriginalFileSession = synchronized(pin) {
         requireCurrent(pin)
-        pin.session ?: NativeOriginalFileSession.open(context, pin.source, pin.lifetime).also { opened ->
-            try { requireCurrent(pin); pin.session = opened } catch (failure: Exception) { opened.close(); throw failure }
-        }
+        pin.session ?: (if (pin.historicalReply)
+            pin.lifetime.retainAuthorityCheck { requireBoundPin(pin) }.use {
+                NativeOriginalFileSession.openHistoricalReplyDocument(context, pin.source, pin.lifetime)
+            }
+            else NativeOriginalFileSession.open(context, pin.source, pin.lifetime)).also { opened ->
+                try { requireCurrent(pin); pin.session = opened } catch (failure: Exception) { opened.close(); throw failure }
+            }
     }
     fun dispatch(args: JSONObject, done: (JSONObject?, String?) -> Unit) {
         val pin = pins[args.optString("viewerId")] ?: run { done(null, "原文件查看已关闭，请重新打开"); return }

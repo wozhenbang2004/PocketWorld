@@ -56,7 +56,8 @@ internal class PocketWebAttachments(
     }
     private val flow get() = controller.attachmentOutcomes
     private data class Window(val id: String, val ticket: PocketWebWindowTicket, val accepts: (PocketWebWindowTicket) -> Boolean,
-                              val searchAnchorReader: Long? = null)
+                              val searchAnchorReader: Long? = null, val historicalReply: HistoricalReplyVisit? = null)
+    internal data class HistoricalReplyVisit(val reader:Long,val nonce:String)
     private data class ReplyDocumentVisit(val window:Window,val file:UiChatAttachment,val target:OriginalReplyDocument.Target)
     data class ReplyAttachment(val file:UiChatAttachment,val target:OriginalReplyDocument.Target,
         val owns:()->Boolean,val ready:()->Boolean,val close:()->Boolean)
@@ -69,7 +70,7 @@ internal class PocketWebAttachments(
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
     private data class DraftDocumentReview(val id: String, val windowId: String,
         val edit: PocketWebStandaloneDocumentDrafts.Edit, val outputFormat: Format, val planDigest: String, val expires: Long)
-    private var window: Window? = null
+    @Volatile private var window: Window? = null
     private var savedChatLinkOpen:((dev.pocketengine.core.RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource)?=null
     @Volatile private var replyDocumentVisit:ReplyDocumentVisit?=null
     private val frames = linkedMapOf<String, Frame>()
@@ -461,11 +462,15 @@ internal class PocketWebAttachments(
         read:(dev.pocketengine.core.RunControl)->dev.pocketengine.features.attachments.OwnerFilePreviewSource):JSONObject =
         openMessageOriginal(ticket,current,searchAnchorReader=readerWindow){flow.openSearchAnchorFile(file,it,read)}
 
+    fun openHistoricalReplyDocument(file:UiChatAttachment,target:OriginalReplyDocument.Target,visit:HistoricalReplyVisit,
+        ticket:PocketWebWindowTicket,current:()->Boolean):JSONObject =
+        openMessageOriginal(ticket,current,historicalReply=visit){flow.openHistoricalReplyDocument(file,target,it)}
+
     private fun openMessageOriginal(ticket:PocketWebWindowTicket,current:()->Boolean,searchAnchorReader:Long?=null,
-        start:(()->Boolean)->Unit):JSONObject {
+        historicalReply:HistoricalReplyVisit?=null,start:(()->Boolean)->Unit):JSONObject {
         check(!flow.state.open&&!flow.exportPending&&controller.webPrivateOwnerVisible()&&current())
         clear()
-        val active=Window(UUID.randomUUID().toString(),ticket,{ candidate -> candidate==ticket&&current() },searchAnchorReader).also { window=it }
+        val active=Window(UUID.randomUUID().toString(),ticket,{ candidate -> candidate==ticket&&current() },searchAnchorReader,historicalReply).also { window=it }
         fun bound()=window===active&&active.accepts(active.ticket)
         scopedResultCurrent=::bound
         try { start(::bound) } catch (failure:Exception) { clear();throw failure }
@@ -548,7 +553,9 @@ internal class PocketWebAttachments(
                 live.globalStandaloneDraftVisit == state.globalStandaloneDraftVisit && live.originalReturn == AttachmentOriginalReturn.LIST
         }) else null
         val wordOrigin=state.wordSourceVisit?.takeIf{it.source===source&&wordLibrarySurface(state)}?.origin
-        viewer.bind(source, state.comparison, current.ticket, rememberPdf,wordOrigin,rememberPosition=current.searchAnchorReader==null) { ticket ->
+        viewer.bind(source, state.comparison, current.ticket, rememberPdf,wordOrigin,
+            rememberPosition=current.searchAnchorReader==null&&current.historicalReply==null,
+            historicalReply=current.historicalReply!=null) { ticket ->
             current.accepts(ticket) && (!state.deviceOriginalOnly || deviceTaskCurrent?.invoke()==true) &&
                 (if (state.savedChatLinkedOnly) window === current && scoped?.invoke()==true
                  else if (state.liveMessageOriginalOnly) window === current else scoped?.invoke()!=false)
@@ -612,6 +619,7 @@ internal class PocketWebAttachments(
         val exposeDocument=(state.pdfPageText==null||shownPdfPageText!=null)&&(state.wordExcerpt==null||shownWord!=null)
         return JSONObject().put("open", true).put("ready", true).put("windowId", current.id).put("frameId", frameId)
             .put("searchAnchorReader", current.searchAnchorReader)
+            .put("historicalReply",current.historicalReply?.let { JSONObject().put("reader",it.reader).put("visit",it.nonce) })
             .put("historyResultOnly", scoped != null && !report && !state.liveMessageOriginalOnly).put("reportResultOnly", report)
             .put("messagePdfOnly",state.messageInput==AttachmentMessageInput.PDF)
             .put("messageInputDocumentOnly",state.messageInput==AttachmentMessageInput.WORD_OR_TEXT)
@@ -1048,6 +1056,7 @@ internal class PocketWebAttachments(
     }
     /** These replies must go through the Bridge's transient completion, not the ordinary workspace result. */
     fun dispatchStandaloneDraft(args: JSONObject, freshOwner: (() -> Boolean)?, done: (JSONObject?, String?) -> Unit) {
+        if(window?.historicalReply!=null){done(null,"这里仅查看原历史答复的文件");return}
         if(flow.state.savedChatLinkedOnly){done(null,"这里仅查看原消息所关联的文件");return}
         val unavailable = "原草稿窗口或结果尚未核对；没有自动保存或重试。"
         fun reply(actual: JSONObject?) { if (actual == null) done(null, unavailable) else done(actual, null) }

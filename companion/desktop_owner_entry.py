@@ -215,7 +215,11 @@ def _page(context, facts, notice):
         body += "\n如果启动时保留了「设备工作回执」，可在 Windows 时钟旁的通知区域（包括折叠图标）中打开，区分工作方向，也可只读核对本机桌面连接。"
     else:
         heading = "本机已有连接设置" if facts["devices"] else "可以打开本机配对"
-        if facts["devices"]:
+        from windows_first_workspace import signed
+        if signed(context):
+            actions.append(("SavedPairedPartners", "查看本机配对记录\n不启动服务，也不检查手机当前连接。"))
+            body += "\n可先核对这次安装保留的配对记录。手机端是否保留配对及当前连接仍须在手机核对。"
+        elif facts["devices"]:
             body += "\n这里只显示本机配置。手机是否已保存配对、上次有没有接通，请在手机「我的设备 → 配对伙伴」核对。"
         body += "\n桌面能力" + ("已配置" if facts["desktop"] else "未启用") + "，不代表任何手机已获当前权限。"
         if facts["devices"] and facts["listeners"]:
@@ -300,6 +304,10 @@ def open_installed_desk():
             if action == "ActivePairing":
                 from windows_pairing_return import offer
                 if offer(context): return  # do not pop a new owner desk over the original pairing window
+                notice = ""; continue
+            if action == "SavedPairedPartners":
+                from windows_saved_partners import offer
+                offer(context, facts["settings"])
                 notice = ""; continue
             if action == "FirstFolder":
                 from windows_first_workspace import offer

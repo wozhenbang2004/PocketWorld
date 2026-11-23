@@ -68,7 +68,7 @@ import RemoteInboxWorkspace,{type NotificationViewMemory} from './RemoteInboxWor
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {ConversationOrganization,orderConversations} from './ConversationOrganization';
 import {ConversationQueuedInputs} from './ConversationQueuedInputs';
-import {ConversationHistoryWindow,type ConfirmedHistoryWordTarget,type ConversationHistoryTaskOrigin,type HistoryResultOrigin} from './ConversationHistoryWindow';
+import {ConversationHistoryWindow,type ConfirmedHistoryWordTarget,type ConversationHistoryTaskOrigin,type HistoricalReplyFileOpen,type HistoryResultOrigin} from './ConversationHistoryWindow';
 import {MessageAttachment,type MessageAttachmentSource} from './MessageAttachment';
 import {ChatNavigationMenu} from './ChatNavigationMenu';
 import {ConversationDeliveredFiles,replyDocumentFileLabel,type DeliveredFileSource,type DeliveredReplyDocumentFile,type DeliveredReplyDocumentSource,type DeliveredWorkFileSource} from './ConversationDeliveredFiles';
@@ -1154,6 +1154,8 @@ export default function App(){
  const attemptedRosterAttach=useRef<CarriedTeamRoster|null>(null);
  useEffect(()=>{const cancel=()=>{if(document.hidden){conversationReturnRequest.current++;setReturningConversation('');setCarriedTeamRoster(null)}};document.addEventListener('visibilitychange',cancel);return()=>document.removeEventListener('visibilitychange',cancel)},[]);
  const historyWindowBack=useRef<(()=>boolean)|null>(null);
+ const historicalReplyFileVisit=useRef<{source:HistoricalReplyFileOpen;visit:string;document:number;navigation:number;resume:number;
+  windowId?:string;departing?:boolean}|null>(null);
  const searchFileReturn=useRef<((windowId:string)=>boolean)|null>(null);
  const registerSearchFileReturn=useCallback((handler:((windowId:string)=>boolean)|null)=>{searchFileReturn.current=handler},[]);
  const [workReportReader,setWorkReportReader]=useState<WorkReportReader|null>(null);
@@ -2132,24 +2134,39 @@ export default function App(){
    }
    if(preparationBeforeLeave.current&&!await leaveInlinePreparation())return false;
    let taskClosed=!!options?.taskClosed;
-   if(next==='butler'){
+   const fileHistory=historicalReplyFileVisit.current,nativeHistory=bridge.getState().state.conversationReader;
+   // A hidden/rebinding History component is not proof that native stopped reading.
+   // On real departure retire the held native History window before changing routes.
+   const leavingFileHistory=next!=='chat'&&fileHistory&&fileHistory.document===bridge.getDocumentEpoch()&&
+    fileHistory.navigation===navigationWindow.current&&nativeHistory?.window===fileHistory.source.window&&
+    nativeHistory.conversation===fileHistory.source.conversationId?fileHistory:null;
+   if(next==='butler'||leavingFileHistory){
     const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
     const current=()=>navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden;
     setWorkOpen(false);setCommandOpen(false);
     if(taskOpen&&!taskClosed){if(!await closeTask()||!current())return false;taskClosed=true;}
     const reader=bridge.getState().state.conversationReader;
+    if(leavingFileHistory&&(reader?.window!==leavingFileHistory.source.window||
+       reader.conversation!==leavingFileHistory.source.conversationId))return false;
     if(reader){
-     if(!can('conversation.reader.close')){setLocalError('请先关闭对话记录，再回到管家。');return false;}
+     if(!can('conversation.reader.close')){setLocalError(leavingFileHistory?'请先关闭原历史文件，再离开。':'请先关闭对话记录，再回到管家。');return false;}
+     if(leavingFileHistory)leavingFileHistory.departing=true;
      try{
       await act('conversation.reader.close',{window:reader.window,conversationId:reader.conversation});
       const closed=await new Promise<boolean>(resolve=>{
        let unsubscribe=()=>{};
-       const timer=window.setTimeout(()=>{unsubscribe();if(current())setLocalError('对话记录尚未确认关闭，请稍后返回管家。');resolve(false)},5000);
-       const check=()=>{if(!current()||!bridge.getState().state.conversationReader){clearTimeout(timer);unsubscribe();resolve(current())}};
+       const timer=window.setTimeout(()=>{unsubscribe();if(current())setLocalError(leavingFileHistory?'原历史文件尚未确认关闭，请稍后离开。':'对话记录尚未确认关闭，请稍后返回管家。');resolve(false)},5000);
+       const check=()=>{
+        const owner=bridge.getState().state;
+        if(!current()||!owner.conversationReader&&(!leavingFileHistory||owner.attachmentWorkspace?.open===false)){
+         clearTimeout(timer);unsubscribe();resolve(current());
+        }
+       };
        unsubscribe=bridge.subscribe(check);check();
       });
-      if(!closed||!current())return false;
-     }catch{return false;}
+      if(!closed||!current()){if(leavingFileHistory)leavingFileHistory.departing=false;return false;}
+      if(leavingFileHistory&&historicalReplyFileVisit.current===leavingFileHistory)historicalReplyFileVisit.current=null;
+     }catch{if(leavingFileHistory)leavingFileHistory.departing=false;return false;}
     }
     if(!current())return false;
    }
@@ -5557,6 +5574,55 @@ export default function App(){
    view.taskId===taskId&&view.resultFilesOnly===true&&view.fromWorkResult===true&&view.reportResultOnly===false&&view.historyResultOnly===false&&
    scope.taskRunId===origin.report.target.runId&&scope.coordinatorEpoch===origin.report.target.epoch)showTaskLayer('overview');
  },[taskId,taskLayer,taskOpen,state.attachmentWorkspace,showTaskLayer]);
+ const openHistoricalReplyFile=async(source:HistoricalReplyFileOpen)=>{
+  const native=bridge.getState(),view=obj(native.view),owner=native.state;
+  const prior=historicalReplyFileVisit.current,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
+  const unavailable='未确认打开这条历史原答复的文件。请在原消息核对，没有换用其他文件。';
+  if(route!=='chat'||intent!=='chat'||taskOpen||taskOpening||!source.current()||owner.attachmentWorkspace?.open!==false||
+     view.section!==null||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||
+     prior?.document===documentEpoch&&prior.navigation===navigation&&prior.source.current())throw new Error(unavailable);
+  const pin={source,visit:crypto.randomUUID(),document:documentEpoch,navigation,resume:Number(view.resumeRevision),windowId:''};
+  historicalReplyFileVisit.current=pin;
+  try{
+   const opened=await bridge.command('conversation.reader.openOriginalReplyDocument',{window:source.window,conversationId:source.conversationId,
+    messageId:source.messageId,sourceRevision:source.sourceRevision,fileId:source.file.id,sha256:source.file.sha256,visit:pin.visit});
+   if(opened?.opened!==true||opened.reading!==true||opened.readOnly!==true||opened.reader!==source.window||
+      opened.visit!==pin.visit||typeof opened.windowId!=='string'||!opened.windowId||
+      pin.windowId&&pin.windowId!==opened.windowId)throw new Error(unavailable);
+   if(historicalReplyFileVisit.current===pin)pin.windowId=opened.windowId;
+  }catch(error){
+   const failure=obj(error),shown=obj(bridge.getState().state.attachmentWorkspace);
+   // Unknown replies remain bound to this page until the original History is
+   // closed. A late native read cannot be abandoned into a different route.
+   if(historicalReplyFileVisit.current===pin&&shown.open===false&&['not_accepted','not_sent'].includes(failure.code))
+    historicalReplyFileVisit.current=null;
+   throw new Error(unavailable);
+  }
+ };
+ useLayoutEffect(()=>{
+  // A real opened native projection can bind the same issued child before the
+  // command ACK arrives. An unrelated file window cannot claim this visit.
+  const pin=historicalReplyFileVisit.current,native=bridge.getState(),view=obj(native.view),shown=obj(native.state.attachmentWorkspace);
+  const history=obj(shown.historicalReply),selected=obj(shown.file);
+  if(!pin||pin.windowId||pin.departing||document.hidden||pin.document!==bridge.getDocumentEpoch()||
+     pin.navigation!==navigationWindow.current||view.resumeRevision!==pin.resume||view.section!==null||view.taskId!==null||
+     shown.open!==true||shown.ready!==true||shown.messageReplyDocumentOnly!==true||history.reader!==pin.source.window||
+     history.visit!==pin.visit||typeof shown.windowId!=='string'||!shown.windowId||!pin.source.current()||
+     shown.file!=null&&(selected.id!==pin.source.file.id||selected.sha256!==pin.source.file.sha256||
+      selected.mimeType!==pin.source.file.mimeType))return;
+  pin.windowId=shown.windowId;
+ },[state.attachmentWorkspace,state.conversationReader,personalDocumentEpoch,navigationRevision]);
+ const returnFromHistoricalReplyFile=(windowId:string|undefined,history:{reader:number;visit:string})=>{
+  const pin=historicalReplyFileVisit.current,native=bridge.getState(),view=obj(native.view);
+  // The issued child must be known and natively closed. A delayed drawer exit
+  // cannot clear its successor's scope or focus while another window is open.
+  if(!windowId||!pin||pin.windowId!==windowId||pin.visit!==history.visit||pin.source.window!==history.reader||
+     native.state.attachmentWorkspace?.open!==false)return;
+  historicalReplyFileVisit.current=null;
+  if(!pin.departing&&!document.hidden&&route==='chat'&&!taskOpen&&
+     pin.document===bridge.getDocumentEpoch()&&pin.navigation===navigationWindow.current&&view.resumeRevision===pin.resume&&
+     view.section===null&&view.taskId===null&&pin.source.current())pin.source.restore();
+ };
  const openChatResult=async(resultMessageId:string,result:TaskResult,target:HTMLButtonElement,reader?:HistoryResultOrigin,preferred?:PreferredChatFile)=>{
   const conversationId=reader?.conversationId||String(state.conversationId||'');
   const canReadFiles=can('tasks.resultFiles')&&can('attachmentWorkspace.open');
@@ -11553,6 +11619,8 @@ export default function App(){
    workReportWindow={workReportReader?.window} onWorkReportReturn={restoreWorkReportFocus}
    activeDraft={!workReportPage&&!workRequestPage&&intent==='chat'&&composer.ready===true&&draftKey&&state.conversationId&&composer.conversationId===state.conversationId?{conversation:state.conversationId,key:draftKey,epoch:draftEpoch}:undefined} submitting={!!state.chatSubmitting} can={can} act={act} registerBack={registerHistoryWindowBack} onCopy={copyWithLocalFeedback} onOpenTask={(id,entry,origin,alreadyOpen=false)=>openTask(id,entry,alreadyOpen,origin)}
    onOpenResultFiles={!workReportPage&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?openChatResult:undefined}
+   onOpenHistoricalReplyFile={route==='chat'&&intent==='chat'&&!workReportPage&&!workRequestPage&&!searchHistoryPage&&!taskOpen&&
+    can('conversation.reader.openOriginalReplyDocument')?openHistoricalReplyFile:undefined}
    onChooseConfirmedWord={route==='chat'&&intent==='chat'&&!workReportPage&&!workRequestPage&&!searchHistoryPage&&!taskOpen&&
     ['attachments.openPicker','attachments.closePicker','attachments.toggle'].every(can)?openConfirmedHistoryWord:undefined}
    isCheckableConfirmedWord={checkableConfirmedHistoryWord}/>
@@ -11583,7 +11651,8 @@ export default function App(){
       originalAccepted?originalSearchMessage(searchOriginal):undefined)
       .catch(error=>setLocalError(error instanceof Error?error.message:String(error)));
     }} onCopy={copyWithLocalFeedback}/>}
-  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onOriginalBookReply={bookReplyVisit?originalBookReply:undefined} onReturnFocus={(event,messageOriginalWindow)=>{
+  <AttachmentWorkspace state={state} registerBack={registerAttachmentBack} onOriginalBookReply={bookReplyVisit?originalBookReply:undefined} onReturnFocus={(event,messageOriginalWindow,historicalReply)=>{
+   if(historicalReply){returnFromHistoricalReplyFile(messageOriginalWindow,historicalReply);return;}
    restoreTaskFileFocus(event);
    const savedLink=savedChatPdfVisit.current;
    if(messageOriginalWindow&&savedLink?.windowId===messageOriginalWindow){

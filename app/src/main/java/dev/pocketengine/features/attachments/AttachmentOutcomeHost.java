@@ -400,6 +400,34 @@ public final class AttachmentOutcomeHost {
                     throw new SecurityException("原答复固定文档已不可用");},
                 (destination,c)->{throw new SecurityException("请在原工作内选择其他文件操作");});
     }
+    /** The historical reader is strictly presentation-only. The renderer cannot
+     * supply a task, operation or file path and this never changes source eligibility. */
+    public OwnerFilePreviewSource historicalReplyDocument(OriginalReplyDocument.Target target,RunControl control,
+            java.util.function.BooleanSupplier owner)throws Exception{
+        RunControl.AuthorityCheck current=()->{
+            if(!owner.getAsBoolean())throw new SecurityException("原历史阅读窗口已变化");
+        };
+        control.checkpoint();current.check();
+        OriginalReplyDocument pin=tasks.originalReplyDocumentForOwner(target);
+        if(pin==null)throw new SecurityException("未核对到这条原答复的固定文档");
+        JSONObject original=repository.book.historicalReplyDocumentMetadata(pin,target.task(),target.run(),control);
+        requireHistoricalReplyDocument(target,pin,control,current);
+        return new OwnerFilePreviewSource("historical-reply-document",original,
+                read->{try(var authority=read.retainAuthorityCheck(current)){
+                    return repository.book.historicalReplyDocumentBytes(pin,target.task(),target.run(),read);
+                }},
+                read->{requireHistoricalReplyDocument(target,pin,read,current);
+                    repository.book.historicalReplyDocumentMetadata(pin,target.task(),target.run(),read);
+                    current.check();},
+                (destination,read)->{throw new SecurityException("历史原答复文档仅供本机查看");});
+    }
+    private void requireHistoricalReplyDocument(OriginalReplyDocument.Target target,OriginalReplyDocument pin,
+            RunControl read,RunControl.AuthorityCheck current)throws Exception{
+        read.checkpoint();current.check();
+        if(!pin.equals(tasks.originalReplyDocumentForOwner(target)))
+            throw new SecurityException("原答复或固定文档已不可核对");
+        read.checkpoint();current.check();
+    }
     /** Only the exact committed native TXT selected on the producing reply, never a Book list or reuse grant. */
     public OwnerFilePreviewSource originalReplyText(OriginalReplyDocument.Target target,RunControl control)throws Exception{
         control.checkpoint();

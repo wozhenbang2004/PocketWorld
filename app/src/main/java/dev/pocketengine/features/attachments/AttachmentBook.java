@@ -87,6 +87,53 @@ public final class AttachmentBook {
                 !"pdf".equals(source.opt("documentFormat")))throw new SecurityException("原 PDF 登记暂不可核对");
         control.checkpoint();return visible(actual);
     }
+    /** Presentation-only fixed reply document. Unlike internal()/verifiedBytes(), this
+     * neither publishes nor revokes native output eligibility, even on a failed read. */
+    private JSONObject historicalReplyDocumentIndex(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
+        read.checkpoint();String id=pin.id();checkId(id);
+        if(Files.exists(new File(root,id+".part").toPath(),LinkOption.NOFOLLOW_LINKS)||
+                Files.exists(new File(root,id+".json.pending").toPath(),LinkOption.NOFOLLOW_LINKS))
+            throw new SecurityException("原答复文档未完整登记");
+        JSONObject row=readIndex(new File(root,id+".json").toPath(),new IndexReadBudget());
+        if(!pin.matchesBook(row,task,run))throw new SecurityException("原答复文档已变化");
+        return row;
+    }
+    private BasicFileAttributes historicalReplyDocumentStat(Path blob,OriginalReplyDocument pin)throws Exception{
+        BasicFileAttributes stat=Files.readAttributes(blob,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!stat.isRegularFile()||pin.size()<1||pin.size()>MAX_FILE_BYTES||stat.size()!=pin.size())
+            throw new SecurityException("原答复文档不可读取");
+        return stat;
+    }
+    synchronized JSONObject historicalReplyDocumentMetadata(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
+        JSONObject row=historicalReplyDocumentIndex(pin,task,run,read);
+        historicalReplyDocumentStat(new File(root,pin.id()+".blob").toPath(),pin);
+        read.checkpoint();return visible(row);
+    }
+    synchronized byte[] historicalReplyDocumentBytes(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
+        JSONObject row=historicalReplyDocumentIndex(pin,task,run,read);
+        Path blob=new File(root,pin.id()+".blob").toPath();
+        BasicFileAttributes before=historicalReplyDocumentStat(blob,pin);
+        byte[] bytes=new byte[Math.toIntExact(pin.size())];boolean verified=false;
+        try{
+            MessageDigest digest=MessageDigest.getInstance("SHA-256");
+            try(InputStream input=Files.newInputStream(blob,LinkOption.NOFOLLOW_LINKS)){
+                int offset=0;
+                while(offset<bytes.length){
+                    read.checkpoint();int n=input.read(bytes,offset,Math.min(32768,bytes.length-offset));
+                    if(n<=0)throw new SecurityException("原答复文档不完整");
+                    digest.update(bytes,offset,n);offset+=n;
+                }
+                read.checkpoint();
+                if(input.read()!=-1||!pin.sha256().equals(hex(digest.digest())))throw new SecurityException("原答复文档版本不符");
+            }
+            BasicFileAttributes after=historicalReplyDocumentStat(blob,pin);
+            JSONObject reread=historicalReplyDocumentIndex(pin,task,run,read);
+            if(!java.util.Objects.equals(before.fileKey(),after.fileKey())||
+                    !before.lastModifiedTime().equals(after.lastModifiedTime())||!row.toString().equals(reread.toString()))
+                throw new SecurityException("原答复文档在读取中发生变化");
+            read.checkpoint();verified=true;return bytes;
+        }finally{if(!verified)Arrays.fill(bytes,(byte)0);}
+    }
     /** Native producer retry identity in this SAME Book; not a second journal or authority.
      * A surviving orphan/retired record is unknown, never silently overwritten or given a new ID. */
     public synchronized JSONObject findNativeResult(String operation,String role,String task,String run,String planDigest,RunControl control)throws Exception{

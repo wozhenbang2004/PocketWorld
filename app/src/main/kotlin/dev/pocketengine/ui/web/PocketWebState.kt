@@ -162,6 +162,7 @@ internal object PocketWebState {
     fun snapshot(controller: PocketWorldController, contractVisible: (UiTask) -> Boolean = { false },
         editorResumeVisible: (UiTask) -> Boolean = { false },
         ordinaryFirstTurnPresentation: AssistantModule.OrdinaryFirstFailure? = null,
+        historicalReplyDocuments: (dev.pocketengine.ui.ConversationReadPage,UiMessage) -> List<UiChatAttachment> = { _,_ -> emptyList() },
         originalReplyDocuments: (UiMessage) -> List<ReplyDocument> = { emptyList() }): JSONObject {
         val raw = controller.state
         // An old unscoped local feature receipt is not part of the selected memory workspace.
@@ -336,6 +337,10 @@ internal object PocketWebState {
                 else {
                     val view = message(row)
                     if (page.searchAnchor == null && !page.loading && page.error == null && !page.limited) page.quoteTrail.ranges(row.id)?.let { view.put("registeredQuotes", it) }
+                    val originals=historicalReplyDocuments(page,row)
+                    if(originals.isNotEmpty())view.put("historicalReplyDocuments",JSONArray(originals.map { file ->
+                        JSONObject().put("id",file.id).put("sha256",file.sha256).put("mimeType",file.mimeType)
+                    }))
                     out.put(view)
                 }
             } })

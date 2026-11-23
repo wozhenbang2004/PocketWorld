@@ -4075,8 +4075,20 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             }
         } } catch (failure: java.util.concurrent.RejectedExecutionException) { done(null, "界面已关闭，请重新打开对话目录") }
     }
-    var conversationReader by mutableStateOf<ConversationReadPage?>(null)
-        private set
+    @Volatile private var historicalReplyReadVersion = 0L
+    internal fun historicalReplyReadVersion() = historicalReplyReadVersion
+    private var conversationReaderState by mutableStateOf<ConversationReadPage?>(null)
+    var conversationReader:ConversationReadPage?
+        get() = conversationReaderState
+        private set(value) {
+            val prior=conversationReaderState
+            // Scroll-position copies leave this exact read lease intact. Closing,
+            // paging or replacing the loaded rows retires it before publication.
+            if(prior?.window!=value?.window||prior?.loading!=value?.loading||
+                prior?.messages!==value?.messages||prior?.error!=value?.error||prior?.limited!=value?.limited)
+                historicalReplyReadVersion++
+            conversationReaderState=value
+        }
     @Volatile private var conversationReadSequence=0L
     private var openingOwnerWorkRequest: dev.pocketengine.core.RunControl? = null
     private var openingDetachedHistory: dev.pocketengine.core.RunControl? = null
@@ -6980,8 +6992,13 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     internal var conversationSourceRevision by mutableStateOf(0L)
         private set
-    internal var messageAttachmentSourceRevision by mutableStateOf(0L)
-        private set
+    private var messageAttachmentSourceRevisionState by mutableStateOf(0L)
+    internal var messageAttachmentSourceRevision:Long
+        get() = messageAttachmentSourceRevisionState
+        private set(value) {
+            if(value!=messageAttachmentSourceRevisionState)historicalReplyReadVersion++
+            messageAttachmentSourceRevisionState=value
+        }
     private fun changeConversationSources(keepMessageAttachments: Boolean = false) {
         if (!keepMessageAttachments) messageAttachmentSourceRevision++
         conversationSourceRevision++
