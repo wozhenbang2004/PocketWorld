@@ -29,11 +29,12 @@ internal class PocketWebKeptStaticPages(
         const val KEEP=PREFIX+"keep"
         private const val LIST=PREFIX+"list"
         private const val OPEN=PREFIX+"open"
+        private const val COMPARE=PREFIX+"compare"
         private const val CLOSE=PREFIX+"close"
         private const val REVIEW=PREFIX+"pending.review"
         private const val ABANDON=PREFIX+"pending.abandon"
         private const val DISMISS=PREFIX+"pending.dismiss"
-        val COMMANDS=setOf(KEEP,LIST,OPEN,CLOSE,REVIEW,ABANDON,DISMISS)
+        val COMMANDS=setOf(KEEP,LIST,OPEN,COMPARE,CLOSE,REVIEW,ABANDON,DISMISS)
         fun mayMutate(action:String)=action==KEEP||action==ABANDON
         private val uuid=Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
         private val digest=Regex("[a-f0-9]{64}")
@@ -205,6 +206,7 @@ internal class PocketWebKeptStaticPages(
         if(first)fields(args,setOf("projectId","visitId"))
         else fields(args,shelfFields + when(action){
             OPEN->setOf("versionId","manifestIdentity")
+            COMPARE->setOf("beforeVersionId","beforeManifestIdentity","afterVersionId","afterManifestIdentity")
             ABANDON->setOf("reviewId","confirmed")
             DISMISS->setOf("reviewId")
             else->emptySet()
@@ -245,6 +247,25 @@ internal class PocketWebKeptStaticPages(
                 work(selected,done,read={it.open(selected,id,manifest)},show={opened->
                     check(opened.page()==row){"原保留网页的元数据已变化"}
                     mount(opened)
+                })
+            }
+            COMPARE->{
+                check(selected.review==null){"请先关闭原暂存清理确认"}
+                val catalog=checkNotNull(selected.catalog)
+                fun row(side:String):OwnerKeptStaticPages.Page{
+                    val id=text(args,side+"VersionId");val manifest=text(args,side+"ManifestIdentity",digest)
+                    return catalog.versions().singleOrNull{
+                        it.projectId()==project && it.versionId()==id && it.manifestIdentity()==manifest
+                    }?:error("请只对照这次目录中的确切保留版本")
+                }
+                val before=row("before");val after=row("after")
+                check(before.versionId()!=after.versionId() && before.checkoutId()==after.checkoutId()){
+                    "只对照同一副本的两份不同保留网页"
+                }
+                // The shared can-read gate is passive. No renderer session or body read is issued.
+                work(selected,done,read={it.compare(selected,catalog,before,after)},show={result->
+                    check(selected.catalog===catalog && renderer()?.keptShelfCanRead()==true){"原保留列表或窗口已变化"}
+                    present(selected,result)
                 })
             }
             REVIEW->{

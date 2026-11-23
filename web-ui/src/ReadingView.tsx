@@ -6,8 +6,13 @@ import { MarkdownBody } from './library/MarkdownBody';
 import { ReadingContext, type ReadingDocument } from './reading-context';
 import './reading.css';
 
-const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hideCopyControls }: {
-  document: ReadingDocument; active: boolean; hideCopyControls: boolean;
+export type RetainedDeliveryReading = {
+  verified: boolean; pending: boolean; error?: string; segment?: number; retentionLimited?: boolean;
+  current: () => boolean; previous?: () => void; next?: () => void; retry?: () => void;
+};
+
+const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hideCopyControls, retained }: {
+  document: ReadingDocument; active: boolean; hideCopyControls: boolean; retained?: RetainedDeliveryReading;
 }) {
   const [mode, setMode] = useState<'read' | 'select'>('read');
   const [toolsVisible, setToolsVisible] = useState(true);
@@ -20,6 +25,8 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
   const body = useRef<HTMLDivElement>(null), original = useRef<HTMLTextAreaElement>(null);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const exactSegment=retained?.verified===true;
+  useLayoutEffect(() => { if(active&&exactSegment)body.current?.focus({preventScroll:true}); },[active,exactSegment]);
   useEffect(() => {
     if (!active || mode !== 'read') return;
     const changed = () => {
@@ -39,6 +46,7 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
     }
   };
   const copy = async (text: string) => {
+    if (retained&&!retained.current()) throw new Error('原交付已变化，请返回原消息核对。');
     if (copying) throw new Error('正在复制，请稍后再试。');
     setCopying(true); setFeedback('');
     try {
@@ -58,6 +66,9 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
   const content = snapshot.plainText === true
     ? <div className="pw-markdown" dir="auto" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{snapshot.text}</div>
     : <MarkdownBody text={snapshot.tableDocument?.markdown ?? snapshot.text} onlyTableAt={snapshot.tableDocument?.offset} onCopyCode={copy} />;
+  if(retained&&!exactSegment)return <section className="pw-reading-page" aria-busy={retained.pending||undefined}>
+    <p className="pw-reading-feedback" role={retained.error?'alert':'status'}>{retained.error||'正在核对这份交付的原段落…'}</p>
+  </section>;
   return <section className="pw-reading-page" data-kind={snapshot.kind} data-text-size={textSize} hidden={!active}>
     <div className="pw-reading-tools-visibility"><button type="button" aria-expanded={toolsVisible} aria-controls={toolsId} onPointerDown={event=>event.preventDefault()} onClick={()=>setToolsVisible(value=>!value)}>{toolsVisible?'收起阅读工具':'显示阅读工具'}</button></div>
     <div id={toolsId} hidden={!toolsVisible} className="pw-reading-tools pw-material-navigation">
@@ -67,12 +78,12 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
       </div>
       <span className="pw-reading-tool-space" />
       <button type="button" aria-label={`文字大小：${textSize === 'normal' ? '标准' : textSize === 'large' ? '大' : '更大'}，点击切换`} title="切换文字大小" onClick={() => setTextSize(size => size === 'normal' ? 'large' : size === 'large' ? 'larger' : 'normal')}>Aa</button>
-      {mode === 'select' && <button type="button" onClick={() => { original.current?.focus({ preventScroll: true }); original.current?.select(); selectText(); }}>全选</button>}
+      {mode === 'select' && <button type="button" onClick={() => { original.current?.focus({ preventScroll: true }); original.current?.select(); selectText(); }}>{exactSegment?'全选本段':'全选'}</button>}
       {snapshot.kind==='message'&&snapshot.quoteSource&&<ReadingQuoteAction source={snapshot.quoteSource} text={snapshot.text} field={original} start={bounds.start} end={bounds.end} visible={active&&mode==='select'&&toolsVisible} report={setFeedback}/>}
-      {!hideCopyControls && <button type="button" disabled={copying} aria-label={selected ? '复制选中文字' : snapshot.kind === 'table' ? '复制表格' : '复制全文'}
+      {!hideCopyControls && <button type="button" disabled={copying} aria-label={selected ? '复制选中文字' : exactSegment ? '复制本段' : snapshot.kind === 'table' ? '复制表格' : '复制全文'}
         onPointerDown={event => event.preventDefault()}
         onClick={() => { void copy(selected || (mode === 'select' ? snapshot.text : snapshot.copyText ?? snapshot.text)).catch(() => {}); }}>
-        <IconCopy size={18} aria-hidden="true" /><span>{copying ? '复制中' : '复制'}</span>
+        <IconCopy size={18} aria-hidden="true" /><span>{copying ? '复制中' : exactSegment&&!selected ? '复制本段' : '复制'}</span>
       </button>}
     </div>
     <p className="pw-reading-feedback" role="status" aria-live="polite">{feedback || (mode === 'select' && selected ? `已选 ${Array.from(selected).length} 字` : '')}</p>
@@ -84,7 +95,9 @@ const ReadingPage = memo(function ReadingPage({ document: snapshot, active, hide
   </section>;
 });
 
-export function ReadingView({ documents, onBack, originalChat = false, hideCopyControls = false }: { documents: ReadingDocument[]; onBack: () => void; originalChat?: boolean; hideCopyControls?: boolean }) {
+export function ReadingView({ documents, onBack, originalChat = false, hideCopyControls = false, retained }: {
+  documents: ReadingDocument[]; onBack: () => void; originalChat?: boolean; hideCopyControls?: boolean; retained?: RetainedDeliveryReading;
+}) {
   const current = documents.at(-1);
   const closeFocus = useRef<HTMLElement | null>(null);
   const previousDocuments = useRef(documents);
@@ -112,14 +125,23 @@ export function ReadingView({ documents, onBack, originalChat = false, hideCopyC
         onPointerDownOutside={event => event.preventDefault()}
         onCloseAutoFocus={event => { event.preventDefault(); if (closeFocus.current?.isConnected) closeFocus.current.focus({ preventScroll: true }); }}>
         <header className="pw-reading-header">
-          <button type="button" aria-label={originalChat ? '返回原消息' : documents.length > 1 ? '返回回复阅读' : '返回原工作'} onClick={onBack}><IconArrowLeft size={22} aria-hidden="true" /></button>
+          <button type="button" aria-label={originalChat||retained ? '返回原消息' : documents.length > 1 ? '返回回复阅读' : '返回原工作'} onClick={onBack}><IconArrowLeft size={22} aria-hidden="true" /></button>
           <Dialog.Title>{current?.title}</Dialog.Title>
-          <span>打开时的内容</span>
+          <span>{retained ? '只读留存' : '打开时的内容'}</span>
         </header>
-        <Dialog.Description id="pw-reading-description" className="pw-reading-description">{originalChat
+        <Dialog.Description id="pw-reading-description" className="pw-reading-description">{retained
+          ? '分段阅读这条已保存的工作交付。返回原消息，不会改动工作或草稿。'
+          : originalChat
           ? '只读原团队汇总。返回同一条原消息，不会改动工作或草稿。'
           : '独立阅读当前内容，后续回复不会改变这里的文字。返回可继续原工作。'}</Dialog.Description>
-        {documents.map((entry, index) => <ReadingPage key={entry.key} document={entry} active={index === documents.length - 1} hideCopyControls={originalChat && hideCopyControls} />)}
+        {retained?.verified&&<p className="pw-reading-feedback" role="status">第 {retained.segment} 段 · {retained.retentionLimited?'本机未保留全部文字':'已保存的原交付'}</p>}
+        {documents.map((entry, index) => <ReadingPage key={entry.key} document={entry} active={index === documents.length - 1} hideCopyControls={originalChat && hideCopyControls} retained={retained}/>)}
+        {retained&&(retained.previous||retained.next||retained.retry)&&<footer className="pw-reading-tools pw-material-navigation">
+          {retained.previous&&<button type="button" onClick={retained.previous}>上一段</button>}
+          <span className="pw-reading-tool-space"/>
+          {retained.next&&<button type="button" onClick={retained.next}>继续读下一段</button>}
+          {retained.retry&&<button type="button" onClick={retained.retry}>重新核对这一段</button>}
+        </footer>}
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;

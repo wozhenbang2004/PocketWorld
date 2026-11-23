@@ -4781,6 +4781,24 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             main.post { if (!closed) { done(result); getTask(input.getString("taskId")); refreshCurrentConversationTurn() } }
         }
     }
+    internal fun readOriginalCompletedWorkDelivery(conversation: String, messageId: String, revision: Long,
+            selected: dev.pocketengine.store.TaskStore.OwnerWorkDeliveryRef, summaryChars: Int, offset: Int, expectedDigest: String,
+            fast: () -> Boolean, current: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
+        val store=app.tasks
+        check(current()) { "请回原私人对话读取这份交付" }
+        io.execute {
+            val page=runCatching {
+                store.originalCompletedWorkDeliveryPage(conversation,messageId,revision,selected,summaryChars,offset,expectedDigest) {
+                    fast() && app.tasks === store
+                }
+            }
+            main.post {
+                if(closed)return@post
+                if(!current() || app.tasks !== store)done(null,"原交付或阅读窗口已变化，未读取其他版本")
+                else page.fold({done(it,null)}, {done(null,"暂时无法核对这份交付的留存正文，可返回原消息查看摘录。")})
+            }
+        }
+    }
     internal fun readPhoneOriginal(conversation: String, messageId: String, revision: Long, task: String, run: String, epoch: Int,
                                   delivery: String, offset: Int, digest: String, readerWindow: Long, originalWindow: () -> Boolean, done: (JSONObject?, String?) -> Unit) {
         fun visibleResult(): UiPhoneResult? {

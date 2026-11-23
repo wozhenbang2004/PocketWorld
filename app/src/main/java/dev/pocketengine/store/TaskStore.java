@@ -4453,6 +4453,77 @@ public final class TaskStore {
             return new JSONObject().put("taskId",task.getString("id")).put("conversationId",conversation).put("deliveryId",frozen.getString("deliveryId")).put("resultDigest",digest);
         }finally{db.endTransaction();}
     }
+    /** Ordinary owner Chat only. The displayed saved bubble is proved again from the
+     * same SQLite snapshot as the exact frozen, source-current delivery it opens. */
+    public synchronized JSONObject originalCompletedWorkDeliveryPage(String conversation,String message,long revision,
+            OwnerWorkDeliveryRef delivery,int shownSummaryChars,int offset,String expectedDigest,java.util.function.BooleanSupplier current)throws Exception {
+        if(delivery==null||conversation==null||conversation.isBlank()||conversation.length()>240||message==null||!message.matches("[a-f0-9-]{36}")
+                ||revision<1||delivery.epoch()<1||!delivery.taskId().matches("[a-f0-9-]{36}")||!delivery.runId().matches("[a-f0-9-]{36}")
+                ||!delivery.deliveryId().matches("[a-f0-9-]{36}")||offset<0||offset>=240000||shownSummaryChars<24000
+                ||expectedDigest==null||!(expectedDigest.matches("[a-f0-9]{64}")||offset==0&&expectedDigest.isEmpty()))
+            throw new IllegalArgumentException("原交付正文身份或范围无效");
+        String id=delivery.taskId(),run=delivery.runId();int epoch=delivery.epoch();
+        if(!current.getAsBoolean())throw new SecurityException("原交付阅读窗口已关闭");
+        db.beginTransactionNonExclusive();try {
+            // Same whole-document ceiling as the canonical publication proof. Do
+            // not use the unbounded model-result reader or the smaller UI header.
+            JSONObject work;
+            try(Cursor row=db.rawQuery("SELECT document FROM tasks WHERE task_id=? AND length(CAST(document AS BLOB))<=1048576 LIMIT 1",new String[]{id})){
+                if(!row.moveToFirst())throw new SecurityException("本机暂无法核对这份交付的留存正文");
+                work=new JSONObject(row.getString(0));
+            }
+            JSONObject meta=OwnerWorkTask.require(work);
+            if(!id.equals(work.opt("id"))||!conversation.equals(work.opt("conversationId"))||!run.equals(work.opt("runId"))
+                    ||epoch!=OwnerInputQueue.integer(work.opt("coordinatorEpoch"))||epoch!=originalRunEpoch(id,run)||!"completed".equals(work.opt("status"))
+                    ||!Boolean.FALSE.equals(work.opt("cancelRequested"))||currentAttemptRunning(work)||hasUnresolved(id))
+                throw new SecurityException("原工作或执行已变化，未读取其他轮次");
+            for(String name:new String[]{"origin","parentTaskId","developmentContext","ownerPhoneControl","ownerDeviceWork","ownerWorkPreparation",
+                    "ownerResultHandling","ownerWorkTakeover","teamAssignment","teamRunId","memberId","teamWriteScope","teamReservationPool",
+                    "workProfileRef","workProfileIntent","projectMemoryRead","sourceLearningJob","sshSelection","extensionSelection",OWNER_SELECTED_TEAM_START})
+                if(!work.isNull(name))throw new SecurityException("这不是原私人对话中的普通工作交付");
+            if(!work.isNull("relatedTasks")&&(!(work.opt("relatedTasks") instanceof JSONArray related)||related.length()!=0))
+                throw new SecurityException("这不是普通工作的独立交付");
+            JSONObject selected=ownerWorkDeliveryById(work,delivery.deliveryId());String digest=selected.getString("resultDigest");
+            if(!OwnerWorkTask.DELIVERY_FORMAT.equals(selected.opt("format"))||!id.equals(selected.opt("taskId"))||!id.equals(selected.opt("workTaskId"))
+                    ||!conversation.equals(selected.opt("conversationId"))||!meta.getString("generation").equals(selected.opt("generation"))
+                    ||!run.equals(selected.opt("runId"))||epoch!=OwnerInputQueue.integer(selected.opt("epoch"))||!message.equals(selected.opt("messageId"))
+                    ||!"completed".equals(selected.opt("status"))||!"delivered".equals(selected.opt("deliveryState"))||ownerWorkCapacityNotice(selected)
+                    ||!selected.isNull("noticeKind")||!selected.isNull("resultKind")||!selected.isNull("baseDeliveryId")
+                    ||!Boolean.FALSE.equals(selected.opt("relatedSourcesUnavailable"))
+                    ||!(selected.opt("relatedResultSources") instanceof JSONArray relatedSources)||relatedSources.length()!=0
+                    ||!(selected.opt("relatedPendingChildren") instanceof JSONArray relatedPending)||relatedPending.length()!=0
+                    ||!digest.matches("[a-f0-9]{64}")
+                    ||!expectedDigest.isEmpty()&&!expectedDigest.equals(digest))
+                throw new SecurityException("这条消息的原交付版本已变化，未读取其他结果");
+            requireOwnerWorkSources(work);
+            if(!ownerWorkResultAvailable(work,selected))throw new SecurityException("这份原交付或其来源已不可用");
+            // This also checks uniqueness, the frozen result digest (including
+            // resultText), the saved excerpt fingerprint and native dependencies.
+            conversationRepository.requireOriginalOwnerWorkDelivery(conversation,message,revision,id,run,epoch,delivery.deliveryId(),digest);
+            if(!(selected.opt("resultText") instanceof String retained)||!(selected.opt("content") instanceof String excerpt)
+                    ||!(selected.opt("resultTextTruncated") instanceof Boolean limited)||!Boolean.TRUE.equals(selected.opt("summaryTruncated"))
+                    ||TaskExecutionScope.exactLong(selected,"summaryChars",1,Integer.MAX_VALUE)!=shownSummaryChars
+                    ||excerpt.isEmpty()||excerpt.length()>24000||retained.length()<=excerpt.length()||retained.length()>240000
+                    ||retained.length()>shownSummaryChars||limited!=(retained.length()<shownSummaryChars)||!retained.startsWith(excerpt)
+                    ||!StandardCharsets.UTF_8.newEncoder().canEncode(retained)||offset>=retained.length())
+                throw new SecurityException("原交付的摘录、留存正文或范围无法核对");
+            int end=ownerWorkResultRangeEnd(retained,offset,6000);
+            if(!current.getAsBoolean())throw new SecurityException("原交付阅读窗口已关闭");
+            JSONObject page=new JSONObject().put("format","pocketworld.original-work-delivery-page.v1")
+                    .put("conversationId",conversation).put("messageId",message).put("sourceRevision",revision)
+                    .put("taskId",id).put("runId",run).put("epoch",epoch).put("deliveryId",delivery.deliveryId()).put("resultDigest",digest)
+                    .put("body",retained.substring(offset,end)).put("offset",offset).put("chars",end-offset).put("nextOffset",end)
+                    .put("retainedChars",retained.length()).put("originalChars",shownSummaryChars).put("excerptChars",excerpt.length())
+                    .put("retentionLimited",limited).put("hasMore",end<retained.length()).put("unit","UTF-16")
+                    .put("readOnly",true).put("executionAuthorized",false);
+            db.setTransactionSuccessful();return page;
+        }finally{db.endTransaction();}
+    }
+    private static int ownerWorkResultRangeEnd(String full,int offset,int maxChars){
+        if(offset>full.length()||offset>0&&offset<full.length()&&Character.isLowSurrogate(full.charAt(offset))&&Character.isHighSurrogate(full.charAt(offset-1)))throw new IllegalArgumentException("结果偏移不在原UTF-16字符边界");
+        int end=(int)Math.min((long)full.length(),(long)offset+maxChars);if(end<full.length()&&end>offset&&Character.isHighSurrogate(full.charAt(end-1)))end--;if(end==offset&&offset<full.length())throw new IllegalArgumentException("结果读取长度不能切开一个完整字符");
+        return end;
+    }
     /** Bounded source-checked read of one immutable result. This never starts work,
      * consumes its butler receipt or changes an original input's submission. */
     public synchronized JSONObject ownerWorkResult(String id,String conversation,String deliveryId,int offset,int maxChars)throws Exception {
@@ -4466,8 +4537,7 @@ public final class TaskStore {
             }else entry=ownerWorkDeliveryById(task,deliveryId);
             deliveryId=entry.getString("deliveryId");
             if(!ownerWorkResultAvailable(task,entry))throw new SecurityException("原工作结果或来源已删除、停用或不可核对");String full=entry.optString("resultText",entry.getString("content"));
-            if(offset>full.length()||offset>0&&offset<full.length()&&Character.isLowSurrogate(full.charAt(offset))&&Character.isHighSurrogate(full.charAt(offset-1)))throw new IllegalArgumentException("结果偏移不在原UTF-16字符边界");
-            int end=(int)Math.min((long)full.length(),(long)offset+maxChars);if(end<full.length()&&end>offset&&Character.isHighSurrogate(full.charAt(end-1)))end--;if(end==offset&&offset<full.length())throw new IllegalArgumentException("结果读取长度不能切开一个完整字符");
+            int end=ownerWorkResultRangeEnd(full,offset,maxChars);
             JSONObject result=new JSONObject().put("taskId",id).put("workTaskId",id).put("conversationId",conversation).put("deliveryId",deliveryId).put("runId",entry.getString("runId")).put("epoch",entry.getInt("epoch"))
                     .put("resultSequence",entry.optLong("resultSequence")).put("resultDigest",entry.getString("resultDigest")).put("summaryDigest",entry.getString("summaryDigest")).put("status",entry.getString("status"))
                     .put("content",full.substring(offset,end)).put("offset",offset).put("nextOffset",end).put("chars",end-offset).put("totalChars",full.length()).put("originalChars",entry.getInt("summaryChars"))

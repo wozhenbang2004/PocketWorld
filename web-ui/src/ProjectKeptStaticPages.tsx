@@ -1,12 +1,12 @@
 import { useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import { bridge, type PocketSnapshot } from './bridge';
-import { Button, SettingsDialog } from './forms-library';
+import { Accordion, AccordionItem, Button, SelectField, SettingsDialog } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { useProjectPreviewViewport } from './ProjectPreviewPane';
 
 const prefix='projects.keptStaticPages.';
 export const keepStaticPage=prefix+'keep';
-const listPages=prefix+'list',openPage=prefix+'open',closeShelf=prefix+'close';
+const listPages=prefix+'list',openPage=prefix+'open',comparePages=prefix+'compare',closeShelf=prefix+'close';
 const reviewPending=prefix+'pending.review',abandonPending=prefix+'pending.abandon',dismissPending=prefix+'pending.dismiss';
 const closePreview='projects.preview.close';
 const available=(action:string)=>bridge.getState().capabilities.commands.includes(action);
@@ -35,6 +35,48 @@ type Pending='none'|'reviewable'|'unconfirmed';
 type Catalog={shelfHandle:string;versions:Page[];pendingState:Pending;maxVersions:number;maxStoredBytes:number};
 const sameVisit=(value:Record<string,unknown>,visit:Binding)=>value.projectId===visit.projectId&&value.visitId===visit.visitId;
 const sameShelf=(value:Record<string,unknown>,visit:Binding,catalog:Catalog)=>sameVisit(value,visit)&&value.shelfHandle===catalog.shelfHandle;
+const sameCopyPair=(a:Page,b:Page)=>a.projectId===b.projectId&&a.checkoutId===b.checkoutId&&
+  a.versionId!==b.versionId&&a.manifestIdentity!==b.manifestIdentity;
+type MemberDescriptor={sha256:string;bytes:number};
+type ManifestChange={path:string;before:MemberDescriptor|null;after:MemberDescriptor|null};
+type ManifestComparison={changes:ManifestChange[];unchanged:number};
+type PairSelection={before:string;after:string;result?:ManifestComparison;unavailable?:true};
+const emptyPair:PairSelection={before:'',after:''};
+const safeManifestPath=(path:unknown):path is string=>typeof path==='string'&&path.length<=240&&
+  (path==='index.html'||(/\.(css|m?js|png|jpe?g|webp|gif|ico)$/i.test(path)&&!/[\\:?#%\u0000-\u001f\u007f-\u009f]/.test(path)&&
+    path.split('/').every(part=>!!part&&!part.startsWith('.')&&part===part.trim())));
+function descriptor(value:unknown,maxBytes:number):MemberDescriptor|null|undefined {
+  if(value===null)return null;
+  const d=row(value);
+  return hash(d.sha256)&&integer(d.bytes,0,maxBytes)?{sha256:d.sha256,bytes:d.bytes}:undefined;
+}
+function manifestComparison(value:unknown,visit:Binding,catalog:Catalog,a:Page,b:Page):ManifestComparison|null {
+  const info=row(value);
+  if(info.kind!=='owner_saved_static_page_manifest_comparison'||!sameShelf(info,visit,catalog)||
+    !samePage(a,keptStaticPage(info.before,visit.projectId))||!samePage(b,keptStaticPage(info.after,visit.projectId))||
+    !integer(info.unchanged,0,Math.min(a.resourceCount,b.resourceCount))||!Array.isArray(info.changes)||
+    !info.changes.length||info.changes.length>a.resourceCount+b.resourceCount)return null;
+  const changes:ManifestChange[]=[];
+  let previous='',countA=info.unchanged,countB=info.unchanged,bytesA=0,bytesB=0,entry=false;
+  for(const value of info.changes){
+    const c=row(value),path=c.path;
+    if(!safeManifestPath(path)||path<=previous)return null;
+    const maximum=path==='index.html'?256*1024:2*1024*1024;
+    const before=descriptor(c.before,maximum),after=descriptor(c.after,maximum);
+    if(before===undefined||after===undefined||(!before&&!after)||
+      (before&&after&&before.sha256===after.sha256&&before.bytes===after.bytes))return null;
+    if(path==='index.html'){
+      if(before?.sha256!==a.entrySha256||after?.sha256!==b.entrySha256)return null;
+      entry=true;
+    }
+    if(before){countA++;bytesA+=before.bytes;}
+    if(after){countB++;bytesB+=after.bytes;}
+    changes.push({path,before,after});previous=path;
+  }
+  if(countA!==a.resourceCount||countB!==b.resourceCount||bytesA>a.bytes||bytesB>b.bytes||
+    (!info.unchanged&&(bytesA!==a.bytes||bytesB!==b.bytes||!entry))||(!entry&&a.entrySha256!==b.entrySha256))return null;
+  return {changes,unchanged:info.unchanged};
+}
 function shelfCatalog(value:unknown,visit:Binding,previous:Catalog|null):Catalog|null {
   const c=row(value);
   if(c.kind!=='owner_saved_static_page_catalog'||!sameVisit(c,visit)||!id(c.shelfHandle)||
@@ -84,15 +126,55 @@ type ReadVisit={page:Page;focus:Focus;ack?:Frame;frame?:Frame;timer?:number;retu
 type Review={id:string;deadline:number;focus:Focus;timer:number};
 type Visit=Binding&{document:number;revisions:string;inactiveRenderer:string;trigger:HTMLButtonElement;catalog:Catalog|null;
   catalogPublished?:true;catalogTimer?:number;
-  reader?:ReadVisit;review?:Review;busy?:'list'|'review'|'abandon'|'dismiss';notice:string;problem:boolean;
+  reader?:ReadVisit;review?:Review;pair?:PairSelection;busy?:'list'|'compare'|'review'|'abandon'|'dismiss';notice:string;problem:boolean;
   closing?:Promise<boolean>;closeUnconfirmed?:true;retired?:true;focusOnClose?:boolean};
-type Presentation=Pick<Visit,'catalog'|'notice'|'problem'|'busy'> & {reader?:ReadVisit;review?:Review;closing:boolean};
+type Presentation=Pick<Visit,'catalog'|'notice'|'problem'|'busy'|'pair'> & {reader?:ReadVisit;review?:Review;closing:boolean};
 export type KeptStaticShelfNavigation={leave:()=>Promise<boolean>|undefined;back:()=>boolean};
 
 const clearOpenTimer=(reader?:ReadVisit)=>{if(reader?.timer!==undefined)window.clearTimeout(reader.timer);};
 const clearReviewTimer=(review?:Review)=>{if(review)window.clearTimeout(review.timer);};
 const focusable=(node:HTMLElement)=>node.isConnected&&!node.closest('[hidden],[inert]')&&node.getClientRects().length>0;
 const publicationWaitMs=4_000; // Native reaps a renderer that has not received a viewport.
+
+function KeptManifestPair({catalog,selection,disabled,loading,choose,compare,open}:{catalog:Catalog;selection:PairSelection;
+  disabled:boolean;loading:boolean;choose:(side:'before'|'after',versionId:string)=>void;compare:()=>void;
+  open:(page:Page,trigger:HTMLButtonElement)=>void}){
+  if(catalog.versions.length<2)return null;
+  const options=catalog.versions.map((page,index)=>({page,id:page.versionId,
+    label:'第 '+(index+1)+' 项 · '+new Date(page.savedAt).toLocaleString(),description:page.resourceCount+' 个文件'}));
+  const first=options.filter(option=>options.some(other=>sameCopyPair(option.page,other.page)));
+  if(!first.length)return <p className="pw-field-hint">只有同一项目副本保留的两版网页可以对照。</p>;
+  const a=first.find(option=>option.id===selection.before);
+  const second=a?options.filter(option=>sameCopyPair(a.page,option.page)):[];
+  const b=second.find(option=>option.id===selection.after),result=selection.result;
+  const size=(side:string,value:MemberDescriptor|null)=>value&&<span>{side}：{value.bytes} 字节 · <code title={value.sha256}>{value.sha256.slice(0,12)}</code></span>;
+  return <Accordion variant="divided" className="pw-compact-disclosures">
+    <AccordionItem id="kept-static-manifest-pair" title="对照保留版本">
+      <div className="pw-form-flow">
+        <p className="pw-field-hint">只比较同一副本保存时的资源清单。不读取文件内容，也不打开网页。</p>
+        <SelectField label="版本 A" value={a?.id??''} options={first} isDisabled={disabled} onChange={value=>choose('before',value)} compactValue />
+        <SelectField label="版本 B" value={b?.id??''} options={second} isDisabled={disabled||!a} onChange={value=>choose('after',value)} compactValue />
+        <div className="pw-form-actions"><Button variant="secondary" size="small" disabled={disabled||!a||!b} onClick={compare}>比较这两版</Button></div>
+        {loading&&<p role="status">正在核对这两版的保留清单…</p>}
+        {selection.unavailable&&<p className="pw-error" role="alert">未核对到这两版的保留清单。可核对列表后重新选择，没有打开其他网页。</p>}
+        {a&&b&&result&&<section className="pw-form-flow" aria-label="保留清单的差异">
+          <p role="status">内容不同 {result.changes.filter(change=>change.before&&change.after).length} · 仅 A 收录 {result.changes.filter(change=>!change.after).length} · 仅 B 收录 {result.changes.filter(change=>!change.before).length} · 相同 {result.unchanged}</p>
+          <p className="pw-field-hint">“仅收录”不代表项目里删除了文件。下方显示内容摘要前 12 位。</p>
+          <ul className="pw-form-flow">{result.changes.map(change=><li key={change.path} className="min-w-0">
+            <strong className="[overflow-wrap:anywhere]"><bdi>{change.path}</bdi></strong>
+            <div className="pw-field-hint">{change.before&&change.after?'内容不同':change.before?'仅 A 收录':'仅 B 收录'}</div>
+            {change.before&&<div className="pw-field-hint">{size('A',change.before)}</div>}
+            {change.after&&<div className="pw-field-hint">{size('B',change.after)}</div>}
+          </li>)}</ul>
+          <div className="pw-form-actions">
+            <Button variant="secondary" size="small" disabled={disabled} onClick={event=>open(a.page,event.currentTarget)}>打开 A 版网页</Button>
+            <Button variant="secondary" size="small" disabled={disabled} onClick={event=>open(b.page,event.currentTarget)}>打开 B 版网页</Button>
+          </div>
+        </section>}
+      </div>
+    </AccordionItem>
+  </Accordion>;
+}
 
 export function ProjectKeptStaticPages({project,active,registerNavigation}:{project:{id:string;name:string};active:boolean;
   registerNavigation:(control:KeptStaticShelfNavigation|null)=>void}){
@@ -103,7 +185,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   const update=(original:Visit)=>{
     if(!mounted.current||visit.current!==original)return;
     setShown({catalog:publishedCatalog(original)?original.catalog:null,reader:original.reader?{...original.reader}:undefined,review:original.review,
-      busy:original.busy,notice:original.notice,problem:original.problem,closing:!!original.closing||!!original.closeUnconfirmed});
+      pair:original.pair,busy:original.busy,notice:original.notice,problem:original.problem,closing:!!original.closing||!!original.closeUnconfirmed});
   };
   const note=(original:Visit,text:string,problem=true)=>{original.notice=text;original.problem=problem;update(original);};
   const current=(original:Visit)=>{
@@ -127,7 +209,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   const retire=(original:Visit)=>{
     clearCatalogTimer(original);clearOpenTimer(original.reader);clearReviewTimer(original.review);
     original.retired=true;
-    original.catalog=null;original.reader=undefined;original.review=undefined;original.busy=undefined;
+    original.catalog=null;original.reader=undefined;original.review=undefined;original.pair=undefined;original.busy=undefined;
     if(visit.current!==original)return;
     visit.current=null;nextFocus.current=null;if(mounted.current)setShown(null);
   };
@@ -144,6 +226,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     if(original.closing)return original.closing;
     if(!current(original))return Promise.resolve(false);
     clearCatalogTimer(original);clearOpenTimer(original.reader);clearReviewTimer(original.review);original.review=undefined;original.closeUnconfirmed=undefined;
+    original.pair=undefined;if(original.busy==='compare')original.busy=undefined;
     original.closing=requestClose(original).then(confirmed=>{
       original.closing=undefined;
       if(!current(original))return false;
@@ -227,7 +310,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     if(!current(original)||original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review)return;
     const catalog=original.catalog;
     if(catalog&&!publishedCatalog(original))return;
-    original.busy='list';note(original,'',false);
+    original.pair=undefined;original.busy='list';note(original,'',false);
     void bridge.command(listPages,{...wire(original),...(catalog?{shelfHandle:catalog.shelfHandle}:{})}).then(value=>{
       if(!current(original)||original.closing)return;
       const exact=shelfCatalog(value,original,catalog);
@@ -254,6 +337,43 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     const original:Visit={projectId:project.id,visitId:crypto.randomUUID(),document:bridge.getDocumentEpoch(),revisions,inactiveRenderer:prior,
       trigger,catalog:null,notice:'',problem:false};
     visit.current=original;read(original);
+  };
+  const mayCompare=(original:Visit,catalog:Catalog)=>current(original)&&publishedCatalog(original)&&original.catalog===catalog&&
+    !original.busy&&!original.closing&&!original.closeUnconfirmed&&!original.reader&&!original.review&&available(comparePages);
+  const choose=(original:Visit,catalog:Catalog,side:'before'|'after',versionId:string)=>{
+    if(!mayCompare(original,catalog))return;
+    const page=catalog.versions.find(row=>row.versionId===versionId);
+    if(!page)return;
+    const prior=original.pair??emptyPair;
+    if(side==='before'){
+      if(prior.before===versionId||!catalog.versions.some(other=>sameCopyPair(page,other)))return;
+      original.pair={before:versionId,after:''};
+    }else{
+      const a=catalog.versions.find(row=>row.versionId===prior.before);
+      if(prior.after===versionId||!a||!sameCopyPair(a,page))return;
+      original.pair={before:a.versionId,after:versionId};
+    }
+    update(original);
+  };
+  const compare=(original:Visit,catalog:Catalog)=>{
+    const chosen=original.pair;
+    if(!chosen||!mayCompare(original,catalog))return;
+    const a=catalog.versions.find(row=>row.versionId===chosen.before),b=catalog.versions.find(row=>row.versionId===chosen.after);
+    if(!a||!b||!sameCopyPair(a,b))return;
+    const attempt:PairSelection={before:a.versionId,after:b.versionId};
+    original.pair=attempt;original.busy='compare';update(original);
+    const stillHere=()=>current(original)&&publishedCatalog(original)&&original.catalog===catalog&&original.pair===attempt&&
+      original.busy==='compare'&&!original.closing&&!original.closeUnconfirmed&&!original.reader&&!original.review;
+    void bridge.command(comparePages,{...wire(original),shelfHandle:catalog.shelfHandle,beforeVersionId:a.versionId,
+      beforeManifestIdentity:a.manifestIdentity,afterVersionId:b.versionId,afterManifestIdentity:b.manifestIdentity}).then(value=>{
+      if(!stillHere())return;
+      const result=available(comparePages)&&manifestComparison(value,original,catalog,a,b);
+      if(!result)throw Error();
+      original.pair={...attempt,result};original.busy=undefined;update(original);
+    }).catch(()=>{
+      if(!stillHere())return;
+      original.pair={...attempt,unavailable:true};original.busy=undefined;update(original);
+    });
   };
   const open=(original:Visit,page:Page,trigger:HTMLButtonElement)=>{
     const catalog=original.catalog;
@@ -419,6 +539,10 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
                   disabled={!!shown.busy||shown.closing} onClick={event=>open(original,page,event.currentTarget)}>打开这版网页</Button>
               </li>;
             })}</ul>}
+            {catalog&&available(comparePages)&&<KeptManifestPair catalog={catalog} selection={shown.pair??emptyPair}
+              disabled={!!shown.busy||shown.closing} loading={shown.busy==='compare'}
+              choose={(side,version)=>choose(original,catalog,side,version)} compare={()=>compare(original,catalog)}
+              open={(page,trigger)=>open(original,page,trigger)} />}
             {catalog&&<div className="pw-form-actions">
               <Button variant="ghost" size="small" disabled={!!shown.busy} onClick={()=>read(original)}>核对列表</Button>
               {catalog.pendingState==='reviewable'&&<Button variant="ghost" size="small" disabled={!!shown.busy}

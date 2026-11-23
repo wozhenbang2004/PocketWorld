@@ -103,8 +103,27 @@ public final class OwnerKeptStaticPages {
         }
     }
 
-    public record Catalog(String projectId,List<Page> versions,long storedBytes,String pendingState) {
-        public Catalog { versions=List.copyOf(versions); }
+    public static final class Catalog {
+        private final String projectId,pendingState;
+        private final List<Page> versions;
+        private final long storedBytes;
+        // Only native code gets the exact fixed slots from this acknowledged visit.
+        private final Root root;
+        private final List<Slot> slots;
+        private Catalog(String projectId,List<Page> versions,long storedBytes,String pendingState,Root root,List<Stored> stored){
+            this.projectId=projectId;
+            this.versions=List.copyOf(versions);
+            this.storedBytes=storedBytes;
+            this.pendingState=pendingState;
+            this.root=root;
+            var slots=new ArrayList<Slot>();
+            for(Stored row:stored)slots.add(new Slot(row.path,row.page,row.identity));
+            this.slots=List.copyOf(slots);
+        }
+        public String projectId(){return projectId;}
+        public List<Page> versions(){return versions;}
+        public long storedBytes(){return storedBytes;}
+        public String pendingState(){return pendingState;}
         public JSONObject metadata()throws Exception{
             var entries=new JSONArray();
             for(Page entry:versions)entries.put(entry.metadata());
@@ -130,9 +149,10 @@ public final class OwnerKeptStaticPages {
     private record Root(List<Directory> parents,Path projectFolder,boolean exists) {}
     private record PendingStamp(BasicFileAttributes identity,long device,long inode,long changedAt) {}
     private record Member(String path,String sha256,String mimeType,int bytes) {}
-    private record Stored(Path path,Page page,BasicFileAttributes identity,ProjectPreviewBundle.Verified bundle) {}
+    private record Slot(Path path,Page page,BasicFileAttributes identity) {}
+    private record Stored(Path path,Page page,BasicFileAttributes identity,ProjectPreviewBundle.Verified bundle,List<Member> members) {}
     private record Scan(List<Stored> committed,int firstFree,long bytes) {}
-    private enum Read { HEADER, VERIFY, OPEN }
+    private enum Read { HEADER, COMPARE_HEADER, VERIFY, OPEN }
     private enum AbandonEntry { READY, ENTERED, RETIRED }
 
     public OwnerKeptStaticPages(Context context){app=context.getApplicationContext();}
@@ -229,8 +249,54 @@ public final class OwnerKeptStaticPages {
             catch(IOException|RuntimeException unavailable){pendingState="unconfirmed";}
             requireRoot(root);
             requireCurrent(window,project);
-            return new Catalog(project,result,known.bytes,pendingState);
+            return new Catalog(project,result,known.bytes,pendingState,root,known.committed);
         }
+    }
+
+    /** Compare only the two admitted slots in this private shelf, without opening either saved page. */
+    public JSONObject compare(ProjectWindow window,Catalog shown,Page before,Page after)throws Exception{
+        String project=project(window);
+        if(!project.equals(shown.projectId)||!project.equals(before.projectId)||!project.equals(after.projectId)||
+                !before.checkoutId.equals(after.checkoutId)||before.versionId.equals(after.versionId)||
+                before.manifestIdentity.equals(after.manifestIdentity))
+            throw new SecurityException("请选择同一项目同一副本的两份不同保留网页");
+        synchronized(LOCK){
+            requireCurrent(window,project);
+            Stored a=compareHeader(shown,before,window),b=compareHeader(shown,after,window);
+            var remaining=new TreeMap<String,Member>();
+            for(Member member:b.members)remaining.put(member.path,member);
+            var changed=new TreeMap<String,JSONObject>();int unchanged=0;
+            for(Member prior:a.members){
+                Member next=remaining.remove(prior.path);
+                if(prior.equals(next))unchanged++;
+                else changed.put(prior.path,change(prior.path,prior,next));
+            }
+            for(Member next:remaining.values())changed.put(next.path,change(next.path,null,next));
+            if(changed.isEmpty())throw new IOException("两份不同的原清单没有可核对的差异");
+            var changes=new JSONArray();
+            for(JSONObject difference:changed.values())changes.put(difference);
+            requireSame(a.identity,leaf(a.path));
+            requireSame(b.identity,leaf(b.path));
+            requireRoot(shown.root);
+            requireCurrent(window,project);
+            return new JSONObject().put("kind","owner_saved_static_page_manifest_comparison")
+                .put("before",a.page.metadata()).put("after",b.page.metadata()).put("unchanged",unchanged).put("changes",changes);
+        }
+    }
+    private static Stored compareHeader(Catalog shown,Page page,ProjectWindow window)throws Exception{
+        for(Slot slot:shown.slots)if(slot.page.equals(page)){
+            requireCurrent(window,shown.projectId);
+            Stored actual=read(shown.root,shown.projectId,slot.path,page,Read.COMPARE_HEADER);
+            requireSame(slot.identity,actual.identity);
+            return actual;
+        }
+        throw new SecurityException("原保留列表不含这份确切的网页");
+    }
+    private static JSONObject change(String path,Member before,Member after)throws Exception{
+        return new JSONObject().put("path",path).put("before",descriptor(before)).put("after",descriptor(after));
+    }
+    private static Object descriptor(Member member)throws Exception{
+        return member==null?JSONObject.NULL:new JSONObject().put("sha256",member.sha256).put("bytes",member.bytes);
     }
 
     /** Exact immutable selected version only. Never resolves against the current source checkout. */
@@ -407,7 +473,7 @@ public final class OwnerKeptStaticPages {
                     !page.manifestIdentity.equals(ProjectPreviewBundle.savedStaticIdentity(project,page.checkoutId,source,manifest)))
                 throw new IOException("原保留网页清单与入口不同");
             ProjectPreviewBundle.Verified bundle=null;
-            if(mode!=Read.HEADER){
+            if(mode==Read.VERIFY||mode==Read.OPEN){
                 var resources=new TreeMap<String,ProjectPreviewBundle.Resource>();
                 for(Member member:members){
                     if(Thread.currentThread().isInterrupted())throw new InterruptedException();
@@ -427,7 +493,7 @@ public final class OwnerKeptStaticPages {
                 }
             }
             requireSame(before,leaf(path));requireRoot(root);
-            return new Stored(path,page,before,bundle);
+            return new Stored(path,page,before,bundle,mode==Read.COMPARE_HEADER?List.copyOf(members):List.of());
         }
     }
 
