@@ -16,6 +16,12 @@ final class OwnerSavedPeerWorkspaceWork {
     private static final int PAGE = 12, OPERATION_WITNESSES = 8;
     private static final Set<String> STATUS = Set.of("queued","preparing","running","paused","pausing","stopping",
             "verifying","awaiting_user","needs_confirmation","waiting_approval","reconciling","completed","failed","cancelled","interrupted");
+    private record UnconfirmedDispatch(String operation, String tool, long claimedAt) {
+        JSONObject view() throws Exception {
+            return new JSONObject().put("operationId",operation).put("tool",tool).put("claimedAt",claimedAt);
+        }
+    }
+    private record WorkspaceOperations(String accepted, UnconfirmedDispatch unconfirmed) {}
 
     private OwnerSavedPeerWorkspaceWork() {}
 
@@ -57,7 +63,7 @@ final class OwnerSavedPeerWorkspaceWork {
                 +" JOIN tasks t ON t.task_id=d.parent_task_id"+filter
                 +" ORDER BY d.latest_at DESC,d.parent_task_id LIMIT "+(PAGE+1);
         String last="";
-        boolean more=false;
+        boolean more=false, includedUnconfirmed=false;
         int scanned=0;
         JSONArray rows=new JSONArray();
         try (Cursor work = db.rawQuery(sql,args.toArray(new String[0]))) {
@@ -72,16 +78,25 @@ final class OwnerSavedPeerWorkspaceWork {
                 int epoch=parent.optInt("coordinatorEpoch",-1);
                 if (!ownerWork(parent,last,run,epoch,selected) || !STATUS.contains(status)
                         || !exactTask.isEmpty() && (!exactRun.equals(run) || exactEpoch!=epoch)) continue;
-                String kind=acceptedWorkspaceOperation(db,here,selected,last,run,epoch);
-                if (kind.isEmpty()) continue;
+                // Rechecking a previously opened accepted row must not return an unconfirmed
+                // operation as a replacement. The additional evidence belongs only to the directory.
+                var operations=workspaceOperations(db,here,selected,last,run,epoch,exactTask.isEmpty());
+                if (operations.accepted().isEmpty() && operations.unconfirmed()==null) continue;
                 long at=work.getLong(1);
                 if (at<=0 || at>DeviceProtocol.MAX_SAFE_INTEGER) continue;
-                rows.put(new JSONObject().put("taskId",last).put("runId",run).put("epoch",epoch)
-                        .put("lastSavedAt",at).put("status",status).put("retainedOperation",kind));
+                JSONObject row=new JSONObject().put("taskId",last).put("runId",run).put("epoch",epoch)
+                        .put("lastSavedAt",at).put("status",status);
+                if (!operations.accepted().isEmpty()) row.put("retainedOperation",operations.accepted());
+                if (operations.unconfirmed()!=null) {
+                    row.put("unconfirmedDispatch",operations.unconfirmed().view()); includedUnconfirmed=true;
+                }
+                rows.put(row);
             }
         }
         requirePeer(db,selected,pairEpoch);
-        return new JSONObject().put("rows",rows).put("next",more ? last : "").put("readOnly",true);
+        JSONObject page=new JSONObject().put("rows",rows).put("next",more ? last : "").put("readOnly",true);
+        if (includedUnconfirmed) page.put("localDispatchReadAt",System.currentTimeMillis());
+        return page;
     }
 
     static boolean ownerWork(JSONObject parent, String task, String run, int epoch, DirectedWorkspaceTarget selected) {
@@ -98,13 +113,14 @@ final class OwnerSavedPeerWorkspaceWork {
         catch (Exception invalid) { return false; }
     }
 
-    /** One positive original, per-operation acknowledgement is enough to find the real original Work.
-     * Don't copy the reply, body, resource, job ID, or its native grant out of the store. */
-    private static String acceptedWorkspaceOperation(SQLiteDatabase db,String here,DirectedWorkspaceTarget target,
-            String id,String run,int epoch) throws Exception {
+    /** One accepted operation keeps the ordinary Work link. A sealed local claim is separate
+     * evidence and carries no Work or peer-reading authority. Do not copy payloads or grants. */
+    private static WorkspaceOperations workspaceOperations(SQLiteDatabase db,String here,DirectedWorkspaceTarget target,
+            String id,String run,int epoch,boolean includeUnconfirmed) throws Exception {
+        String accepted=""; UnconfirmedDispatch unconfirmed=null;
         String sql="SELECT l.parent_operation_id,l.allocation_id,l.intent_digest,l.wire_digest,b.parent_operation_id,b.arguments_digest,"
                 +"CASE WHEN length(CAST(l.wire_json AS BLOB))<="+DeviceProtocol.MAX_CONTROL_BYTES+" THEN l.wire_json END,"
-                +"CASE WHEN length(CAST(o.receipt AS BLOB))<=131072 THEN o.receipt END"
+                +"CASE WHEN length(CAST(o.receipt AS BLOB))<=131072 THEN o.receipt END,o.state"
                 +" FROM device_child_budget b JOIN device_child_links l ON l.parent_task_id=b.parent_task_id AND l.allocation_id=b.allocation_id"
                 +" JOIN operations o ON o.task_id=l.parent_task_id AND o.operation_id=l.parent_operation_id AND o.run_id=b.parent_run_id"
                 +" JOIN runs r ON r.task_id=o.task_id AND r.run_id=o.run_id AND r.epoch=b.parent_epoch"
@@ -120,8 +136,7 @@ final class OwnerSavedPeerWorkspaceWork {
                     DeviceTaskEnvelope wire=DeviceProtocol.parseRequest(bytes);
                     JSONObject frozen=wire.json(), receipt=new JSONObject(op.getString(7));
                     JSONObject send=receipt.optJSONObject("nativeDeviceSend"), binding=receipt.optJSONObject("nativeDeviceAcceptedBinding");
-                    if (send==null || binding==null
-                            || !"pocketworld.native-device-send.v1".equals(send.opt("format"))
+                    if (send==null || binding==null&&!includeUnconfirmed || !"pocketworld.native-device-send.v1".equals(send.opt("format"))
                             || !"write_claimed".equals(send.opt("state")) || send.optLong("claimedAt")<=0
                             || !DeviceProtocol.sha256(bytes).equals(send.opt("wireSha256")) || !allocation.equals(send.opt("allocationId"))
                             || !intent.equals(send.opt("intentDigest")) || !wire.argumentsDigest().equals(digest)
@@ -134,17 +149,28 @@ final class OwnerSavedPeerWorkspaceWork {
                     var tool=wire.toolInvocation();
                     if (!DirectedWorkspaceTarget.allows(frozen.optString("capabilityVersion"),tool.toolName(),tool.effect())
                             || !allocation.equals(DeviceProtocol.allocationId(id,target.deviceId(),wire.resourceBinding(),"tool_session",null))) continue;
-                    String job=binding.optString("jobId");
-                    if (Boolean.TRUE.equals(binding.opt("accepted")) && "job".equals(binding.opt("acceptedObjectKind"))
-                            && job.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}") && job.equals(binding.opt("objectId"))
-                            && id.equals(binding.opt("parentTaskId")) && op.getString(4).equals(binding.opt("parentOperationId"))
-                            && operation.equals(binding.opt("sourceOperationId")) && operation.equals(binding.opt("targetOperationId"))
-                            && digest.equals(binding.opt("operationArgumentsDigest")) && op.getString(5).equals(binding.opt("argumentsDigest"))
-                            && target.deviceId().equals(binding.opt("executorDeviceId")) && target.instanceId().equals(binding.opt("instanceId"))
-                            && binding.optLong("acceptedAt")>0) return tool.toolName();
-                } catch (Exception invalid) { /* Unknown old rows aren't promoted into the original directory. */ }
+                    if (binding!=null && accepted.isEmpty()) {
+                        String job=binding.optString("jobId");
+                        if (Boolean.TRUE.equals(binding.opt("accepted")) && "job".equals(binding.opt("acceptedObjectKind"))
+                                && job.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}") && job.equals(binding.opt("objectId"))
+                                && id.equals(binding.opt("parentTaskId")) && op.getString(4).equals(binding.opt("parentOperationId"))
+                                && operation.equals(binding.opt("sourceOperationId")) && operation.equals(binding.opt("targetOperationId"))
+                                && digest.equals(binding.opt("operationArgumentsDigest")) && op.getString(5).equals(binding.opt("argumentsDigest"))
+                                && target.deviceId().equals(binding.opt("executorDeviceId")) && target.instanceId().equals(binding.opt("instanceId"))
+                                && binding.optLong("acceptedAt")>0) accepted=tool.toolName();
+                    }
+                    if (includeUnconfirmed && unconfirmed==null && "unknown".equals(op.getString(8))
+                            && !receipt.has("nativeDeviceAcceptedBinding") && !receipt.optBoolean("accepted")
+                            && !Boolean.TRUE.equals(receipt.optJSONObject("receipt")==null ? null : receipt.getJSONObject("receipt").opt("accepted"))
+                            && !"not_dispatched".equals(receipt.opt("effectState")) && !receipt.optBoolean("notDispatched")
+                            && !receipt.optBoolean("notDispatchedConfirmed") && intent.matches("[a-f0-9]{64}")) {
+                        long claimedAt=DeviceProtocol.integer(send.opt("claimedAt"),"原本机发送登记时间",1,8_640_000_000_000_000L);
+                        unconfirmed=new UnconfirmedDispatch(operation,tool.toolName(),claimedAt);
+                    }
+                    if (!accepted.isEmpty() && (!includeUnconfirmed || unconfirmed!=null)) break;
+                } catch (Exception invalid) { /* Incomplete evidence does not become a displayed receipt. */ }
             }
         }
-        return "";
+        return new WorkspaceOperations(accepted,unconfirmed);
     }
 }

@@ -20,6 +20,7 @@ import android.net.Uri
 import dev.pocketengine.features.attachments.AttachmentsModule
 import dev.pocketengine.features.attachments.OwnerAttachmentImport
 import dev.pocketengine.features.attachments.AttachmentRepository
+import dev.pocketengine.features.assistant.AssistantModule
 import dev.pocketengine.features.assistant.AttachmentRequestProjection
 import dev.pocketengine.media.RealtimeSessionModule
 import dev.pocketengine.features.assistant.OwnerComposerState
@@ -4525,6 +4526,15 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         val ordinaryFirst=originalOrdinaryComposer && displayGate==null && voiceClient==null && !state.chatBusy && state.conversationId==null &&
             draft.key.startsWith("new:") && webPrivateOwnerVisible() && !hasChannelPhoneOrigin && conversationReader==null &&
             selected.isEmpty() && selectedSources.length()==0 && selectedPreviews.length()==0 && selectedObjects.length()==0 && draft.voiceText.isEmpty()
+        // Failure presentation only; the ordinary send still uses the same durable Pending and model pin.
+        val ordinaryDirect=originalOrdinaryComposer && displayGate==null && primaryDisplayRevision==null && voiceClient==null &&
+            expectedDraftRevision==draft.revision && expectedForegroundTurn?.length()==0 && !state.chatBusy && binding==null &&
+            draft.mode=="queue" && state.conversationId?.isNotBlank()==true && ordinaryAttachmentDraft(draft) && webPrivateOwnerVisible() &&
+            !hasChannelPhoneOrigin && webTaskViewId==null && conversationReader==null && queuedInputsPage==null && state.filePath==null &&
+            !state.chatAttachmentPickerOpen && !state.attachmentImporting && !attachmentOutcomes.state.open &&
+            !state.phoneSubmitting && !state.listening && !voiceInput.active() && !voiceInput.snapshot().optBoolean("reviewAvailable") &&
+            draft.voiceText.isEmpty() && draft.voiceInputId.isEmpty() && selected.isEmpty() && selectedSources.length()==0 &&
+            selectedPreviews.length()==0 && selectedObjects.length()==0 && text.isNotBlank()
         val input=JSONObject().put("message",ChatInputRules.submittedText(text,selected)).put("clientMessageId",client).put("mode",draft.mode).put("attachments",org.json.JSONArray().also{a->selected.forEach{a.put(it.selection())}});if(selectedSources.length()>0)input.put("ownerSourceRefs",selectedSources);if(selectedPreviews.length()>0)input.put("ownerPreviewRefs",selectedPreviews)
         if(expectedForegroundTurn!=null)input.put("mustMatchObservedForeground",true)
         if(firstPaused)input.put("firstMessageWithoutPersonalMemory",true)
@@ -4541,7 +4551,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             publishComposer()}
         catch(error:Exception){state=state.copy(error=message(error));return}
         submittingChatClient=client;composerSaving=true;state=state.copy(chatSubmitting=true,error=null,chatReceipts=state.chatReceipts+(client to JSONObject().put("clientMessageId",client).put("status","unconfirmed")))
-        persistPreparedChat(client,input,model,false,primaryDisplayWindow)
+        persistPreparedChat(client,input,model,false,primaryDisplayWindow,
+            ordinaryDirect=if(ordinaryDirect)model.pending(client) else null)
     }
     private val ownerWorkInputCallbacks = mutableMapOf<String, (JSONObject?, String?) -> Unit>()
     /** Work editors retain their original run and never select the conversation composer. */
@@ -4919,7 +4930,8 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         submittingChatClient=client;state=state.copy(chatSubmitting=true,error=null);composerSaving=true
         persistPreparedChat(client,JSONObject(local.payload),model,true,primaryDisplayWindow)
     }
-    private fun persistPreparedChat(client:String,input:JSONObject,model:OwnerComposerState,localRetry:Boolean,primaryDisplayWindow:(()->Boolean)?=null) {
+    private fun persistPreparedChat(client:String,input:JSONObject,model:OwnerComposerState,localRetry:Boolean,
+        primaryDisplayWindow:(()->Boolean)?=null,ordinaryDirect:OwnerComposerState.Pending?=null) {
         // The native client identity is durable BEFORE calling the original send entry point.
         // A late completion after detach never sends; reopening queries this ID only.
         main.removeCallbacks(composerSave);val version=model.revision()
@@ -4980,7 +4992,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     else firstChatDispatchUnconfirmed(client)
                 }
                 OwnerComposerState.FirstChatPhase.RELEASED -> firstChatDispatchUnconfirmed(client)
-                null -> pinAndDispatchOriginalChat(originalPending,input)
+                null -> pinAndDispatchOriginalChat(originalPending,input,ordinaryDirect?.takeIf { !localRetry && it===originalPending })
             }
         } }
     }
@@ -5007,7 +5019,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
             pinAndDispatchOriginalChat(fenced,input)
         } }
     }
-    private fun pinAndDispatchOriginalChat(original:OwnerComposerState.Pending,input:JSONObject) {
+    private fun pinAndDispatchOriginalChat(original:OwnerComposerState.Pending,input:JSONObject,ordinaryDirect:OwnerComposerState.Pending?=null) {
         val client=original.clientId
         val scope=if(original.conversationId.isNotBlank())dev.pocketengine.runtime.models.ConversationModelPreferences.conversation(original.conversationId)
             else dev.pocketengine.runtime.models.ConversationModelPreferences.draft(original.draftKey)
@@ -5024,8 +5036,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                     locallyUnsent[client]=LocalUnsent(input.toString(),original.draftKey,original.draftRevision)
                     if(submittingChatClient==client)submittingChatClient=null
                     state=state.copy(chatSubmitting=false,error="模型偏好尚未固定，本次未发送；原输入仍保留："+message(pinned.exceptionOrNull()!!))
-                } else if(current?.fingerprint==original.fingerprint) feature("assistant","send",input,
-                    ordinaryFirst=original.takeIf { it.firstChatPhase==OwnerComposerState.FirstChatPhase.FENCED })
+                } else if(current?.fingerprint==original.fingerprint) {
+                    val kind=when {
+                        original.firstChatPhase==OwnerComposerState.FirstChatPhase.FENCED -> AssistantModule.OrdinaryChatKind.FIRST_FENCED
+                        ordinaryDirect===original && current===original && submittingChatClient==client -> AssistantModule.OrdinaryChatKind.EXISTING_DIRECT
+                        else -> null
+                    }
+                    feature("assistant","send",input,ordinaryChat=kind?.let { AssistantModule.OrdinaryChatDispatch(original,it) })
+                }
             }
         }
     }
@@ -6387,7 +6405,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         } } catch (error: Exception) { state = state.copy(modelTesting = false, modelTest = null, modelTestTaskId = null); throw error }
     }
     private fun feature(feature: String, command: String, payload: JSONObject = JSONObject(), originalOwnerCurrent: (() -> Boolean)? = null,
-                        formalSaveFileList: Boolean = false, ordinaryFirst: OwnerComposerState.Pending? = null): String {
+                        formalSaveFileList: Boolean = false, ordinaryChat: AssistantModule.OrdinaryChatDispatch? = null): String {
         val id = UUID.randomUUID().toString()
         val key = "$feature.$command"
         val workspaceFileList = key == "workspace.list"
@@ -6403,7 +6421,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if(feature=="assistant"&&command=="get")latestChatGet=id
         pending[id] = Pair(key, metadata)
         native("featureRequest", JSONObject().put("feature", feature).put("command", command).put("payload", payload).put("requestId", id),
-            originalOwnerCurrent = originalOwnerCurrent, formalSaveFileList = formalSaveFileList, ordinaryFirst = ordinaryFirst)
+            originalOwnerCurrent = originalOwnerCurrent, formalSaveFileList = formalSaveFileList, ordinaryChat = ordinaryChat)
         return id
     }
     internal var nativeEvaluationOpen by mutableStateOf(false)
@@ -6827,7 +6845,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
     }
     private fun native(action: String, input: JSONObject = JSONObject(), ownerRequestId: String? = null, projectMemoryRequest: ProjectStartMemoryRequest? = null, completed: ((JSONObject?, String?) -> Unit)? = null,
                        formalSaveFileList: Boolean = false, originalOwnerCurrent: (() -> Boolean)? = null,
-                       ordinaryFirst: OwnerComposerState.Pending? = null) {
+                       ordinaryChat: AssistantModule.OrdinaryChatDispatch? = null) {
         val viewerEpoch = inspectionEpoch
         val inlinePreview = phoneInlinePreview.takeIf { action == "observeTask" }
         val targetTask = input.optString("taskId")
@@ -6866,9 +6884,9 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
                 }
                     else if (projectMemoryRequest != null) startProjectWithReviewedMemory(input, projectMemoryRequest)
                     else if (needsGroupOwner) app.groupOwnerWorkflows.call(groupWindow ?: throw SecurityException("请在当前原群任务详情重新建立本机审核窗口")) { app.dispatchOwnerAction(action, reviewedInput) }
-                    else if (ordinaryFirst != null) {
+                    else if (ordinaryChat != null) {
                         check(action == "featureRequest" && input.opt("feature") == "assistant" && input.opt("command") == "send")
-                        app.requestOrdinaryFirstChat(input, ordinaryFirst)
+                        app.requestOrdinaryChatPresentation(input, ordinaryChat)
                         null
                     } else if (originalOwnerCurrent != null && action == "featureRequest") {
                         app.features.request(input, java.util.function.BooleanSupplier { originalOwnerCurrent() })

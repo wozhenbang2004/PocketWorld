@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.pocketengine.features.local.project.ProjectArchiveRoot
+import dev.pocketengine.features.local.project.ProjectSourceImport
 import dev.pocketengine.features.local.project.ProjectSourceImport.ZipRoot
 import dev.pocketengine.ui.ProjectPackageCoordinator
 import dev.pocketengine.ui.ProjectSourceRecoveryPin
@@ -58,6 +59,7 @@ internal class PocketWebLocalSourceIntake(private val original: ProjectPackageCo
         return JSONObject().put("id", actual.getString("selectionId")).put("sha", actual.getString("sha256"))
             .put("manifest", actual.getString("manifestIdentity")).put("kind", evidence.getString("sourceKind"))
             .put("label", evidence.optString("sourceLabel").take(120)).put("files", evidence.optInt("files"))
+            .put("savedPageStarter", runCatching { ProjectSourceImport.matchesSavedPageStarterEvidence(evidence) }.getOrDefault(false).takeIf { it })
             .put("excludedDirectory", evidence.optJSONObject("original")?.optString("ownerExcludedDirectory")?.takeIf {
                 evidence.optString("sourceKind") == "saf_tree" && it.isNotEmpty() && it.length <= 240 })
             .put("fixedPackage", fixed?.let { JSONObject().put("manifest", it.getString("fixedPackageManifestIdentity"))

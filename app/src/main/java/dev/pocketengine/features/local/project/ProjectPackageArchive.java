@@ -133,14 +133,27 @@ public final class ProjectPackageArchive {
         checkCurrent(current);
         JSONArray entries=manifest(files,executable);
         String digest=checkpoint?ProjectSources.manifestDigest(entries):original.getString("sourceDigest");
-        JSONObject scope = new JSONObject().put("format", FORMAT).put("mode", mode)
-            .put("project", new JSONObject().put("id", original.getString("projectId")).put("name", original.optString("name", "项目")))
-            .put("source", new JSONObject().put("projectId", original.getString("projectId")).put("checkoutId", original.getString("checkoutId")).put("sourceDigest", digest))
-            .put("entryPath", selectedEntry).put("previewRoot", outputRoot).put("directories",new JSONArray(directories)).put("files", entries).put("bytes", total[0])
-            .put("omitted", orderedOmissions(omitted)).put("includesHistory", false).put("includesToolEnvironment", false).put("atomicSourceFence", false)
-            .put("policy", new JSONObject().put("version", 1).put("generatedRootsIncluded", web || includeGeneratedRoots).put("privateFilesExcluded", true));
+        JSONObject scope = manifestHeader(original, mode, selectedEntry, outputRoot, digest, new JSONArray(directories), entries,
+            total[0], orderedOmissions(omitted), web || includeGeneratedRoots);
         if (scope.toString().getBytes(StandardCharsets.UTF_8).length > MAX_MANIFEST_BYTES) throw new IllegalArgumentException("项目包清单超过1MiB，未生成不能重导入的包");
         validateHeader(scope);if(selected!=null)requireSelectionManifest(scope,selected);return new Frozen(scope, files);
+    }
+
+    private static JSONObject manifestHeader(JSONObject original,String mode,String entry,String outputRoot,String digest,
+            JSONArray directories,JSONArray entries,long bytes,JSONArray omitted,boolean generated)throws Exception{
+        return new JSONObject().put("format", FORMAT).put("mode", mode)
+            .put("project", new JSONObject().put("id", original.getString("projectId")).put("name", original.optString("name", "项目")))
+            .put("source", new JSONObject().put("projectId", original.getString("projectId")).put("checkoutId", original.getString("checkoutId")).put("sourceDigest", digest))
+            .put("entryPath", entry).put("previewRoot", outputRoot).put("directories",directories).put("files", entries).put("bytes", bytes)
+            .put("omitted", omitted).put("includesHistory", false).put("includesToolEnvironment", false).put("atomicSourceFence", false)
+            .put("policy", new JSONObject().put("version", 1).put("generatedRootsIncluded", generated).put("privateFilesExcluded", true));
+    }
+    /** Pure expected manifest of the signed starter only. This does not open or validate any live files. */
+    static JSONObject builtinSavedPageManifest(Map<String,byte[]> files,String selection,String label,String sourceDigest,long bytes)throws Exception{
+        JSONObject original=new JSONObject().put("projectId",selection).put("checkoutId",selection).put("name",label);
+        JSONObject expected=manifestHeader(original,"source_project","","",sourceDigest,new JSONArray().put("src"),
+            manifest(files,Collections.emptyMap()),bytes,new JSONArray(),false);
+        validateHeader(expected);return expected;
     }
 
     @FunctionalInterface public interface CopyCurrent {void check()throws Exception;}

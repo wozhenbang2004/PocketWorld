@@ -210,15 +210,18 @@ internal class PocketWebDevices(private val controller: PocketWorldController, p
         check(previous==null || savedPeerWork===previous)
         val retained=page.getJSONArray("rows")
         check(page.opt("readOnly")==true && retained.length()<=12)
-        val rows=retained.objects().associate { row ->
+        val records=retained.objects()
+        require(records.map { text(it,"taskId") }.toSet().size==retained.length())
+        // A local send claim is display evidence only, never an accepted Work locator.
+        val rows=records.filter { it.opt("retainedOperation")=="workspace.list" || it.opt("retainedOperation")=="workspace.read" }.associate { row ->
             val task=text(row,"taskId"); task to SavedPeerWorkOpen(task,text(row,"runId"),integer(row,"epoch",1,Int.MAX_VALUE.toLong()).toInt(),place.peer)
         }
-        require(rows.size==retained.length())
         val index=SavedPeerWorkPage(UUID.randomUUID().toString(),original,epoch,place,page.getString("next"),rows)
         savedPeerWork=index
         return JSONObject().put("kind","savedPeerWorkspaceWork").put("savedPeerWorkHandle",index.handle)
             .put("local",place.local.view()).put("peer",place.peer.view()).put("authorizationEpoch",place.pairing)
             .put("readOnly",true).put("rows",retained).put("hasMore",index.next.isNotEmpty())
+            .putOpt("localDispatchReadAt",page.opt("localDispatchReadAt"))
     }
     fun taskForNavigation(args: JSONObject): String {
         check(visible() && controller.webPrivateOwnerVisible())

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { bridge } from './bridge';
-import { Button } from './forms-library';
+import { Accordion, AccordionItem, Button } from './forms-library';
 import { sameDeviceReadingPlace, type DeviceData, type DeviceReadingPlace } from './devices-workspace';
 
 type Place = { identity: DeviceReadingPlace; authorizationEpoch: number };
-type Work = { taskId: string; runId: string; epoch: number; lastSavedAt: number; status: string; retainedOperation: 'workspace.list' | 'workspace.read' };
+type WorkspaceTool = 'workspace.list' | 'workspace.read';
+type LocalDispatch = { operationId: string; tool: WorkspaceTool; claimedAt: number };
+type Work = { taskId: string; runId: string; epoch: number; lastSavedAt: number; status: string; retainedOperation?: WorkspaceTool; unconfirmedDispatch?: LocalDispatch };
 type Window = { document: number; resume: number };
-type Page = { window: Window; place: Place; handle: string; rows: Work[]; hasMore: boolean };
+type Page = { window: Window; place: Place; handle: string; rows: Work[]; hasMore: boolean; localDispatchReadAt?: number };
 type Visit = { window: Window; place: Place; row: Work; ack?: true; opened?: true };
 type Request = (action: 'devices.readSavedPeerWork' | 'devices.openTask', args: DeviceData, accept: (value: DeviceData) => void) => Promise<void>;
 
@@ -16,6 +18,12 @@ const localStatuses: Record<string, string> = {
   completed: '原工作已结束', failed: '原工作未完成', cancelled: '已取消', interrupted: '已中断',
 };
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
+const workspaceTool = (value: unknown): value is WorkspaceTool => value === 'workspace.list' || value === 'workspace.read';
+const date = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 8640000000000000;
+const validDispatch = (value: unknown): value is LocalDispatch => !!value && typeof value === 'object' &&
+  Object.keys(value).length === 3 && identifier((value as LocalDispatch).operationId) &&
+  workspaceTool((value as LocalDispatch).tool) && date((value as LocalDispatch).claimedAt);
+const toolLabel = (tool: WorkspaceTool | undefined) => tool === 'workspace.list' ? '查看工作区目录' : '读取工作区文件';
 const samePlace = (a: Place, b: Place) => a.authorizationEpoch === b.authorizationEpoch &&
   sameDeviceReadingPlace(a.identity, b.identity.here, b.identity.partner);
 const sameWork = (a: Work, b: Work) => a.taskId === b.taskId && a.runId === b.runId && a.epoch === b.epoch;
@@ -34,13 +42,16 @@ function savedPage(value: DeviceData, place: Place, window: Window, exact?: Work
     || typeof value.hasMore !== 'boolean' || !Array.isArray(rows) || rows.length > 12
     || rows.some(row => !row || !identifier(row.taskId) || !identifier(row.runId)
       || !Number.isSafeInteger(row.epoch) || row.epoch < 1 || !Object.hasOwn(localStatuses, row.status)
-      || !['workspace.list', 'workspace.read'].includes(row.retainedOperation)
-      || !Number.isSafeInteger(row.lastSavedAt) || row.lastSavedAt < 1 || row.lastSavedAt > 8640000000000000)
+      || row.retainedOperation !== undefined && !workspaceTool(row.retainedOperation)
+      || row.unconfirmedDispatch !== undefined && !validDispatch(row.unconfirmedDispatch)
+      || !row.retainedOperation && !row.unconfirmedDispatch || !date(row.lastSavedAt))
     || new Set(rows.map(row => row.taskId)).size !== rows.length
-    || exact && (value.hasMore || rows.length > 1 || rows.length === 1 && !sameWork(rows[0], exact))) {
+    || rows.some(row => row.unconfirmedDispatch) !== date(value.localDispatchReadAt)
+    || exact && (value.hasMore || rows.length > 1 || rows.length === 1 &&
+      (!sameWork(rows[0], exact) || !workspaceTool(rows[0].retainedOperation) || !!rows[0].unconfirmedDispatch))) {
     throw new Error('本机工作目录不属于原配对设备或原执行。');
   }
-  return { window, place, handle: value.savedPeerWorkHandle, rows, hasMore: value.hasMore };
+  return { window, place, handle: value.savedPeerWorkHandle, rows, hasMore: value.hasMore, localDispatchReadAt: value.localDispatchReadAt };
 }
 
 /** Ordinary personal-device return. A retired native page never survives behind Work. */
@@ -120,7 +131,8 @@ export function SavedPeerWorkspaceWork({ place, busy, request, release }: {
     });
   };
   const open = (entry: Work, original: Page) => {
-    if (busy || !sameWindow(original.window,devicesWindow()) || !currentPlace.current || !samePlace(original.place,currentPlace.current) || !original.rows.includes(entry)) return;
+    if (busy || !workspaceTool(entry.retainedOperation) || !sameWindow(original.window,devicesWindow()) ||
+        !currentPlace.current || !samePlace(original.place,currentPlace.current) || !original.rows.includes(entry)) return;
     const visit: Visit={ window: original.window, place: original.place, row: entry };
     active.current=visit; setError('');
     void request('devices.openTask',{ savedPeerWorkHandle: original.handle, taskId: entry.taskId },reply=>{
@@ -130,7 +142,7 @@ export function SavedPeerWorkspaceWork({ place, busy, request, release }: {
   };
   const workRow = (row: Work, isReturn = false) => <article className="pw-device-task" key={row.taskId}>
     <header><h4 ref={isReturn ? heading : undefined} tabIndex={isReturn ? -1 : undefined}>
-      {isReturn ? '刚查看的原工作' : row.retainedOperation === 'workspace.list' ? '查看工作区目录' : '读取工作区文件'} · {row.taskId.slice(-6)}
+      {isReturn ? '刚查看的原工作' : toolLabel(row.retainedOperation)} · {row.taskId.slice(-6)}
     </h4></header>
     <p>本机留存：{localStatuses[row.status]} · {new Date(row.lastSavedAt).toLocaleString()}</p>
     <Button variant="secondary" disabled={busy} onClick={() => isReturn ? load(undefined,row) : listed && open(row,listed)}>
@@ -141,7 +153,18 @@ export function SavedPeerWorkspaceWork({ place, busy, request, release }: {
     <header className="pw-device-section-heading"><div><h3>本机工作区读取记录</h3>
       <p>查看这台原设备的本机留存，不需要对方在线，不会联系或重新执行。</p></div></header>
     {remembered && workRow(remembered.row,true)}
-    {listed?.rows.map(row => workRow(row))}
+    {listed?.rows.filter(row => row.retainedOperation).map(row => workRow(row))}
+    {listed?.localDispatchReadAt && <Accordion key={listed.handle} className="pw-device-task-history">
+      <AccordionItem title="本机发送待核对" description={`本页 ${listed.rows.filter(row => row.unconfirmedDispatch).length} 项`}>
+        <p>只列本页核对到的原发送登记。不表示对方收到、执行或完成。没有联系对方或重发。</p>
+        <p className="pw-field-hint">本机核对时间：{new Date(listed.localDispatchReadAt).toLocaleString()}</p>
+        {listed.rows.map(row => row.unconfirmedDispatch && <article className="pw-device-task" key={row.unconfirmedDispatch.operationId}>
+          <header><h4>{toolLabel(row.unconfirmedDispatch.tool)} · {row.taskId.slice(-6)}</h4><span>接单未核对</span></header>
+          <p>本机登记于 {new Date(row.unconfirmedDispatch.claimedAt).toLocaleString()} · 第 {row.epoch} 轮</p>
+          <p className="pw-source-copy">原操作 <bdi>{row.unconfirmedDispatch.operationId}</bdi></p>
+        </article>)}
+      </AccordionItem>
+    </Accordion>}
     {listed && !listed.rows.length && !remembered && <p role="status">{listed.hasMore
       ? '这一页没有核对到原工作，可以继续读更早的本机记录。' : '本次没有核对到更多这台原设备的工作区读取记录。'}</p>}
     {error && <p role="status">{error}</p>}

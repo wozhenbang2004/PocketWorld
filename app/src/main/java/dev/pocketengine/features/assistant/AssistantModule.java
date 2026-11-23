@@ -36,6 +36,7 @@ public final class AssistantModule implements EngineModule {
         default JSONObject startScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{if(ownerScope!=null)throw new SecurityException("原宿主尚未支持明确任务范围，未丢弃主人选择或新建执行");return start(conversationId,goal,message,config,control);}
         /** Existing start with optional local first-question presentation, never an execution grant. */
         default JSONObject startOrdinaryFirstScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startScoped(conversationId,goal,message,config,control,ownerScope);}
+        default JSONObject startOrdinaryDirectScoped(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startScoped(conversationId,goal,message,config,control,ownerScope);}
         /** Narrower first-task admission. A legacy host cannot drop this reviewed restriction. */
         default JSONObject startWithoutDefaultWrites(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{throw new SecurityException("原宿主不能保护这项委托的默认偏好，未按普通任务发送");}
         default JSONObject startProject(String conversationId,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{throw new SecurityException("原宿主未接显式项目记忆同意，未回退全局任务");}
@@ -82,7 +83,10 @@ public final class AssistantModule implements EngineModule {
         LiveTurn(String conversation,ModelConfig model,RunControl control){this.conversation=conversation;this.model=model;this.control=control;}
     }
     private record DevelopmentTurn(JSONObject binding,ModelConfig config,RunControl control) { }
-    private record FirstOrdinaryInput(String client,long revision) { }
+    public enum OrdinaryChatKind { FIRST_FENCED, EXISTING_DIRECT }
+    /** One immutable native channel for presentation only; no field is read from request JSON. */
+    public record OrdinaryChatDispatch(OwnerComposerState.Pending original,OrdinaryChatKind kind) { }
+    private record OrdinaryQuestionInput(String client,long revision,OrdinaryChatKind kind) { }
     private static final String ORDINARY_FIRST_FAILURE_SOURCE="nativeOrdinaryFirstTurnFailure";
     /** Immutable metadata-only pin prepared from the native active owner row, never from command JSON. */
     public record OrdinaryFirstQuestion(String conversation,String message,long revision,String generation,String fingerprint,
@@ -569,21 +573,27 @@ public final class AssistantModule implements EngineModule {
     }
     private JSONObject sendNative(JSONObject input)throws Exception{return sendNative(input,null);}
     private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception {
-        return sendNative(input,projectStart,false);
+        return sendNative(input,projectStart,null);
     }
     /** The typed draft was born in native ordinary text mode, not a Web flag or an ASR claim. */
-    public JSONObject sendOrdinaryFirstFromComposer(JSONObject input,OwnerComposerState.Pending original)throws Exception{
-        if(original==null||original.firstChatPhase!=OwnerComposerState.FirstChatPhase.FENCED||original.primaryDisplayOnly||
-                !original.clientId.equals(input.opt("clientMessageId"))||!original.draftKey.startsWith("new:")||
-                !original.conversationId.isEmpty()||!input.optString("conversationId").isEmpty()||original.originalTarget().length()!=0||
-                !original.mode.equals(input.opt("mode"))||nativeInputHost==null)
+    public JSONObject sendOrdinaryChatFromComposer(JSONObject input,OrdinaryChatDispatch dispatch)throws Exception{
+        OwnerComposerState.Pending original=dispatch==null?null:dispatch.original;
+        OrdinaryChatKind kind=dispatch==null?null:dispatch.kind;
+        if(original==null||kind==null||original.primaryDisplayOnly||!original.clientId.equals(input.opt("clientMessageId"))||
+                !original.mode.equals(input.opt("mode"))||original.originalTarget().length()!=0||nativeInputHost==null)
             throw new SecurityException("原普通私聊输入身份不匹配");
-        return sendNative(input,null,true);
+        boolean matching=kind==OrdinaryChatKind.FIRST_FENCED
+                ?original.firstChatPhase==OwnerComposerState.FirstChatPhase.FENCED&&original.draftKey.startsWith("new:")&&
+                    original.conversationId.isEmpty()&&input.optString("conversationId").isEmpty()
+                :original.firstChatPhase==null&&"queue".equals(original.mode)&&!original.conversationId.isBlank()&&
+                    original.draftKey.equals("conversation:"+original.conversationId)&&original.conversationId.equals(input.opt("conversationId"));
+        if(!matching)throw new SecurityException("原普通私聊输入身份不匹配");
+        return sendNative(input,null,kind);
     }
-    private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,boolean ordinaryFirstFromComposer)throws Exception {
+    private JSONObject sendNative(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,OrdinaryChatKind ordinaryKind)throws Exception {
         try(RuntimeDiagnostics.Span diagnostic=RuntimeDiagnostics.begin("message_admission",null,input.optString("clientMessageId"))){
             try{
-                JSONObject result=sendNativeBound(input,projectStart,null,ordinaryFirstFromComposer);
+                JSONObject result=sendNativeBound(input,projectStart,null,ordinaryKind);
                 diagnostic.finish(result.optString("status","unconfirmed"),result.optBoolean("duplicate")?"DUPLICATE_RECEIPT":result.optString("reason","INPUT_RECEIPT"));
                 return result;
             }catch(Exception failure){diagnostic.failure("INPUT_ADMISSION_FAILED",failure);throw failure;}
@@ -625,9 +635,9 @@ public final class AssistantModule implements EngineModule {
         }
     }
     private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,java.util.function.BooleanSupplier displayWindow)throws Exception {
-        return sendNativeBound(input,projectStart,displayWindow,false);
+        return sendNativeBound(input,projectStart,displayWindow,null);
     }
-    private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,java.util.function.BooleanSupplier displayWindow,boolean ordinaryFirstFromComposer)throws Exception {
+    private JSONObject sendNativeBound(JSONObject input,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,java.util.function.BooleanSupplier displayWindow,OrdinaryChatKind ordinaryKind)throws Exception {
         if(displayWindow==null&&(input.has("ownerDisplayScope")||input.has("_nativeDisplayDraftProof")))throw new SecurityException("本机主屏读数只能从原私人草稿单独发送");
         if(migrationInProgress)throw new IllegalStateException("原文迁移正在对账，未接收新消息；不会重复新建任务");
         requireLegacyWritable();String text=input.optString("message").trim(),client=input.getString("clientMessageId"),mode=input.optString("mode","queue");
@@ -744,10 +754,10 @@ public final class AssistantModule implements EngineModule {
                 synchronizeSources();
             }catch(Exception failure){if(starting||resuming)releaseLive(lease);throw failure;}
             JSONObject message=saved.getJSONObject("message"),binding;
-            final FirstOrdinaryInput ordinaryFirst=ordinaryFirstFromComposer&&starting&&requested.isEmpty()&&projectStart==null&&displayWindow==null&&!blockDefaults&&
-                    Boolean.TRUE.equals(input.opt("mustMatchObservedForeground"))&&!hasTurn&&!safe.isEmpty()&&
-                    selections.length()==0&&selectedSources.length()==0&&selectedPreviews.length()==0&&selectedObjects.length()==0&&durable()
-                    ?new FirstOrdinaryInput(client,message.getLong("revision")):null;
+            final OrdinaryQuestionInput ordinary=ordinaryKind!=null&&starting&&(requested.isEmpty()==(ordinaryKind==OrdinaryChatKind.FIRST_FENCED))&&
+                    projectStart==null&&displayWindow==null&&!blockDefaults&&Boolean.TRUE.equals(input.opt("mustMatchObservedForeground"))&&
+                    !hasTurn&&!safe.isEmpty()&&selections.length()==0&&selectedSources.length()==0&&selectedPreviews.length()==0&&
+                    selectedObjects.length()==0&&durable()?new OrdinaryQuestionInput(client,message.getLong("revision"),ordinaryKind):null;
             if(displayWindow!=null){
                 try{return completeOwnerDisplayQuestion(cid,message,input.getJSONObject("ownerDisplayScope"),blockDefaults,()->!live.isCancelled()&&displayWindow.getAsBoolean());}
                 finally{releaseLive(lease);}
@@ -756,7 +766,9 @@ public final class AssistantModule implements EngineModule {
                 if(!starting)binding=nativeInputHost.append(cid,copy(message),mode,expected,live);
                 else if(blockDefaults)binding=nativeInputHost.startWithoutDefaultWrites(cid,safe,copy(message),config,live,nativeExecutionScope(input));
                 else if(projectStart!=null)binding=nativeInputHost.startProject(cid,safe,copy(message),config,live,nativeExecutionScope(input),projectStart);
-                else if(ordinaryFirst!=null)binding=nativeInputHost.startOrdinaryFirstScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input));
+                else if(ordinary!=null&&ordinary.kind==OrdinaryChatKind.FIRST_FENCED)
+                    binding=nativeInputHost.startOrdinaryFirstScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input));
+                else if(ordinary!=null)binding=nativeInputHost.startOrdinaryDirectScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input));
                 else binding=nativeInputHost.startScoped(cid,safe,copy(message),config,live,nativeExecutionScope(input));
                 if(!live.matchesHostRun(binding.getString("taskId"),binding.getString("runId"),binding.getInt("epoch")))throw new SecurityException("宿主未返回原任务控制绑定");
                 if(blockDefaults&&!Boolean.TRUE.equals(binding.opt("defaultWritesBlocked")))throw new SecurityException("原宿主未证实这项委托的默认偏好限制");
@@ -792,7 +804,7 @@ public final class AssistantModule implements EngineModule {
                     final JSONObject turn=copy(lease.original().binding);final JSONArray history=copy(findConversation(cid)).getJSONArray("messages");final String messageId=message.getString("id");
                     context.emit(id(),copy(ack).put("phase",starting?"accepted":"queued"));
                     resourceState(turn,live,"queued");
-                    liveTurns.submit(lease,()->executeNativeTurn(lease,turn,safe,history,config,live,messageId,false,ordinaryFirst),()->{rejected.set(true);executorRejected(lease,messageId);});
+                    liveTurns.submit(lease,()->executeNativeTurn(lease,turn,safe,history,config,live,messageId,false,ordinary),()->{rejected.set(true);executorRejected(lease,messageId);});
                     if(rejected.get())return unconfirmedSubmission(ack);
                 }catch(Exception unavailable){if(!rejected.get())executorRejected(lease,message.getString("id"));throw new IllegalStateException("原任务输入已登记，执行位置尚未接手；请核对原任务，不要自动重发",unavailable);}
             }else context.emit(id(),copy(ack).put("phase","queued"));
@@ -985,7 +997,7 @@ public final class AssistantModule implements EngineModule {
     private void executeNativeTurn(ConversationTurnSlots.Lease<LiveTurn> lease,JSONObject turn,String goal,JSONArray history,ModelConfig config,RunControl control,String messageId,boolean nativeResultEvent){
         executeNativeTurn(lease,turn,goal,history,config,control,messageId,nativeResultEvent,null);
     }
-    private void executeNativeTurn(ConversationTurnSlots.Lease<LiveTurn> lease,JSONObject turn,String goal,JSONArray history,ModelConfig config,RunControl control,String messageId,boolean nativeResultEvent,FirstOrdinaryInput ordinaryFirst){
+    private void executeNativeTurn(ConversationTurnSlots.Lease<LiveTurn> lease,JSONObject turn,String goal,JSONArray history,ModelConfig config,RunControl control,String messageId,boolean nativeResultEvent,OrdinaryQuestionInput ordinary){
         String cid=turn.optString("conversationId");boolean retainedResult=false,executorEntered=false;
         try{
             control.check();
@@ -995,12 +1007,15 @@ public final class AssistantModule implements EngineModule {
             executorEntered=true;
             JSONObject response=executor==null?ModelGateway.complete(config,attachmentProjection==null?request:attachmentProjection.project(request,config,control),null,control):executor.execute(cid,goal,request,config,control);
             control.check();
-            if(ordinaryFirst!=null&&executor!=null&&!response.optBoolean("developmentRetained")&&"failed".equals(response.optString("status"))&&
-                    turn.optString("taskId").equals(response.optString("taskId"))){
-                // This task accepted an input but did not produce a new answer. A
-                // runner diagnostic is not assistant prose, including if readback failed.
-                try{retainOrdinaryFirstFailure(cid,messageId,turn,ordinaryFirst,response.optJSONObject("nativeFailedTurn"));}
-                catch(Exception unavailable){/* The exact task remains the failure source. Never add a substitute assistant answer. */}
+            if(ordinary!=null&&executor!=null&&!response.optBoolean("developmentRetained")&&"failed".equals(response.optString("status"))&&
+                    turn.optString("taskId").equals(response.optString("taskId"))&&
+                    (ordinary.kind==OrdinaryChatKind.FIRST_FENCED||!response.optBoolean("nativeOwnerReplyRecorded")&&
+                        !response.has("nativeOwnerReplyPersistence")&&
+                        matchesOrdinaryDirectFailure(cid,messageId,turn,ordinary,response.optJSONObject("nativeFailedTurn")))){
+                // A verified failed direct turn with no reply attempt is not assistant prose.
+                if(ordinary.kind==OrdinaryChatKind.FIRST_FENCED)try{
+                    retainOrdinaryFirstFailure(cid,messageId,turn,ordinary,response.optJSONObject("nativeFailedTurn"));
+                }catch(Exception unavailable){/* The original task remains the failure source. */}
                 context.emit(id(),copy(turn).put("phase","failed").put("messageId",messageId).put("message","本轮未完成，请核对原任务；没有自动重发。"));
                 return;
             }
@@ -1042,8 +1057,27 @@ public final class AssistantModule implements EngineModule {
             if(!continueOriginal)try{context.emit(id(),copy(turn).put("phase","idle").put("messageId",messageId));}catch(Exception ignored){}
         }
     }
+    /** This internal terminal proof never alters the accepted input or enters a generic receipt. */
+    private boolean matchesOrdinaryDirectFailure(String conversation,String message,JSONObject turn,OrdinaryQuestionInput original,JSONObject proof){
+        try{
+            String task=turn.getString("taskId"),run=turn.getString("runId");int epoch=turn.getInt("epoch");
+            if(proof==null||!"existing_direct_plain".equals(proof.opt("kind"))||!"failed".equals(proof.opt("status"))||
+                    !conversation.equals(proof.opt("conversationId"))||!message.equals(proof.opt("ownerMessageId"))||
+                    !original.client.equals(proof.opt("ownerClientId"))||original.revision!=proof.optLong("ownerMessageRevision",-1)||
+                    !task.equals(proof.opt("taskId"))||!run.equals(proof.opt("runId"))||epoch!=proof.optInt("epoch",-1)||!durable())return false;
+            return historyRepository.read(()->{
+                if(!historyTasks.isCurrentFailedOrdinaryChatRun(task,conversation,run,epoch))return false;
+                JSONObject source=historyRepository.source(message);
+                return source!=null&&!source.optBoolean("deleted")&&!source.optBoolean("nativeProvenanceImported")&&
+                        message.equals(source.opt("sourceId"))&&conversation.equals(source.opt("conversationId"))&&
+                        original.client.equals(source.opt("clientMessageId"))&&"user".equals(source.opt("role"))&&"owner".equals(source.opt("ownerId"))&&"private".equals(source.opt("spaceId"))&&
+                        original.revision==source.optLong("revision",-1)&&
+                        acceptedOrdinaryQuestion(source.optJSONObject("submission"),conversation,message,task,run,epoch,original.client,original.revision);
+            });
+        }catch(Exception unavailable){return false;}
+    }
     /** Metadata only: leave this exact accepted original's text, revision and admission untouched. */
-    private void retainOrdinaryFirstFailure(String conversation,String message,JSONObject turn,FirstOrdinaryInput original,JSONObject proof)throws Exception{
+    private void retainOrdinaryFirstFailure(String conversation,String message,JSONObject turn,OrdinaryQuestionInput original,JSONObject proof)throws Exception{
         if(proof==null||!durable()||!"failed".equals(proof.optString("status"))||!conversation.equals(proof.optString("conversationId"))||
                 !message.equals(proof.optString("ownerMessageId")))return;
         final String task=turn.getString("taskId"),run=turn.getString("runId");final int epoch=turn.getInt("epoch");

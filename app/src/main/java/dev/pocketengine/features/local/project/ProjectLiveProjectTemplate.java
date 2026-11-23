@@ -64,6 +64,38 @@ public final class ProjectLiveProjectTemplate {
                 button { min-height: 44px; padding: 0.6rem 1rem; font: inherit; border-radius: 0.8rem; cursor: pointer; }
                 """);
     }
+    /** A separate signed starter source version. Keep the v1 source map and its review identity unchanged. */
+    static Map<String,String> builtinSavedPageStarterFiles(){
+        var files=new TreeMap<>(builtinStarterFiles());
+        files.put("index.html", """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>我的第一份网页</title>
+                <link rel="stylesheet" href="/src/style.css">
+              </head>
+              <body>
+                <main>
+                  <h1>我的第一份网页</h1>
+                  <p>改一改标题，保存后预览。点击下面的按钮试试看。</p>
+                  <button id="counter" type="button">已点击 0 次</button>
+                </main>
+                <script type="module" src="/src/main.js"></script>
+              </body>
+            </html>
+            """);
+        files.put("src/main.js", """
+            const counter = document.querySelector('#counter');
+            let clicks = 0;
+            counter.addEventListener('click', () => {
+              clicks += 1;
+              counter.textContent = `已点击 ${clicks} 次`;
+            });
+            """);
+        return files;
+    }
     public static JSONArray files()throws Exception {
         Map<String,String> files=new TreeMap<>();JSONArray base=ProjectTemplates.files("web");for(int i=0;i<base.length();i++){JSONObject file=base.getJSONObject(i);files.put(file.getString("path"),file.getString("content"));}
         files.put("package.json","{\n  \"name\": \"phone-live-web-project\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"engines\": {\n    \"node\": \">=24\"\n  },\n  \"scripts\": {\n    \"build\": \"node tools/build.mjs\",\n    \"test\": \"node --test\",\n    \"start\": \"node tools/serve.mjs\",\n    \"dev\": \"node tools/dev.mjs\"\n  },\n  \"devDependencies\": {\n    \"vite\": \"8.3.5\"\n  }\n}\n");

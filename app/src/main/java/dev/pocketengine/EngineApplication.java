@@ -3451,6 +3451,10 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             public JSONObject start(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control)throws Exception{return startAssistantInput(conversation,goal,message,config,control);}
             public JSONObject startScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope);}
             public JSONObject startOrdinaryFirstScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope,null,false,true);}
+            public JSONObject startOrdinaryDirectScoped(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{
+                OrdinaryDirectInput direct=new OrdinaryDirectInput(message.getString("clientMessageId"),message.getString("id"),message.getLong("revision"));
+                return startAssistantInput(conversation,goal,message,config,control,ownerScope,null,false,false,direct);
+            }
             public JSONObject startWithoutDefaultWrites(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope,null,true,false);}
             public JSONObject startProject(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart selected)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope,selected);}
             public JSONObject continueProject(JSONObject reviewedTask,String feedback,ModelConfig config,RunControl control,java.util.function.BooleanSupplier currentOwnerWindow)throws Exception{return continueAssistantProjectInput(reviewedTask,feedback,config,control,currentOwnerWindow);}
@@ -3484,15 +3488,33 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             if(row!=null)publish(json("type","task","task",row)); // Existing UI event only; pushTask also requeues delivery and notifications.
         }}catch(Exception unavailable){if(unavailable instanceof InterruptedException)Thread.currentThread().interrupt();}
     }
+    /** Native-only presentation locator from the exact new user message bound at admission. */
+    private record OrdinaryDirectInput(String client,String message,long revision) {
+        boolean admitted(JSONObject row,String task,String run,int epoch){
+            JSONArray files=row==null?null:row.optJSONArray("attachments");
+            return row!=null&&"task_goal".equals(row.opt("queueRole"))&&"queue".equals(row.opt("mode"))&&
+                    client.equals(row.opt("clientMessageId"))&&message.equals(row.opt("messageId"))&&
+                    revision>0&&revision==row.optLong("ownerMessageRevision",-1)&&task.equals(row.opt("acceptedTaskId"))&&
+                    run.equals(row.opt("acceptedRunId"))&&epoch==row.optInt("acceptedEpoch",-1)&&files!=null&&files.length()==0&&
+                    !row.has("ownerSourceRefs")&&!row.has("ownerPreviewRefs")&&!row.has("ownerObjectRefs");
+        }
+    }
+    private static boolean ordinaryDirectTask(JSONObject task){
+        return "owner".equals(task.opt("actorId"))&&"private".equals(task.opt("spaceId"))&&"assistant".equals(task.opt("kind"))&&
+                "capabilities".equals(task.opt("executionMode"))&&task.isNull("origin")&&task.isNull("parentTaskId")&&
+                task.isNull("developmentContext")&&task.isNull("projectMemoryRead")&&task.isNull("ownerWorkTakeover")&&task.isNull("executionRole");
+    }
     private static final class AssistantInputBinding {
         final String task,run,conversation;final int epoch;final RunControl control;final ModelConfig config;
         final boolean continuation,ordinaryFirst;final JSONObject reservedTask;
+        final OrdinaryDirectInput ordinaryDirect;
         final java.util.concurrent.atomic.AtomicInteger phase=new java.util.concurrent.atomic.AtomicInteger();Runnable admissionCancel;
         AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control)throws Exception{this(task,conversation,config,control,false);}
-        AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control,boolean continuation)throws Exception{this(task,conversation,config,control,continuation,false);}
-        AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control,boolean continuation,boolean ordinaryFirst)throws Exception{
+        AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control,boolean continuation)throws Exception{this(task,conversation,config,control,continuation,false,null);}
+        AssistantInputBinding(JSONObject task,String conversation,ModelConfig config,RunControl control,boolean continuation,boolean ordinaryFirst,OrdinaryDirectInput ordinaryDirect)throws Exception{
             this.task=task.getString("id");run=task.getString("runId");epoch=task.getInt("coordinatorEpoch");this.conversation=conversation;this.config=config;this.control=control;
-            this.continuation=continuation;this.ordinaryFirst=ordinaryFirst;reservedTask=continuation?new JSONObject(task.toString()):null;
+            this.continuation=continuation;this.ordinaryFirst=ordinaryFirst;this.ordinaryDirect=ordinaryDirect;
+            reservedTask=continuation?new JSONObject(task.toString()):null;
         }
         JSONObject json(){return EngineApplication.json("taskId",task,"runId",run,"epoch",epoch);}
     }
@@ -3872,6 +3894,9 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
     private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope,null);}
     private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart)throws Exception{return startAssistantInput(conversation,goal,message,config,control,ownerScope,projectStart,false,false);}
     private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,boolean blockDefaults,boolean ordinaryFirst)throws Exception{
+        return startAssistantInput(conversation,goal,message,config,control,ownerScope,projectStart,blockDefaults,ordinaryFirst,null);
+    }
+    private JSONObject startAssistantInput(String conversation,String goal,JSONObject message,ModelConfig config,RunControl control,JSONObject ownerScope,dev.pocketengine.features.local.project.ProjectOwnerWorkflows.NativeStart projectStart,boolean blockDefaults,boolean ordinaryFirst,OrdinaryDirectInput ordinaryDirect)throws Exception{
         synchronized(assistantAdmissions){
             control.check();if(control.hasHostRun())throw new SecurityException("不能用旧控制器新建聊天任务");SettingsStore.validate(config);dev.pocketengine.runtime.ModelGateway.validate(config);
             for(var entry:capabilityControls.entrySet()){JSONObject current=tasks.get(entry.getKey(),false);if(current!=null&&!"owner_work".equals(current.optString("executionRole"))&&conversation.equals(current.optString("conversationId")))throw new IllegalStateException("原对话仍由原任务执行；请在原任务核对输入，不能启动第二执行器");}
@@ -3881,7 +3906,7 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             JSONObject task=tasks.createCapabilityTask(goal,conversation,blockDefaults);initializeOwnerExecutionScope(task.getString("id"),config,ownerScope);task=tasks.startAttempt(task.getString("id"),"capabilities",config.maxSteps);
             if(blockDefaults&&!Boolean.TRUE.equals(task.opt("ownerDefaultsWriteBlocked")))throw new SecurityException("原任务未保留偏好写入限制，未接手执行");
             control.bindHostRun(task.getString("id"),task.getString("runId"),task.getInt("coordinatorEpoch"));
-            AssistantInputBinding binding=new AssistantInputBinding(task,conversation,config,control,false,ordinaryFirst);if(capabilityControls.putIfAbsent(binding.task,control)!=null)throw new SecurityException("原任务已有执行控制器");assistantInputs.put(control,binding);
+            AssistantInputBinding binding=new AssistantInputBinding(task,conversation,config,control,false,ordinaryFirst,ordinaryDirect);if(capabilityControls.putIfAbsent(binding.task,control)!=null)throw new SecurityException("原任务已有执行控制器");assistantInputs.put(control,binding);
             binding.admissionCancel=()->{if(!binding.phase.compareAndSet(0,2))return;assistantInputs.remove(control,binding);capabilityControls.remove(binding.task,control);try{tasks.endAttempt(binding.task,binding.run,"cancelled","输入已登记但执行尚未接手，已停止；请核对原消息回执",new JSONObject());pushTask(binding.task);}catch(Exception failure){error("未启动聊天任务的停止状态保存未确认，请核对原任务");}};
             control.onCancel(binding.admissionCancel);
             if(projectStart!=null){
@@ -4399,14 +4424,15 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             boolean independentBuild=attempt.optJSONObject("developmentContext")!=null&&attempt.getJSONObject("developmentContext").has(dev.pocketengine.features.local.project.OwnerDraftFirstBuild.FIELD);
             var nativeProfile=independentBuild?dev.pocketengine.runtime.NativeInstructionProfile.INDEPENDENT_DRAFT_BUILD:selectedRevision?dev.pocketengine.runtime.NativeInstructionProfile.SELECTED_PROJECT_REVISION:attempt.optJSONObject("ownerWorkTakeover")!=null?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK_REPORT:dev.pocketengine.store.OwnerWorkTask.isButlerSource(attempt)?dev.pocketengine.runtime.NativeInstructionProfile.OWNER_BUTLER:dev.pocketengine.runtime.NativeInstructionProfile.OWNER_WORK;
             var runner=new dev.pocketengine.runtime.AgentRunner(null,port,dev.pocketengine.runtime.context.ContextBudgetPolicy.currentHostSource(),projection,inputs,nativeProfile);
-            // Only this live foreground input can carry a first-question presentation back to AssistantModule.
-            // AssistantModule still owns the proof that this accepted input actually started a new conversation.
+            // Only this live ordinary foreground input can carry a no-answer failure back to AssistantModule.
+            // The continuing lane also pins the newly admitted owner row, independently of any prior question.
             AssistantInputBinding originalInput=assistantInputs.get(control);
+            OrdinaryDirectInput direct=originalInput==null?null:originalInput.ordinaryDirect;
             JSONObject system=initial!=null&&initial.length()==2?initial.optJSONObject(0):null;
             JSONObject firstInput=system!=null&&"system".equals(system.optString("role"))?initial.optJSONObject(1):null;
             String firstMessage=firstInput==null?"":firstInput.optString("ownerMessageId");
             JSONArray admitted=attempt.optJSONArray("ownerInputs");int matches=0;
-            if(ownerMailbox&&originalInput!=null&&originalInput.ordinaryFirst&&firstInput!=null&&!firstMessage.isEmpty()&&"user".equals(firstInput.optString("role"))&&
+            if(ownerMailbox&&originalInput!=null&&(originalInput.ordinaryFirst||direct!=null)&&firstInput!=null&&!firstMessage.isEmpty()&&"user".equals(firstInput.optString("role"))&&
                     !firstInput.has("ownerAttachmentRefs")&&!firstInput.has("ownerSourceRefs")&&
                     !firstInput.has("ownerPreviewRefs")&&!firstInput.has("ownerObjectRefs")){
                 for(int i=0;admitted!=null&&i<admitted.length();i++){
@@ -4414,12 +4440,17 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
                     if(row!=null&&"task_goal".equals(row.optString("queueRole"))&&firstMessage.equals(row.optString("messageId"))&&
                             id.equals(row.optString("acceptedTaskId"))&&admittedRun.equals(row.optString("acceptedRunId"))&&
                             admittedEpoch==row.optInt("acceptedEpoch")&&firstInput.optLong("ownerMessageRevision",-1)>0&&
-                            firstInput.optLong("ownerMessageRevision")==row.optLong("ownerMessageRevision",-1))matches++;
+                            firstInput.optLong("ownerMessageRevision")==row.optLong("ownerMessageRevision",-1)&&
+                            (direct==null||direct.message.equals(firstMessage)&&direct.admitted(row,id,admittedRun,admittedEpoch)))matches++;
                 }
             }
-            boolean initialChatFailure=matches==1&&originalInput!=null&&!originalInput.continuation&&originalInput.phase.get()==1&&
+            boolean ordinaryFailure=matches==1&&originalInput!=null&&!originalInput.continuation&&originalInput.phase.get()==1&&
                     originalInput.task.equals(id)&&originalInput.run.equals(admittedRun)&&originalInput.epoch==admittedEpoch&&
                     originalInput.conversation.equals(attempt.optString("conversationId"))&&attempt.isNull("origin");
+            boolean directFailure=ordinaryFailure&&direct!=null&&originalInput.control==control&&
+                    control.matchesHostRun(id,admittedRun,admittedEpoch)&&admitted!=null&&admitted.length()==1&&
+                    selectedProfile==null&&project==null&&ownerSkill==null&&approval==null&&ordinaryDirectTask(attempt);
+            boolean initialChatFailure=ordinaryFailure&&originalInput.ordinaryFirst;
             if(initialChatFailure)runner.observeInitialChatFailure();
             if(independentBuild&&(ownerSkill!=null||approval!=null&&approval.attachmentCall))throw new SecurityException("首次构建不能接管其他技能或附件调用");
             if(approval!=null&&approval.attachmentCall)runner.bindApprovedCall(new dev.pocketengine.features.capabilities.ApprovedAttachmentContinuation(tasks,id,approval.runId,approval.epoch,approval.approvalId));
@@ -4448,14 +4479,21 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
             JSONObject settled=tasks.get(id,false);status=settled.getString("status");
             RuntimeDiagnostics.taskStateObserved(control,settled.optString("id"),settled.optString("runId"),settled.optInt("coordinatorEpoch"),status);
             JSONObject response=json("content",status.matches("cancelled|reconciling")?settled.optString("summary"):result.evidence.optString("modelSummary",result.summary),"taskId",id,"status",status);
-            if(initialChatFailure&&"failed".equals(status)&&"failed".equals(result.status)&&lastOwnerReplyAttempted[0]==null&&
+            JSONArray settledInputs=directFailure?settled.optJSONArray("ownerInputs"):null;
+            boolean directSettledAlone=directFailure&&capabilityControls.get(id)==control&&lastOwnerReplyRecorded[0]==null&&
+                    ordinaryDirectTask(settled)&&settledInputs!=null&&settledInputs.length()==1&&
+                    direct.admitted(settledInputs.optJSONObject(0),id,admittedRun,admittedEpoch);
+            if((initialChatFailure||directSettledAlone)&&"failed".equals(status)&&"failed".equals(result.status)&&lastOwnerReplyAttempted[0]==null&&
                     admittedRun.equals(settled.optString("runId"))&&admittedEpoch==settled.optInt("coordinatorEpoch")&&
                     originalInput.conversation.equals(settled.optString("conversationId"))){
                 JSONObject failure=json("status","failed","conversationId",originalInput.conversation,"taskId",id,"runId",admittedRun,
                         "epoch",admittedEpoch,"ownerMessageId",firstMessage);
-                var observed=runner.initialChatAuthorizationFailure();
-                if(observed!=null&&id.equals(observed.taskId())&&admittedRun.equals(observed.runId())&&admittedEpoch==observed.epoch())
-                    failure.put("modelFailure",json("purpose","MAIN","kind","HTTP","httpStatus",observed.httpStatus()));
+                if(directSettledAlone)failure.put("kind","existing_direct_plain").put("ownerClientId",direct.client).put("ownerMessageRevision",direct.revision);
+                else {
+                    var observed=runner.initialChatAuthorizationFailure();
+                    if(observed!=null&&id.equals(observed.taskId())&&admittedRun.equals(observed.runId())&&admittedEpoch==observed.epoch())
+                        failure.put("modelFailure",json("purpose","MAIN","kind","HTTP","httpStatus",observed.httpStatus()));
+                }
                 response.put("nativeFailedTurn",failure);
             }
             if(lastOwnerReplyRecorded[0]!=null&&lastOwnerReplyRecorded[0].equals(response.optString("content")))response.put("nativeOwnerReplyRecorded",true);
@@ -5042,8 +5080,8 @@ if(task.optJSONObject("origin")==null&&"owner".equals(task.optString("actorId"))
         if(!businessReady()&&!java.util.Set.of("stopTask","stopRun","pauseRun").contains(action))throw new SecurityException("原启动恢复或维护尚未完成；请先读取启动维护页");
     }
     /** Existing assistant send queue with an in-process owner composer proof, never a request JSON option. */
-    public void requestOrdinaryFirstChat(JSONObject request,dev.pocketengine.features.assistant.OwnerComposerState.Pending original){
-        requireOwnerActionReady("featureRequest");features.requestOrdinaryFirstChat(request,original);
+    public void requestOrdinaryChatPresentation(JSONObject request,dev.pocketengine.features.assistant.AssistantModule.OrdinaryChatDispatch original){
+        requireOwnerActionReady("featureRequest");features.requestOrdinaryChatPresentation(request,original);
     }
     public void requestFormalSaveFileList(String projectId,String requestId){
         requireOwnerActionReady("featureRequest");

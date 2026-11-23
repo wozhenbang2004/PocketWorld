@@ -745,7 +745,7 @@ public final class LocalModule implements EngineModule {
             original.check();
             if(closed||Thread.currentThread().isInterrupted())throw new java.io.InterruptedIOException("原起步项目入口已关闭");
         };
-        current.check();String selection=ProjectSourceImport.builtinViteSelectionId();
+        current.check();String selection=ProjectSourceImport.builtinSavedPageSelectionId();
         synchronized(projectPackageStaging){
             current.check();
             File directory=packageImportRoot(),target=new File(directory,selection+".zip");
@@ -757,7 +757,7 @@ public final class LocalModule implements EngineModule {
             sourceStageCapacity(directory);current.check();
             File copied=Files.createTempDirectory(directory.toPath(),"source-read-").toFile();
             try{
-                var source=ProjectSourceImport.builtinViteStarter(copied,current);
+                var source=ProjectSourceImport.builtinSavedPageStarter(copied,current);
                 JSONObject staged=publishSourceSelection(source,selection,current);
                 current.check();return staged;
             }finally{deleteOwnPackageStaging(copied);}
@@ -2483,15 +2483,19 @@ public final class LocalModule implements EngineModule {
         return position.path().equals(member.opt("path"))&&position.sha256().equals(member.opt("sha256"))&&
                 member.optLong("bytes",-1)>=0&&member.optLong("bytes")<=262144;
     }
-    /** Only a native blank owner preparation or an original phone import. The preview
-     * uses the registered private checkout, never a picker URI, archive or formal file. */
-    private static boolean savedStaticOwnerCheckout(JSONObject row,EditorSaveOrigin origin){
+    /** Only a native blank owner preparation, an original phone import or the exact saved-page starter.
+     * Uses the registered private checkout, never a picker URI, archive or formal file. */
+    private static boolean savedStaticOwnerCheckout(JSONObject row,EditorSaveOrigin origin)throws Exception{
         if(origin==EditorSaveOrigin.PREPARED){
             // Check the native preparation baseline, not the editable tree. A separate
             // formal adoption can add baseline rows; ordinary private saves do not.
             return row.length()==6&&row.opt("name") instanceof String&&
                     row.opt("createdAt") instanceof Number createdAt&&createdAt.longValue()>0&&
                     row.opt("files") instanceof JSONArray baseline&&baseline.length()==0;
+        }
+        if(origin==EditorSaveOrigin.BUILTIN_VITE){
+            JSONObject source=row.getJSONObject("sourceImport");
+            return ProjectSourceImport.matchesSavedPageStarterImport(source.opt("manifestIdentity"),source.opt("sourceEvidenceSha256"));
         }
         return originalPhoneEditorImport(row,origin);
     }

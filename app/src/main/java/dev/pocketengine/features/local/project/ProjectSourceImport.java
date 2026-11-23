@@ -29,6 +29,7 @@ public final class ProjectSourceImport {
     public static final int MAX_ENTRIES=10_000,MAX_DEPTH=40;
     public static final String BUILTIN_VITE_STARTER="builtin_vite_starter";
     private static final String BUILTIN_VITE_FORMAT="pocketworld.builtin-vite-starter.v1", BUILTIN_VITE_LABEL="Vite 网页起步项目";
+    private static final String BUILTIN_SAVED_PAGE_FORMAT="pocketworld.builtin-vite-starter.v2";
     private static final Set<String> ZIP_ROOT_AMBIGUOUS=Set.of("pnpm-workspace.yaml","lerna.json","nx.json","rush.json","turbo.json",
         "yarn.lock","pnpm-lock.yaml","bun.lock","bun.lockb","npm-shrinkwrap.json","pom.xml","build.gradle","build.gradle.kts","settings.gradle","settings.gradle.kts",
         "pyproject.toml","requirements.txt","go.mod","cargo.toml");
@@ -259,13 +260,16 @@ public final class ProjectSourceImport {
     public static Selection nativeGit(ProjectGitImport.Result result)throws Exception {
         JSONObject original=result.metadata();String id=result.actionId();original.remove("files");ProjectPackageArchive.Frozen frozen=result.source();JSONObject manifest=frozen.manifest();return new Selection(frozen,new JSONObject().put("format","pocketworld.project-source-selection.v1").put("sourceKind","git_https").put("sourceLabel",original.getString("projectName")).put("selectionId",id).put("manifestIdentity",frozen.identity).put("sourceDigest",manifest.getJSONObject("source").getString("sourceDigest")).put("files",manifest.getJSONArray("files").length()).put("expandedBytes",manifest.getLong("bytes")).put("omittedCount",manifest.getJSONArray("omitted").length()).put("includeGeneratedRoots",true).put("completeSelection",true).put("providerAtomicSnapshot",false).put("ordinaryZipIsPocketWorldPackage",false).put("stagingIdsAreNotOriginalProjectIdentity",true).put("executionAuthorityRestored",false).put("sourcePermissionPersisted",false).put("gitHistoryInPortableSourcePackage",false).put("gitHistoryCopiedOnlyByNativePublication",true).put("original",original));
     }
-    private record BuiltinVite(Map<String,String> files,String selectionId,String sourceDigest,String lockSha256,long bytes){
+    private record BuiltinVite(String format,Map<String,String> files,String selectionId,String sourceDigest,String lockSha256,long bytes){
         JSONObject marker()throws Exception{
-            return new JSONObject().put("format",BUILTIN_VITE_FORMAT).put("viteVersion",ProjectLiveProjectTemplate.VITE_VERSION).put("lockSha256",lockSha256);
+            return new JSONObject().put("format",format).put("viteVersion",ProjectLiveProjectTemplate.VITE_VERSION).put("lockSha256",lockSha256);
         }
     }
-    private static BuiltinVite builtinVite()throws Exception{
-        Map<String,String> files=new TreeMap<>(ProjectLiveProjectTemplate.builtinStarterFiles());
+    private record SavedPageStarterProof(String manifestIdentity,String evidenceSha256){}
+    private static SavedPageStarterProof savedPageStarterProof;
+    private static BuiltinVite builtinVite(boolean savedPage)throws Exception{
+        String format=savedPage?BUILTIN_SAVED_PAGE_FORMAT:BUILTIN_VITE_FORMAT;
+        Map<String,String> files=new TreeMap<>(savedPage?ProjectLiveProjectTemplate.builtinSavedPageStarterFiles():ProjectLiveProjectTemplate.builtinStarterFiles());
         JSONArray entries=new JSONArray();long size=0;
         for(var file:files.entrySet()){
             byte[] bytes=file.getValue().getBytes(StandardCharsets.UTF_8);
@@ -273,13 +277,41 @@ public final class ProjectSourceImport {
             size+=bytes.length;
         }
         String digest=ProjectSources.manifestDigest(entries),lockSha=ProjectSources.sha256(files.get("package-lock.json").getBytes(StandardCharsets.UTF_8));
-        String id=java.util.UUID.nameUUIDFromBytes((BUILTIN_VITE_FORMAT+"\0"+digest).getBytes(StandardCharsets.UTF_8)).toString();
-        return new BuiltinVite(files,id,digest,lockSha,size);
+        String id=java.util.UUID.nameUUIDFromBytes((format+"\0"+digest).getBytes(StandardCharsets.UTF_8)).toString();
+        return new BuiltinVite(format,files,id,digest,lockSha,size);
     }
-    public static String builtinViteSelectionId()throws Exception{return builtinVite().selectionId();}
+    private static synchronized SavedPageStarterProof savedPageStarterProof()throws Exception {
+        if(savedPageStarterProof!=null)return savedPageStarterProof;
+        var starter=builtinVite(true);
+        Map<String,byte[]> files=new TreeMap<>();
+        starter.files().forEach((path,text)->files.put(path,text.getBytes(StandardCharsets.UTF_8)));
+        JSONObject manifest=ProjectPackageArchive.builtinSavedPageManifest(files,starter.selectionId(),BUILTIN_VITE_LABEL,
+            starter.sourceDigest(),starter.bytes());
+        String identity=ProjectSources.digest(manifest);
+        JSONObject evidence=sourceEvidence(starter.selectionId(),BUILTIN_VITE_LABEL,BUILTIN_VITE_STARTER,false,0,starter.marker(),manifest,identity);
+        return savedPageStarterProof=new SavedPageStarterProof(identity,ProjectSources.digest(evidence));
+    }
+    private static boolean savedPageStarterMarker(JSONObject evidence){
+        JSONObject original=evidence==null?null:evidence.optJSONObject("original");
+        return original!=null&&BUILTIN_SAVED_PAGE_FORMAT.equals(original.opt("format"));
+    }
+    /** Called on a staged native evidence object, never on command arguments. */
+    public static boolean matchesSavedPageStarterEvidence(JSONObject evidence)throws Exception {
+        if(!savedPageStarterMarker(evidence))return false;
+        return matchesSavedPageStarterImport(evidence.opt("manifestIdentity"),ProjectSources.digest(evidence));
+    }
+    /** Only an additional fingerprint after the caller has proved the original registered app-owned checkout. */
+    public static boolean matchesSavedPageStarterImport(Object manifestIdentity,Object evidenceSha256)throws Exception {
+        var required=savedPageStarterProof();
+        return required.manifestIdentity().equals(manifestIdentity)&&required.evidenceSha256().equals(evidenceSha256);
+    }
+    public static String builtinViteSelectionId()throws Exception{return builtinVite(false).selectionId();}
+    public static String builtinSavedPageSelectionId()throws Exception{return builtinVite(true).selectionId();}
+    public static Selection builtinViteStarter(File root,Current current)throws Exception{return builtinViteStarter(root,current,false);}
+    public static Selection builtinSavedPageStarter(File root,Current current)throws Exception{return builtinViteStarter(root,current,true);}
     /** Only signed application text enters this native source staging path. */
-    public static Selection builtinViteStarter(File root,Current current)throws Exception{
-        current.check();freshDirectory(root);var starter=builtinVite();
+    private static Selection builtinViteStarter(File root,Current current,boolean savedPage)throws Exception{
+        current.check();freshDirectory(root);var starter=builtinVite(savedPage);
         for(var file:starter.files().entrySet()){
             current.check();
             Files.write(target(root,path(file.getKey())).toPath(),file.getValue().getBytes(StandardCharsets.UTF_8),
@@ -291,7 +323,8 @@ public final class ProjectSourceImport {
     }
     /** Called with the actual codec-verified manifest: a source-kind label or stable ID alone proves nothing. */
     public static void requireBuiltinViteStarter(JSONObject actual,JSONObject manifest)throws Exception{
-        var starter=builtinVite();JSONObject source=manifest.getJSONObject("source"),project=manifest.getJSONObject("project");
+        boolean savedPage=savedPageStarterMarker(actual);
+        var starter=builtinVite(savedPage);JSONObject source=manifest.getJSONObject("source"),project=manifest.getJSONObject("project");
         JSONArray files=manifest.getJSONArray("files"),directories=manifest.getJSONArray("directories");
         if(actual==null||!starter.selectionId().equals(source.opt("projectId"))||!starter.selectionId().equals(source.opt("checkoutId"))||
             !starter.selectionId().equals(project.opt("id"))||!BUILTIN_VITE_LABEL.equals(project.opt("name"))||
@@ -309,7 +342,8 @@ public final class ProjectSourceImport {
         }
         JSONObject expected=sourceEvidence(starter.selectionId(),BUILTIN_VITE_LABEL,BUILTIN_VITE_STARTER,false,0,
             starter.marker(),manifest,ProjectSources.digest(manifest));
-        if(!ProjectSources.canonical(expected).equals(ProjectSources.canonical(actual)))
+        if(!ProjectSources.canonical(expected).equals(ProjectSources.canonical(actual))||
+                savedPage&&!matchesSavedPageStarterImport(ProjectSources.digest(manifest),ProjectSources.digest(actual)))
             throw new SecurityException("原起步项目来源说明不同，没有使用缓存");
     }
     private static String hex(byte[] bytes){StringBuilder out=new StringBuilder();for(byte value:bytes)out.append(String.format(java.util.Locale.ROOT,"%02x",value&255));return out.toString();}

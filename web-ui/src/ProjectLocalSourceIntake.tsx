@@ -3,13 +3,13 @@ import {bridge} from './bridge';
 import {Button, SettingsDialog, TextField} from './forms-library';
 import './project-git-intake.css';
 
-type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};strippedArchiveRoot?:string;firstWebFile?:string;id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package'|'builtin_vite_starter';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
+type Source = {retainedArchiveRoot?:{directory:string;descriptor:string};strippedArchiveRoot?:string;firstWebFile?:string;savedPageStarter?:true;id:string;sha:string;manifest:string;kind:'saf_tree'|'external_zip'|'host_saved_snapshot'|'task_source_package'|'builtin_vite_starter';hostVersion?:string;excludedDirectory?:string;fixedPackage?:{manifest:string;archive:string;omitted:number};label:string;files:number;bytes:number;omitted:number;paths:string[]};
 export type PhoneImportFiles = {window:string;project:string;checkout:string};
 type OpenFiles = (target:PhoneImportFiles)=>Promise<void>;
 type Intake = {window:string;busy:boolean;picking:boolean;recoveryOnly?:boolean;notice?:string;error?:string;suggestedSkip?:string;staged?:Source;saved:Source[];
   reviewId?:string;reviewName?:string;pendingId?:string;pendingName?:string;otherPending?:boolean;mayRetry?:boolean;mayRelease?:boolean;project?:string;checkout?:string;name?:string;openSourceFiles?:boolean};
 const prefix='projects.localSource.', number=(n:number)=>new Intl.NumberFormat('zh-CN').format(n);
-const sourceKind=(s:Source)=>s.kind==='builtin_vite_starter'?'内置小网页模板':s.kind==='task_source_package'?'原私人任务的固定源码':s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
+const sourceKind=(s:Source)=>s.kind==='builtin_vite_starter'?(s.savedPageStarter?'内置离线小网页模板':'内置小网页模板'):s.kind==='task_source_package'?'原私人任务的固定源码':s.kind==='host_saved_snapshot'?'原主机任务已存手机的文件':s.kind==='saf_tree'?'文件夹':s.fixedPackage?'PocketWorld 源项目包':'源码 ZIP';
 
 export function ProjectLocalSourceIntake({state,canCreateStarter=false,onOpenSourceFiles}:{state?:Intake;canCreateStarter?:boolean;onOpenSourceFiles?:OpenFiles}) {
   // A system picker pauses this document. Close only when the project surface actually unmounts,
@@ -55,7 +55,8 @@ function SourcePanel({state,canCreateStarter,onOpenSourceFiles}:{state:Intake;ca
             onClick={()=>void act('openProject',{project:published.project,checkout:published.checkout})}>打开这个项目</Button>
           {!state.recoveryOnly&&<Button variant="ghost" disabled={busy} onClick={()=>void act('another')}>{starterAvailable?'另选项目来源':'导入另一份源码'}</Button>}</div></>
       :state.recoveryOnly?(!busy&&!state.notice&&!state.error&&!error&&<p>原导入定位尚未载入，请返回项目后重新核对。</p>):source?<><h3>{state.reviewId?'核对新项目':root&&!discard?'选择工程根':starter?'小网页模板已准备':'已固定本次源码'}</h3>
-        {starter&&<p>这是内置的小网页源码。创建私人项目后可编辑；准备和创建都不会安装依赖、构建或调用模型。</p>}
+        {starter&&<p>{source.savedPageStarter?'创建后，打开 index.html 可直接预览已保存的网页，无需安装依赖；也可另外选择构建。准备和创建都不会运行项目。':
+          '这是内置的小网页源码。创建私人项目后可编辑；准备和创建都不会安装依赖、构建或调用模型。'}</p>}
         {source.kind==='task_source_package'&&<p>从原任务保存的这版源码另建项目，不复制现在的工作目录，也不覆盖原副本。</p>}
         {source.kind==='host_saved_snapshot'&&<p>只包含在原任务中选定的 UTF-8 文件，不是整份主机仓库，也没有授予运行权限。</p>}
         {source.excludedDirectory&&<p>按你的选择跳过目录 <bdi>{source.excludedDirectory}/</bdi>。其中的文件没有读取，也不会进入新项目。</p>}

@@ -75,6 +75,7 @@ import {NavigationChrome} from './NavigationChrome';
 import {WorkObjectMenu} from './WorkObjectMenu';
 import {retainedLocalScriptOutputs,TaskCapabilityWorkspace} from './TaskCapabilityWorkspace';
 import {canReviewDirectWorkspace, DeviceTaskScopeWorkspace, isUnstartedDirectWorkspaceWork} from './DeviceTaskScopeWorkspace';
+import {SavedDeviceHandoffReceipt} from './SavedDeviceHandoffReceipt';
 import type {SentPhoneGoalFocus} from './devices-workspace';
 import {PhoneControlWorkspace} from './PhoneControlWorkspace';
 import {OriginalWindowsWorkspaceOverview} from './OriginalWindowsTextRead';
@@ -8299,6 +8300,7 @@ export default function App(){
      {dependencyBuild&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(dependencyBuild)}>核对这版的本机构建</Button></div>}
      {previousDependency&&<div className="pw-action-row"><Button variant="secondary" onClick={()=>void reviewBuildAfterDependencies(previousDependency,true)}>用这次准备记录对照当前锁</Button></div>}
      {!promoteSupplement&&workActions}
+     {!phoneViewerObscured&&!phoneViewerExpanded&&originalTaskOverview(task)&&<SavedDeviceHandoffReceipt taskId={task.id} raw={task.raw}/>}
      {taskOpen&&openedTaskId.current===task.id&&!taskOpening&&task.raw?.hasOwnerWorkPreparations&&<ButlerPreparationEntries key={'preparations-task:'+task.id} sourceTaskId={task.id} conversationId={privateTaskConversationId(task)||''} active={taskLayer==='overview'&&!preparationTarget} refreshKey={String(task.raw?.ownerWorkPreparationCount||0)+':'+preparationRevision} can={can} run={bridge.command} onOpen={setPreparationTarget}/>}
      {task.raw?.ownerWorkPreparation?.sourceTaskId&&task.raw?.ownerWorkPreparation?.proposalId&&task.raw?.ownerWorkPreparation?.sourceConversationId&&<Button variant="ghost" leadingIcon={IconChat} onClick={()=>setPreparationTarget({sourceTaskId:task.raw!.ownerWorkPreparation.sourceTaskId,proposalId:task.raw!.ownerWorkPreparation.proposalId,sourceConversationId:task.raw!.ownerWorkPreparation.sourceConversationId})}>查看管家的原工作准备</Button>}
      {!raisedSupplement&&supplementEditor}
