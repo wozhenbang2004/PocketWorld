@@ -3012,10 +3012,11 @@ def main(*, config_override=None, owner_phone_receipts=False, owner_phone_work=F
         except BaseException:
             manager.close()
             raise
-    serve_original_manager(manager, owner_phone_receipts=owner_phone_receipts, owner_phone_work=owner_phone_work)
+    serve_original_manager(manager, owner_phone_receipts=owner_phone_receipts, owner_phone_work=owner_phone_work,
+                           receipt_installation=config_override.context if owner_phone_receipts and config_override is not None else None)
 
 
-def serve_original_manager(manager, *, owner_phone_receipts=False, owner_phone_work=False):
+def serve_original_manager(manager, *, owner_phone_receipts=False, owner_phone_work=False, receipt_installation=None):
     """Continue the SAME original manager after an explicit native owner action.
 
     Pairing has no new Agent, HTTP-token permission conversion or parallel DB.
@@ -3051,7 +3052,7 @@ def serve_original_manager(manager, *, owner_phone_receipts=False, owner_phone_w
         if owner_phone_receipts and os.name == "nt" and getattr(sys, "frozen", False) and manager.device_companion is not None:
             try:
                 from desktop_phone_receipts import open_local_entry
-                receipt_entry = open_local_entry(manager)
+                receipt_entry = open_local_entry(manager, installed=receipt_installation)
             except Exception:
                 print("Owner receipt entry unavailable; the original Companion is still serving.", file=sys.stderr)
         server.serve_forever(poll_interval=0.2)

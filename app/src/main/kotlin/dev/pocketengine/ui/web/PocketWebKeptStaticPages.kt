@@ -34,11 +34,15 @@ internal class PocketWebKeptStaticPages(
         private const val REVIEW=PREFIX+"pending.review"
         private const val ABANDON=PREFIX+"pending.abandon"
         private const val DISMISS=PREFIX+"pending.dismiss"
-        val COMMANDS=setOf(KEEP,LIST,OPEN,COMPARE,CLOSE,REVIEW,ABANDON,DISMISS)
-        fun mayMutate(action:String)=action==KEEP||action==ABANDON
+        private const val REVIEW_REMOVAL=PREFIX+"removal.review"
+        private const val REMOVE=PREFIX+"removal.confirm"
+        private const val DISMISS_REMOVAL=PREFIX+"removal.dismiss"
+        val COMMANDS=setOf(KEEP,LIST,OPEN,COMPARE,CLOSE,REVIEW,ABANDON,DISMISS,REVIEW_REMOVAL,REMOVE,DISMISS_REMOVAL)
+        fun mayMutate(action:String)=action==KEEP||action==ABANDON||action==REMOVE
         private val uuid=Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")
         private val digest=Regex("[a-f0-9]{64}")
         private val shelfFields=setOf("projectId","visitId","shelfHandle")
+        private val exactVersion=setOf("versionId","manifestIdentity")
         private const val IO_WINDOW_MS=20_000L
         private const val RETIRED_LIMIT=16
         private const val LOST_READ="原项目窗口已关闭，请重新选择原本机网页"
@@ -56,6 +60,8 @@ internal class PocketWebKeptStaticPages(
         var registration:Registration?=null
         var catalog:OwnerKeptStaticPages.Catalog?=null
         var review:OwnerKeptStaticPages.PendingReview?=null
+        var removal:RemovalOffer?=null
+        var removalNeedsList=false
         var flight:Flight?=null
 
         override fun projectId()=one.project
@@ -64,6 +70,28 @@ internal class PocketWebKeptStaticPages(
             fence.call {
                 check(active(this) && registration!=null && flight?.confirmation==reviewId &&
                     renderer()?.keptShelfCanRead()==true) { "原项目未确认清理这次暂存" }
+                unlink.enter()
+            }
+        }
+    }
+
+    private inner class RemovalOffer(val owner:Shelf,val catalog:OwnerKeptStaticPages.Catalog,val page:OwnerKeptStaticPages.Page,
+            val registration:Registration,val originalRenderer:PocketWebProjectPreview):OwnerKeptStaticPages.RemovalWindow{
+        private val idle=originalRenderer.pinKeptRemovalWindow(owner.preview)
+        var flight:Flight?=null
+        var shown:OwnerKeptStaticPages.RemovalReview?=null
+        fun stillHere()=live(owner) && owner.catalog===catalog &&
+            owner.registration?.let{it.module===registration.module && it.createdAt==registration.createdAt}==true &&
+            renderer()===originalRenderer && idle()
+        private fun admitted()=owner.flight===flight && active(owner) && stillHere()
+
+        override fun projectId()=owner.one.project
+        override fun current()=try{fence.call{admitted()}}catch(_:Exception){false}
+        override fun atConfirmedRemoval(reviewId:String,unlink:OwnerKeptStaticPages.Commit){
+            fence.call{
+                check(admitted() && flight?.confirmation==reviewId && shown?.reviewId()==reviewId){
+                    "原项目未确认移除这一版保留网页"
+                }
                 unlink.enter()
             }
         }
@@ -92,7 +120,7 @@ internal class PocketWebKeptStaticPages(
         val old=shelf?:return
         shelf=null
         remember(old.one)
-        old.review=null;old.catalog=null
+        old.review=null;old.removal=null;old.catalog=null
         old.flight?.let{flight->
             finishFlight(old,flight)
             flight.reject(if(flight.confirmation==null) LOST_READ else LOST_EFFECT)
@@ -114,6 +142,7 @@ internal class PocketWebKeptStaticPages(
 
     private fun <T> work(
         value:Shelf,done:(JSONObject?,String?)->Unit,confirmation:String?=null,
+        bindFlight:((Flight)->Unit)?=null,
         read:(OwnerKeptStaticPages)->T, show:(T)->JSONObject,
     ){
         check(live(value)&&value.flight==null){"原项目网页窗口已变化或已有操作"}
@@ -128,6 +157,7 @@ internal class PocketWebKeptStaticPages(
             }
         }
         value.flight=original
+        bindFlight?.invoke(original)
         main.postDelayed(original.timeout,IO_WINDOW_MS)
         try{
             val book=storage
@@ -205,13 +235,16 @@ internal class PocketWebKeptStaticPages(
         val first=action==LIST&&!args.has("shelfHandle")
         if(first)fields(args,setOf("projectId","visitId"))
         else fields(args,shelfFields + when(action){
-            OPEN->setOf("versionId","manifestIdentity")
+            OPEN,REVIEW_REMOVAL->exactVersion
             COMPARE->setOf("beforeVersionId","beforeManifestIdentity","afterVersionId","afterManifestIdentity")
             ABANDON->setOf("reviewId","confirmed")
             DISMISS->setOf("reviewId")
+            REMOVE->exactVersion+setOf("reviewId","confirmed")
+            DISMISS_REMOVAL->exactVersion+"reviewId"
             else->emptySet()
         })
         if(action==ABANDON)require(args.opt("confirmed")==true){"请明确确认仅清除本项目未完成的暂存"}
+        if(action==REMOVE)require(args.opt("confirmed")==true){"请明确确认移除这份已保留的网页"}
         check(projectVisible(project) && renderer()?.keptShelfCanRead()==true){"请回到当前私人项目的工作台"}
         val selected=if(first){
             check(visit !in retired){"这次项目网页窗口已关闭，请使用新的选择"}
@@ -228,12 +261,16 @@ internal class PocketWebKeptStaticPages(
             }
             original
         }
+        check(action==LIST || !selected.removalNeedsList){"请先核对原项目保留列表"}
+        check(selected.removal==null || action in setOf(LIST,REMOVE,DISMISS_REMOVAL)){"请先退出原保留网页的移除确认"}
         when(action){
             LIST->{
                 selected.review=null
+                selected.removal=null
                 work(selected,done,read={it.catalog(selected)},show={catalog->
                     check(catalog.projectId()==project){"原目录不属于此项目"}
                     selected.catalog=catalog
+                    selected.removalNeedsList=false
                     present(selected,catalog.metadata())
                 })
             }
@@ -292,6 +329,47 @@ internal class PocketWebKeptStaticPages(
                 selected.review=null
                 done(present(selected,JSONObject().put("kind","owner_saved_static_page_pending_dismissed")
                     .put("reviewId",id).put("dismissed",true)),null)
+            }
+            REVIEW_REMOVAL->{
+                check(selected.review==null){"请先关闭原暂存清理确认"}
+                val catalog=checkNotNull(selected.catalog)
+                val version=text(args,"versionId");val manifest=text(args,"manifestIdentity",digest)
+                val page=catalog.versions().singleOrNull{
+                    it.projectId()==project && it.versionId()==version && it.manifestIdentity()==manifest
+                }?:error("请只选择本次目录中确切的一份已保留网页")
+                val offer=RemovalOffer(selected,catalog,page,checkNotNull(selected.registration),checkNotNull(renderer()))
+                work(selected,done,bindFlight={offer.flight=it},read={it.reviewRemoval(offer,catalog,page)},show={review->
+                    check(offer.stillHere() && review.page()==page){"原保留版本或项目窗口已变化"}
+                    val response=present(selected,review.metadata())
+                    offer.shown=review
+                    selected.removal=offer
+                    response
+                })
+            }
+            REMOVE,DISMISS_REMOVAL->{
+                val id=text(args,"reviewId");val version=text(args,"versionId");val manifest=text(args,"manifestIdentity",digest)
+                val offer=selected.removal?.takeIf{it.page.versionId()==version && it.page.manifestIdentity()==manifest &&
+                    it.shown?.reviewId()==id}?:error("未确认原项目这次所选已保留网页")
+                val review=checkNotNull(offer.shown)
+                selected.removal=null // Both paths retire the one native offer; never reuse it.
+                if(action==DISMISS_REMOVAL){
+                    done(present(selected,JSONObject().put("kind","owner_saved_static_page_removal_dismissed")
+                        .put("reviewId",id).put("page",offer.page.metadata()).put("dismissed",true)),null)
+                    return
+                }
+                selected.removalNeedsList=true // If anything is lost, only a deliberate stock LIST restores this shelf.
+                work(selected,done,confirmation=id,bindFlight={offer.flight=it},read={it.remove(review,offer)},show={result->
+                    check(offer.stillHere() && result.page()==offer.page && result.reviewId()==id){"原保留版本的移除回执不同"}
+                    val response=present(selected,result.metadata())
+                    if(result.status()==OwnerKeptStaticPages.RemovalStatus.REMOVED){
+                        val updated=checkNotNull(result.catalog())
+                        check(updated.projectId()==project){"原保留列表归属不同"}
+                        response.put("catalog",present(selected,updated.metadata()))
+                        selected.catalog=updated
+                        selected.removalNeedsList=false
+                    }
+                    response
+                })
             }
             else->error("未接入的本机网页操作")
         }

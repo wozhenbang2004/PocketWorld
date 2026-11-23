@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import sqlite3
 import threading
 import time
 import unicodedata
@@ -10,7 +11,7 @@ import desktop_received_commands as received
 from desktop_owner_confirmation import confirm_local_phone_stop, confirmation_record
 from desktop_owner_entry import _dialog
 from desktop_sessions import WindowsDesktopHealth
-from device_protocol import TEXT_RETURN
+from device_protocol import MAX_CONTROL_BYTES, TEXT_RETURN, identifier
 from phone_task_bridge import PROTOCOL, PhoneTaskError
 from phone_task_outcome import is_phone_action_goal
 
@@ -21,16 +22,28 @@ _STATE = {"succeeded":"执行成功", "failed":"失败", "cancelled":"已取消"
           "needs_reconcile":"结果待核对", "accepted":"手机已接收", "completed":"曾记录执行结束", "dispatch_prepared":"准备派发", "unknown":"状态未确认"}
 _BACK_TO_PEER = ("back_to_peer", "返回这台设备的本机派单")
 _BACK_TO_ORIGINAL = ("back_to_original", "返回这笔原派单")
-_BATCH = """SELECT rid,operation_id,fingerprint,updated_at,CASE WHEN
+_OUTGOING_COLUMNS = """rid,operation_id,fingerprint,updated_at,CASE WHEN
        json_extract(doc,'$.protocol')=? AND json_extract(doc,'$.kind')='task.submitGoal'
        AND json_extract(doc,'$.peerDeviceId')=? AND json_extract(doc,'$.instanceId')=?
        AND json_extract(doc,'$.operationId')=operation_id AND
        ((json_extract(doc,'$.resourceBinding.screenMode') IN ('main_screen','background')
          AND json_type(doc,'$.resourceBinding.androidUserId')='integer' AND json_array_length(doc,'$.resourceBinding.packageNames')>0)
         OR (json_extract(doc,'$.resourceBinding.screenMode')='capabilities' AND json_extract(doc,'$.originalTextReturn')=?))
-       THEN json_extract(doc,'$.status') END FROM
+       THEN json_extract(doc,'$.status') END"""
+_BATCH = "SELECT " + _OUTGOING_COLUMNS + """ FROM
        (SELECT rowid AS rid,operation_id,fingerprint,updated_at,CASE WHEN json_valid(details) THEN details END AS doc
         FROM operations WHERE rowid<? ORDER BY rowid DESC LIMIT 64) ORDER BY rid DESC"""
+_ORIGINAL_OUTGOING = "SELECT " + _OUTGOING_COLUMNS + """ FROM
+       (SELECT rowid AS rid,operation_id,fingerprint,updated_at,
+          CASE WHEN typeof(details)='text' AND length(CAST(details AS BLOB)) BETWEEN 1 AND ?
+               THEN CASE WHEN json_valid(details) THEN details END END AS doc
+        FROM operations WHERE operation_id=?)
+       WHERE json_extract(doc,'$.dispatchAudience.originDeviceId')=?
+         AND json_extract(doc,'$.dispatchAudience.callerDeviceId')=?
+         AND json_extract(doc,'$.dispatchAudience.targetDeviceId')=?
+         AND json_extract(doc,'$.dispatchAudience.instanceId')=?
+         AND json_extract(doc,'$.dispatchAudience.rootTaskId')=operation_id
+         AND json_extract(doc,'$.dispatchAudience.localTaskId')=operation_id"""
 
 
 def dispatch_status(result, error):
@@ -68,7 +81,7 @@ def _parts(value):
 
 
 class ResultView:
-    def __init__(self, manager, *, owner_stop=False):
+    def __init__(self, manager, *, owner_stop=False, lookup_installation=None):
         self.manager = manager
         self.service = manager.device_companion
         self.router = self.service.phone_tasks
@@ -76,6 +89,7 @@ class ResultView:
         self.presenting, self.reading = threading.Lock(), threading.Lock()
         self.receiver = self.service.receiver
         self.owner_stop = owner_stop
+        self.lookup_installation = lookup_installation
 
     def active(self):
         return not (self.end.is_set() or self.manager.closed or self.service.closed or self.router.closed) and self.manager.device_companion is self.service
@@ -132,8 +146,54 @@ class ResultView:
         try: return result if current() else None
         except Exception: return None
 
-    def choose_outgoing(self, peer, row, *, back_to_peer=False):
-        current=lambda: self._source_current(peer,row)
+    def find_outgoing(self, peer):
+        # The receipt-only tray opts in with its already-verified signed install.
+        # This action reads a single local PK; it never invokes the peer router.
+        installed = self.lookup_installation
+        if installed is None or self.owner_stop or not self._peer_current(peer):
+            return
+        from desktop_phone_goal_text import ask_original_operation
+        from platform_backend import PlatformError
+        from windows_first_workspace import require_owner
+        try:
+            owner = require_owner(installed)
+        except (OSError, ValueError, PlatformError):
+            return
+
+        def current():
+            try:
+                return self._peer_current(peer) and require_owner(installed) == owner
+            except (OSError, ValueError, PlatformError, sqlite3.Error):
+                return False
+
+        if not current(): return
+        operation = ask_original_operation(current, outgoing=True)
+        if operation is None or not current(): return
+        row = None
+        try:
+            identifier(operation, "operationId")
+            source = self.service.identity.device_id
+            with self.manager.lock:
+                row = self.manager.ledger.execute(_ORIGINAL_OUTGOING,
+                    (PROTOCOL, peer[0], peer[2], TEXT_RETURN, MAX_CONTROL_BYTES, operation, source, source, peer[0], peer[2])).fetchone()
+        except (ValueError, sqlite3.Error):
+            pass  # A miss, malformed index or other peer gives the same local answer.
+        if not current(): return
+        if row is not None and row[1] == operation and isinstance(row[4], str):
+            self.choose_outgoing(peer, row, back_to_peer=True, owning_current=current)
+        else:
+            self._dialog("没有核对到这笔原派单",
+                         "请使用手机「查看原工作回执」里的完整原派单编号，不用短号。只查了所选手机的本机记录，不能据此判断手机是否收到或执行。",
+                         [_BACK_TO_PEER], current)
+
+    def choose_outgoing(self, peer, row, *, back_to_peer=False, owning_current=None):
+        def current():
+            if owning_current is None:
+                return self._source_current(peer, row)
+            try:
+                return owning_current() and self._source_current(peer, row)
+            except (PhoneTaskError, ValueError, sqlite3.Error):
+                return False  # A retired exact lookup returns to its own peer list.
         while current():
             recovery = self.owner_stop and self.router.owner_phone_stop_recorded(peer, row)
             choice=self._dialog("核对这笔原派单", f"发起：这台 Windows · 原派单 …{row[1][-16:]}\n指定执行：手机 …{peer[0][-12:]}\n是否已接收或开始，以原回执为准。选择之前不联系手机。",
@@ -145,7 +205,7 @@ class ResultView:
                 self._read_owner_stop(peer, row, current)
                 continue
             if choice not in {"dispatch","result"} or not current(): return
-            if self._read(peer,row,dispatch_only=choice=="dispatch",back_to_peer=back_to_peer) != _BACK_TO_ORIGINAL[0]: return
+            if self._read(peer,row,dispatch_only=choice=="dispatch",back_to_peer=back_to_peer,current=current) != _BACK_TO_ORIGINAL[0]: return
             # Reopen only this local choice. A new remote read needs another explicit click.
 
     def _show_owner_stop(self, result, current):
@@ -211,19 +271,20 @@ class ResultView:
             retired.set()
         self._show_owner_stop(result, lambda: visible() and (guard is None or guard()))
 
-    def _read(self, peer, row, *, dispatch_only=False, back_to_peer=False):
+    def _read(self, peer, row, *, dispatch_only=False, back_to_peer=False, current=None):
+        if current is None: current = lambda: self._source_current(peer, row)
         back = [_BACK_TO_ORIGINAL] + ([_BACK_TO_PEER] if back_to_peer else [])
         if not self.reading.acquire(blocking=False):
             self._dialog("上一笔读取仍在返回", "没有再发一笔读取。稍后再进入原工作查看。", []); return
         done, closed, box = threading.Event(), threading.Event(), {}
         def visible():
-            return not closed.is_set() and self._source_current(peer,row) and WindowsDesktopHealth().probe(session_only=True).get("available") is True
+            return not closed.is_set() and current() and WindowsDesktopHealth().probe(session_only=True).get("available") is True
         def read():
             try:
-                if self._source_current(peer, row):
+                if current():
                     result, guard = (self.router.read_dispatch_for_local_owner(peer[0],row[1],visible) if dispatch_only
                                      else self.router.read_for_local_receipt(peer[0],row[1]))
-                    if self._source_current(peer, row) and result.get("operationId") == row[1] and result.get("peerDeviceId") == peer[0]:
+                    if current() and result.get("operationId") == row[1] and result.get("peerDeviceId") == peer[0]:
                         box.update(result=result, guard=guard)
             except PhoneTaskError as error: box["error"]=error.status
             except PermissionError: box["error"]=403
@@ -234,13 +295,13 @@ class ResultView:
             completed = False
             def finish_wait():
                 nonlocal completed
-                if not self._source_current(peer, row) or WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return True
+                if not current() or WindowsDesktopHealth().probe(session_only=True).get("available") is not True: return True
                 completed = done.is_set()
                 return completed
             _dialog("正在向原手机核对派单" if dispatch_only else "正在读取原手机的工作结果",
                     ("只查派单，不读取成果。" if dispatch_only else "只核对同一派单和原任务。")+"关闭可离开等待，不取消手机任务。", [], retire=finish_wait)
             if not completed: closed.set(); return
-        if not self._source_current(peer, row): return
+        if not current(): return
         result, guard = box.get("result", {}), box.get("guard")
         if dispatch_only:
             valid=lambda: visible() and callable(guard) and guard()
@@ -254,7 +315,7 @@ class ResultView:
         if (result.get("phoneStateUnconfirmed") or not callable(guard) or not isinstance(outcome, dict) or not isinstance(task, dict)
                 or outcome.get("operationId") != row[1] or outcome.get("peerDeviceId") != peer[0] or outcome.get("instanceId") != peer[2]
                 or outcome.get("taskId") != task.get("taskId") or outcome.get("runId") != task.get("runId") or outcome.get("executorEpoch") != task.get("executorEpoch")):
-            return self._dialog("尚未取得可核对的原手机结果", body + "电脑的派单记录仍在。手机离线、原授权不允许读取或运行身份未对上时，不能判为失败或没有成果。", back, lambda: self._source_current(peer, row))
+            return self._dialog("尚未取得可核对的原手机结果", body + "电脑的派单记录仍在。手机离线、原授权不允许读取或运行身份未对上时，不能判为失败或没有成果。", back, current)
         status = _STATE.get(task.get("state"), "状态已返回")
         identity = body + f"手机任务：{task['taskId']}\n本轮：{task['runId']} · {task['executorEpoch']}"
         body = f"手机 …{peer[0][-12:]} · 原派单 …{row[1][-16:]}\n本次读到的手机状态：{status} · 手机记录 {_stamp(task.get('updatedAt'))}\n\n"
@@ -270,7 +331,7 @@ class ResultView:
                      "unverified":"原手机未能核对成果"}.get(outcome.get("review"), "原手机的执行状态")
             parts = ["这次只核实了原任务状态，没有读到机主确认的成果。"]
         index = 0
-        def valid(): return self._source_current(peer, row) and guard()
+        def valid(): return current() and guard()
         # phoneGoalOutcome exists only after the native accepted audience and
         # receiver run were matched by original_phone_goal, not from local history.
         stop = self.router.review_owner_phone_stop(peer, row, {**outcome, "accepted":True, "state":task.get("state")}, valid) if self.owner_stop else None
@@ -332,6 +393,8 @@ class ResultView:
                             if incoming:
                                 choices.append(("find", "用手机上的完整原操作编号找回"))
                                 choices.append(("scope", "查看这台电脑给它签出的原授权"))
+                            elif self.lookup_installation is not None and not self.owner_stop:
+                                choices.append(("find_outgoing", "用手机上的完整原派单编号找回\n先只查这台电脑。"))
                             choices.append(("back", "返回设备"))
                             heading = ("这台 Windows 接收的原工作" if rows else "本批没有可核对的本机工作") if incoming else ("选择一笔原派单" if rows else "本批没有发给这台设备的原工作")
                             row = self._dialog(heading, "只读本机原执行器的工作和留存输出。断线不等于失败；没有记录也不会启动工作。" if incoming else
@@ -344,6 +407,7 @@ class ResultView:
                                 show_issued_scope(self.receiver, self.active, peer)
                                 continue
                             if row == "find" and incoming: received.open_original_number(self, peer); continue
+                            if row == "find_outgoing" and not incoming: self.find_outgoing(peer); continue
                             if row == "older": pages.append(older); continue
                             if row == "newer": pages.pop(); continue
                             if incoming: received.show(self, peer, row)
@@ -356,7 +420,18 @@ class ResultView:
         threading.Thread(target=show, name="owner-phone-receipt-window", daemon=True).start()
 
 
-def open_local_entry(manager):
+def open_local_entry(manager, *, installed=None):
     from desktop_receipt_icon import LocalReceiptIcon
-    view = ResultView(manager)
+    lookup_installation = None
+    if installed is not None:
+        from platform_backend import PlatformError
+        from windows_first_workspace import signed
+        from windows_installation import same_path
+        try:
+            if (signed(installed) and same_path(str(manager.state), installed.jobs)
+                    and same_path(str(manager.device_companion.identity.directory), installed.identity_dir)):
+                lookup_installation = installed
+        except (OSError, ValueError, PlatformError):
+            pass  # An unproved lookup must not disable the existing receipt tray.
+    view = ResultView(manager, lookup_installation=lookup_installation)
     return LocalReceiptIcon(view).start()

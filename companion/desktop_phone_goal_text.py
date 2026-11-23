@@ -14,8 +14,8 @@ def ask_new_source_path(current):
     return _ask(current,lookup=True,project_path="new-source")
 
 
-def ask_original_operation(current):
-    return _ask(current, lookup=True)
+def ask_original_operation(current, *, outgoing=False):
+    return _ask(current, lookup=True, outgoing_operation=outgoing)
 
 
 START_LOCAL_DRAFT=object()  # Only returned by the distinct owner button on an eligible read-only source hit.
@@ -47,7 +47,7 @@ def ask_source_query(current):
     return _ask(current,lookup=True,source_query=True)
 
 
-def _ask(current, *, lookup, source=None, project_path=False, source_query=False):
+def _ask(current, *, lookup, source=None, project_path=False, source_query=False, outgoing_operation=False):
     # Standard dialog template: scale in dialog units, native tab order, IME,
     # multiline edit, Escape and system-close. IDOK only returns a LOCAL draft.
     def string(text): return (text + "\0").encode("utf-16le")
@@ -55,6 +55,7 @@ def _ask(current, *, lookup, source=None, project_path=False, source_query=False
     title = source.title if source else "原提交中的相对文件路径" if project_path else ("找回这台电脑接过的原操作" if lookup else "交给手机 · 写下这次目标")
     if project_path=="new-source": title="新源码拟用的相对路径"
     if source_query: title="在原副本中查找哪段文字？"
+    if outgoing_operation: title="找回这台电脑发出的原派单"
     template = bytearray(struct.pack("<IIHhhhh", 0x80C808C0, 0, 5 if source and source.from_hit else 4, 0, 0, width,height))
     template.extend(b"\0\0\0\0" + string(title) + struct.pack("<H", 9) + string("Segoe UI"))
     def item(style, x, y, width, height, ident, atom, title):
@@ -65,6 +66,7 @@ def _ask(current, *, lookup, source=None, project_path=False, source_query=False
     if project_path: hint="填写从项目根开始的确切文件路径，如 src/Main.kt。不会按文件名搜索或打开当前工作树。"
     if project_path=="new-source": hint="在原目录下为一个新文件取名，如 src/NewFeature.kt。只核对是否可提议，不会创建该项目文件。"
     if source_query: hint="输入区分大小写的完整字面文字（最多 96 个 UTF-16 单元），下一步仍需确认确切范围。不执行表达式。"
+    if outgoing_operation: hint="填写手机「查看原工作回执」中的完整原派单编号。只查本机，不联系手机。"
     review = bool(source and source.review)
     item(0, 9, 7, width-19, 24 if source else 19, 100, 0x82, source.hint if source else hint)
     control_style = (0x003010c4 | (0x800 if review else 0)) if source else (0x80 if lookup else 0x00201044)
@@ -93,7 +95,7 @@ def _ask(current, *, lookup, source=None, project_path=False, source_query=False
         nonlocal value, overflow
         try:
             if message == 0x110:  # WM_INITDIALOG
-                edit = control(hwnd, 101); send(edit, 0xc5, 262144 if source else 96 if source_query else 2000, 0)
+                edit = control(hwnd, 101); send(edit, 0xc5, 262144 if source else 96 if source_query else 129 if outgoing_operation else 2000, 0)
                 if source:
                     units = len(source.text.encode("utf-16le"))//2
                     if not current() or units>262144 or not write(hwnd,101,source.text) or send(edit,0x0e,0,0)!=units:
@@ -112,9 +114,9 @@ def _ask(current, *, lookup, source=None, project_path=False, source_query=False
                 return 0
             if message == 0x10 or message == 0x113 and not current():
                 finish(hwnd, 2); return 1
-            if (source or project_path or source_query) and message==0x111 and wp&0xffff==101 and (wp>>16)&0xffff==0x501:  # EN_MAXTEXT
+            if (source or project_path or source_query or outgoing_operation) and message==0x111 and wp&0xffff==101 and (wp>>16)&0xffff==0x501:  # EN_MAXTEXT
                 overflow=True
-                write(hwnd,100,"查找词过长，不能使用截断文字；请取消后重填。" if source_query else "输入超出上限；请取消后重新填写确切路径。" if project_path else "输入超过编辑框上限，不能把截断文字保存为补丁。请取消后重新起草。")
+                write(hwnd,100,"编号过长，不能使用截断内容；请取消后重填。" if outgoing_operation else "查找词过长，不能使用截断文字；请取消后重填。" if source_query else "输入超出上限；请取消后重新填写确切路径。" if project_path else "输入超过编辑框上限，不能把截断文字保存为补丁。请取消后重新起草。")
                 return 1
             if message==0x111 and wp&0xffff==3 and (wp>>16)&0xffff==0 and source and source.from_hit:
                 if current() and not overflow: value=START_LOCAL_DRAFT; finish(hwnd,1)
@@ -132,13 +134,15 @@ def _ask(current, *, lookup, source=None, project_path=False, source_query=False
                             if read(hwnd,101,text,len(text))!=units: finish(hwnd,2); return 1
                             value=text.value  # Empty file, whitespace and final newline are meaningful.
                     else:
-                        if (project_path or source_query) and overflow: return 1
+                        if (project_path or source_query or outgoing_operation) and overflow: return 1
                         text=c.create_unicode_buffer(2001); count=read(hwnd,101,text,len(text))
                         if not text.value.strip(): return 1
                         if project_path and (count!=send(control(hwnd,101),0x0e,0,0) or text.value!=text.value.strip()):
                             write(hwnd,100,"请填写完整的确切相对路径，不要有首尾空白。"); return 1
                         if source_query and (count!=send(control(hwnd,101),0x0e,0,0) or count>96): return 1
-                        value=text.value if project_path or source_query else text.value.strip()
+                        if outgoing_operation and (count!=send(control(hwnd,101),0x0e,0,0) or count>128 or text.value!=text.value.strip()):
+                            write(hwnd,100,"请完整填写原派单编号，不要有首尾空白。"); return 1
+                        value=text.value if project_path or source_query or outgoing_operation else text.value.strip()
                 finish(hwnd, 1 if value is not None else 2); return 1
         except Exception:
             value = None; finish(hwnd, 2); return 1

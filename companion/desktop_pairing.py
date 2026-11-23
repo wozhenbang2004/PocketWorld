@@ -545,7 +545,8 @@ def run_native_pairing(config_path, *, installed=None, launch_config=None, ident
         manager.device_companion = DeviceCompanionService(manager, local_identity=local, native_lan_reservations=reservations)
         manager.device_companion.start()  # Same original manager/ledger, exact transferred sockets.
         host.close()  # Consumed sockets now belong only to the original service.
-        serve_original_manager(manager, owner_phone_receipts=start == "with_local_receipts", owner_phone_work=start == "with_phone_work")
+        serve_original_manager(manager, owner_phone_receipts=start == "with_local_receipts", owner_phone_work=start == "with_phone_work",
+                               receipt_installation=installed_owner if start == "with_local_receipts" else None)
         return {"businessListenerStarted": True, "paired": True}
     finally:
         if host is not None:

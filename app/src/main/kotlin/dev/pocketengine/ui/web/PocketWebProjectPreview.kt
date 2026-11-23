@@ -106,6 +106,17 @@ internal class PocketWebProjectPreview(
             !selected.taskless() && !selected.visible && selected.web.visibility == View.GONE
         } != false
 
+    /** Observe the exact passive renderer without releasing it or acquiring any resource. */
+    fun pinKeptRemovalWindow(visit:KeptVisit):()->Boolean{
+        val prior=session
+        val originalOpening=opening
+        val originalStaticOpening=openingStatic
+        fun current()=keptCurrent(visit) && keptShelfCanRead() && keepingStaticPage==null &&
+            session===prior && opening==originalOpening && openingStatic==originalStaticOpening
+        check(current()){"请先退出网页预览并等保留完成，再核对原版本"}
+        return ::current
+    }
+
     /** Hold the exact original inactive preview across the read, not a guess made after IO. */
     fun prepareKeptMount(visit: KeptVisit): (OwnerKeptStaticPages.Opened) -> JSONObject {
         check(keptCurrent(visit) && keptShelfCanRead()) { "请先关闭其他预览，再打开这份本机网页" }

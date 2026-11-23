@@ -41,7 +41,7 @@ public final class OwnerKeptStaticPages {
     public static final int MAX_VERSIONS=4,MAX_STORED_BYTES=8*1024*1024;
     private static final int MAX_HEADER_BYTES=64*1024,HEADER_PREFIX_BYTES=4+64;
     private static final int MAX_RECORD_BYTES=HEADER_PREFIX_BYTES+MAX_HEADER_BYTES+ProjectPreviewBundle.MAX_SAVED_STATIC_BYTES;
-    private static final long PENDING_REVIEW_MS=120_000L;
+    private static final long REVIEW_MS=120_000L;
     private static final String KIND="owner_saved_static_page",SCHEMA="pocketworld.owner-kept-static-page.v1";
     private static final String DIRECTORY="owner-kept-static-pages-v1";
     private static final Object LOCK=new Object(); // Only the main app process hosts this owner shelf.
@@ -65,16 +65,21 @@ public final class OwnerKeptStaticPages {
         void atConfirmedAbandonment(String reviewId,Commit unlink)throws Exception;
     }
 
+    /** A distinct, single-use confirmation from the exact committed-page shelf visit. */
+    public interface RemovalWindow extends ProjectWindow {
+        void atConfirmedRemoval(String reviewId,Commit unlink)throws Exception;
+    }
+
     /** Single-use native observation of one inactive staging inode, not a saved page or a file reader. */
     public static final class PendingReview {
         private final OwnerKeptStaticPages issuer;
         private final PendingRecoveryWindow window;
         private final String project,reviewId=UUID.randomUUID().toString();
         private final Root root;
-        private final PendingStamp stamp;
-        private final long until=SystemClock.elapsedRealtime()+PENDING_REVIEW_MS;
+        private final LeafStamp stamp;
+        private final long until=SystemClock.elapsedRealtime()+REVIEW_MS;
         private boolean used; // Under LOCK only.
-        private PendingReview(OwnerKeptStaticPages issuer,PendingRecoveryWindow window,String project,Root root,PendingStamp stamp){
+        private PendingReview(OwnerKeptStaticPages issuer,PendingRecoveryWindow window,String project,Root root,LeafStamp stamp){
             this.issuer=issuer;this.window=window;this.project=project;this.root=root;this.stamp=stamp;
         }
         public String reviewId(){return reviewId;}
@@ -90,6 +95,40 @@ public final class OwnerKeptStaticPages {
         public JSONObject metadata()throws Exception{
             return new JSONObject().put("kind","owner_saved_static_page_pending_abandonment")
                 .put("projectId",projectId).put("reviewId",reviewId).put("status",status);
+        }
+    }
+
+    public static final class RemovalReview {
+        private final OwnerKeptStaticPages issuer;
+        private final RemovalWindow window;
+        private final Catalog catalog;
+        private final Slot slot;
+        private final LeafStamp stamp;
+        private final String reviewId=UUID.randomUUID().toString();
+        private final long until=SystemClock.elapsedRealtime()+REVIEW_MS;
+        private boolean used; // Under LOCK only.
+        private RemovalReview(OwnerKeptStaticPages issuer,RemovalWindow window,Catalog catalog,Slot slot,LeafStamp stamp){
+            this.issuer=issuer;this.window=window;this.catalog=catalog;this.slot=slot;this.stamp=stamp;
+        }
+        public String reviewId(){return reviewId;}
+        public Page page(){return slot.page;}
+        public JSONObject metadata()throws Exception{
+            long remaining=until-SystemClock.elapsedRealtime();
+            if(remaining<=0)throw new SecurityException("原网页版本核对已到期");
+            return new JSONObject().put("kind","owner_saved_static_page_removal_review").put("reviewId",reviewId)
+                .put("page",page().metadata()).put("storedBytes",stamp.identity.size()).put("expiresInMs",remaining);
+        }
+    }
+
+    public enum RemovalStatus {
+        REMOVED("removed"),NOT_REMOVED("not_removed"),UNKNOWN("unknown");
+        private final String wire;
+        RemovalStatus(String wire){this.wire=wire;}
+    }
+    public record RemovalResult(String reviewId,Page page,RemovalStatus status,Catalog catalog) {
+        public JSONObject metadata()throws Exception{
+            return new JSONObject().put("kind","owner_saved_static_page_removal").put("reviewId",reviewId)
+                .put("page",page.metadata()).put("status",status.wire);
         }
     }
 
@@ -147,13 +186,13 @@ public final class OwnerKeptStaticPages {
 
     private record Directory(Path path,Object key) {}
     private record Root(List<Directory> parents,Path projectFolder,boolean exists) {}
-    private record PendingStamp(BasicFileAttributes identity,long device,long inode,long changedAt) {}
+    private record LeafStamp(BasicFileAttributes identity,long device,long inode,long changedAt) {}
     private record Member(String path,String sha256,String mimeType,int bytes) {}
     private record Slot(Path path,Page page,BasicFileAttributes identity) {}
     private record Stored(Path path,Page page,BasicFileAttributes identity,ProjectPreviewBundle.Verified bundle,List<Member> members) {}
     private record Scan(List<Stored> committed,int firstFree,long bytes) {}
     private enum Read { HEADER, COMPARE_HEADER, VERIFY, OPEN }
-    private enum AbandonEntry { READY, ENTERED, RETIRED }
+    private enum UnlinkEntry { READY, ENTERED, RETIRED }
 
     public OwnerKeptStaticPages(Context context){app=context.getApplicationContext();}
 
@@ -165,7 +204,7 @@ public final class OwnerKeptStaticPages {
         synchronized(LOCK){
             requireCurrent(window,project);
             Root root=root(project,false);
-            PendingStamp original=root.exists?pendingStamp(root):null;
+            LeafStamp original=root.exists?pendingStamp(root):null;
             requireCurrent(window,project);
             return original==null?null:new PendingReview(this,window,project,root,original);
         }
@@ -180,17 +219,17 @@ public final class OwnerKeptStaticPages {
             if(shown==null||shown.issuer!=this||shown.window!=window||!project.equals(shown.project)||shown.used)
                 throw new SecurityException("请选择原项目仍显示的暂存清理确认");
             shown.used=true;
-            var entry=new AtomicReference<>(AbandonEntry.READY);
+            var entry=new AtomicReference<>(UnlinkEntry.READY);
             String status;
             try{
                 requirePendingCurrent(shown,window);
                 window.atConfirmedAbandonment(shown.reviewId,()->{
                     requirePendingCurrent(shown,window);
-                    if(!entry.compareAndSet(AbandonEntry.READY,AbandonEntry.ENTERED))
+                    if(!entry.compareAndSet(UnlinkEntry.READY,UnlinkEntry.ENTERED))
                         throw new IOException("不会重复或迟到清除原暂存");
                     Files.delete(pending(shown.root));
                 });
-                if(entry.get()!=AbandonEntry.ENTERED)throw new IOException("未确认清除原暂存");
+                if(entry.get()!=UnlinkEntry.ENTERED)throw new IOException("未确认清除原暂存");
                 syncDirectories(shown.root);
                 if(leaf(pending(shown.root))!=null)throw new IOException("原暂存清除尚未确认");
                 requireRoot(shown.root);
@@ -198,7 +237,7 @@ public final class OwnerKeptStaticPages {
                 status="cleared";
             }catch(Exception failure){
                 // Retire an unentered callback even if the host timed out.
-                status=entry.compareAndSet(AbandonEntry.READY,AbandonEntry.RETIRED)?"not_cleared":"unknown";
+                status=entry.compareAndSet(UnlinkEntry.READY,UnlinkEntry.RETIRED)?"not_cleared":"unknown";
             }
             return new PendingAbandonment(project,shown.reviewId,status);
         }
@@ -207,31 +246,119 @@ public final class OwnerKeptStaticPages {
     private static void requirePendingCurrent(PendingReview review,PendingRecoveryWindow window)throws Exception{
         requireCurrent(window,review.project);
         if(SystemClock.elapsedRealtime()>=review.until)throw new SecurityException("原暂存核对已到期");
-        PendingStamp actual=pendingStamp(review.root),prior=review.stamp;
+        LeafStamp actual=pendingStamp(review.root),prior=review.stamp;
         if(actual==null||prior.device!=actual.device||prior.inode!=actual.inode||prior.changedAt!=actual.changedAt)
             throw new SecurityException("原暂存已变化，未清除其他记录");
         requireSame(prior.identity,actual.identity);
     }
 
-    private static PendingStamp pendingStamp(Root root)throws IOException{
+    private static LeafStamp pendingStamp(Root root)throws IOException{
+        return ownedLeafStamp(root,pending(root),"原暂存");
+    }
+
+    private static LeafStamp ownedLeafStamp(Root root,Path path,String label)throws IOException{
         requireRoot(root);
-        Path path=pending(root);
         BasicFileAttributes before=leaf(path);
         if(before==null){requireRoot(root);return null;}
-        // This private, fixed CREATE_NEW leaf may be empty after a crash. Prove
-        // its app-owned namespace/inode by metadata, not by parsing incomplete bytes.
+        // Fixed private CREATE_NEW slot/staging leaves, never a path supplied by the Web UI.
         final android.system.StructStat stamp;
         try{stamp=Os.lstat(path.toString());}
-        catch(ErrnoException unavailable){throw new IOException("原暂存身份不可核对",unavailable);}
+        catch(ErrnoException unavailable){throw new IOException(label+"身份不可核对",unavailable);}
         if(stamp.st_uid!=Process.myUid()||!OsConstants.S_ISREG(stamp.st_mode)||(stamp.st_mode&07777)!=0600||
                 stamp.st_nlink!=1||stamp.st_size!=before.size()||stamp.st_size<0||stamp.st_size>MAX_RECORD_BYTES)
-            throw new IOException("原暂存不是本项目内可清理的私人记录");
+            throw new IOException(label+"不是本项目内可清理的私人记录");
         requireSame(before,leaf(path));requireRoot(root);
-        return new PendingStamp(before,stamp.st_dev,stamp.st_ino,stamp.st_ctime);
+        return new LeafStamp(before,stamp.st_dev,stamp.st_ino,stamp.st_ctime);
+    }
+
+    /** Verify only the selected committed record, without constructing a renderer or reading a checkout. */
+    public RemovalReview reviewRemoval(RemovalWindow window,Catalog shown,Page page)throws Exception{
+        requireRecoveryWorker();
+        String project=project(window);
+        if(!project.equals(shown.projectId)||!project.equals(page.projectId))
+            throw new SecurityException("原保留网页不属于此项目");
+        synchronized(LOCK){
+            requireCurrent(window,project);
+            Slot slot=shown.slots.stream().filter(item->item.page.equals(page)).findFirst()
+                .orElseThrow(()->new SecurityException("原目录不含这份确切的已保留网页"));
+            LeafStamp stamp=ownedLeafStamp(shown.root,slot.path,"原保留网页");
+            if(stamp==null)throw new IOException("原保留网页已不在本机");
+            requireSame(slot.identity,stamp.identity);
+            Stored exact=read(shown.root,project,slot.path,page,Read.VERIFY);
+            requireSame(stamp.identity,exact.identity);
+            requireRemovalStamp(shown.root,slot,stamp);
+            requireCurrent(window,project);
+            return new RemovalReview(this,window,shown,slot,stamp);
+        }
+    }
+
+    /** Unlink exactly one verified committed leaf; never touch staging, another slot or a project source. */
+    public RemovalResult remove(RemovalReview review,RemovalWindow window)throws Exception{
+        requireRecoveryWorker();
+        String project=project(window);
+        synchronized(LOCK){
+            if(review==null||review.issuer!=this||review.window!=window||!project.equals(review.catalog.projectId)||review.used)
+                throw new SecurityException("请选择原项目仍显示的已保留网页确认");
+            review.used=true;
+            Catalog shown=review.catalog;
+            Slot slot=review.slot;
+            var entry=new AtomicReference<>(UnlinkEntry.READY);
+            try{
+                requireCurrent(window,project);
+                if(SystemClock.elapsedRealtime()>=review.until)throw new SecurityException("原网页版本核对已到期");
+                requireRemovalStamp(shown.root,slot,review.stamp);
+                requireCommittedSlots(shown,scan(shown.root,project),null);
+                Stored exact=read(shown.root,project,slot.path,slot.page,Read.VERIFY);
+                requireSame(review.stamp.identity,exact.identity);
+                window.atConfirmedRemoval(review.reviewId,()->{
+                    requireCurrent(window,project);
+                    if(SystemClock.elapsedRealtime()>=review.until)throw new SecurityException("原网页版本核对已到期");
+                    requireRemovalStamp(shown.root,slot,review.stamp);
+                    if(!entry.compareAndSet(UnlinkEntry.READY,UnlinkEntry.ENTERED))
+                        throw new IOException("不会重复或迟到移除原保留网页");
+                    Files.delete(slot.path);
+                });
+                if(entry.get()!=UnlinkEntry.ENTERED)throw new IOException("未进入原保留网页移除");
+                syncDirectories(shown.root);
+                if(leaf(slot.path)!=null)throw new IOException("原保留位置并未确认空出");
+                Scan after=scan(shown.root,project);
+                requireCommittedSlots(shown,after,slot);
+                Catalog updated=catalog(shown.root,project,after);
+                requireCurrent(window,project);
+                return new RemovalResult(review.reviewId,slot.page,RemovalStatus.REMOVED,updated);
+            }catch(Exception failure){
+                // A late callback can no longer enter. After entry, no failure is proof of no effect.
+                RemovalStatus status=entry.compareAndSet(UnlinkEntry.READY,UnlinkEntry.RETIRED)?
+                    RemovalStatus.NOT_REMOVED:RemovalStatus.UNKNOWN;
+                return new RemovalResult(review.reviewId,slot.page,status,null);
+            }
+        }
+    }
+
+    private static void requireRemovalStamp(Root root,Slot slot,LeafStamp prior)throws IOException{
+        LeafStamp actual=ownedLeafStamp(root,slot.path,"原保留网页");
+        if(actual==null||prior.device!=actual.device||prior.inode!=actual.inode||prior.changedAt!=actual.changedAt)
+            throw new IOException("原保留网页文件身份已变化");
+        requireSame(prior.identity,actual.identity);
+    }
+
+    /** Both before and after use the same four fixed headers under LOCK, not a second filesystem walk. */
+    private static void requireCommittedSlots(Catalog shown,Scan actual,Slot removed)throws IOException{
+        int index=0;
+        long expectedBytes=shown.storedBytes-(removed==null?0:removed.identity.size());
+        if(actual.bytes!=expectedBytes||actual.committed.size()!=shown.slots.size()-(removed==null?0:1))
+            throw new IOException("原保留列表的版数或存储占用已变化");
+        for(Slot prior:shown.slots){
+            if(prior==removed)continue;
+            Stored next=actual.committed.get(index++);
+            if(!prior.path.equals(next.path)||!prior.page.equals(next.page))
+                throw new IOException("原保留列表的其他版本已变化");
+            requireSame(prior.identity,next.identity);
+        }
     }
 
     private static void requireRecoveryWorker(){
-        if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("不得在原项目界面线程等待暂存存储");
+        if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("不得在原项目界面线程等待网页存储");
     }
 
     /** Four fixed headers, no checkout/source walk or version bodies. Missing root is not created. */
@@ -240,17 +367,20 @@ public final class OwnerKeptStaticPages {
         synchronized(LOCK){
             requireCurrent(window,project);
             Root root=root(project,false);
-            Scan known=scan(root,project);
-            var result=new ArrayList<Page>();
-            for(Stored row:known.committed)result.add(row.page);
-            result.sort(Comparator.comparingLong(Page::savedAt).reversed().thenComparing(Page::versionId));
-            String pendingState="none";
-            if(root.exists)try{if(pendingStamp(root)!=null)pendingState="reviewable";}
-            catch(IOException|RuntimeException unavailable){pendingState="unconfirmed";}
-            requireRoot(root);
+            Catalog actual=catalog(root,project,scan(root,project));
             requireCurrent(window,project);
-            return new Catalog(project,result,known.bytes,pendingState,root,known.committed);
+            return actual;
         }
+    }
+    private static Catalog catalog(Root root,String project,Scan known)throws Exception{
+        var result=new ArrayList<Page>();
+        for(Stored row:known.committed)result.add(row.page);
+        result.sort(Comparator.comparingLong(Page::savedAt).reversed().thenComparing(Page::versionId));
+        String pendingState="none";
+        if(root.exists)try{if(pendingStamp(root)!=null)pendingState="reviewable";}
+        catch(IOException|RuntimeException unavailable){pendingState="unconfirmed";}
+        requireRoot(root);
+        return new Catalog(project,result,known.bytes,pendingState,root,known.committed);
     }
 
     /** Compare only the two admitted slots in this private shelf, without opening either saved page. */

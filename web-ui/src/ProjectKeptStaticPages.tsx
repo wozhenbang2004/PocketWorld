@@ -8,8 +8,10 @@ const prefix='projects.keptStaticPages.';
 export const keepStaticPage=prefix+'keep';
 const listPages=prefix+'list',openPage=prefix+'open',comparePages=prefix+'compare',closeShelf=prefix+'close';
 const reviewPending=prefix+'pending.review',abandonPending=prefix+'pending.abandon',dismissPending=prefix+'pending.dismiss';
+const reviewRemoval=prefix+'removal.review',removePage=prefix+'removal.confirm',dismissRemoval=prefix+'removal.dismiss';
 const closePreview='projects.preview.close';
 const available=(action:string)=>bridge.getState().capabilities.commands.includes(action);
+const supportsRemoval=()=>[reviewRemoval,removePage,dismissRemoval].every(available);
 export const supportsKeptStaticPages=(can:(action:string)=>boolean)=>
   [keepStaticPage,listPages,openPage,closeShelf,reviewPending,abandonPending,dismissPending,'projects.preview.viewport',closePreview].every(can);
 const row=(value:unknown):Record<string,unknown>=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
@@ -32,7 +34,7 @@ const samePage=(p:Page,other:Page|null)=>!!other&&p.projectId===other.projectId&
   p.savedAt===other.savedAt&&p.resourceCount===other.resourceCount&&p.bytes===other.bytes;
 type Binding={projectId:string;visitId:string};
 type Pending='none'|'reviewable'|'unconfirmed';
-type Catalog={shelfHandle:string;versions:Page[];pendingState:Pending;maxVersions:number;maxStoredBytes:number};
+type Catalog={shelfHandle:string;versions:Page[];pendingState:Pending;storedBytes:number;maxVersions:number;maxStoredBytes:number};
 const sameVisit=(value:Record<string,unknown>,visit:Binding)=>value.projectId===visit.projectId&&value.visitId===visit.visitId;
 const sameShelf=(value:Record<string,unknown>,visit:Binding,catalog:Catalog)=>sameVisit(value,visit)&&value.shelfHandle===catalog.shelfHandle;
 const sameCopyPair=(a:Page,b:Page)=>a.projectId===b.projectId&&a.checkoutId===b.checkoutId&&
@@ -90,7 +92,8 @@ function shelfCatalog(value:unknown,visit:Binding,previous:Catalog|null):Catalog
     versions.push(page);
   }
   if(versions.reduce((sum,p)=>sum+p.bytes,0)>c.storedBytes)return null;
-  return {shelfHandle:c.shelfHandle,versions,pendingState:c.pendingState,maxVersions:c.maxVersions,maxStoredBytes:c.maxStoredBytes};
+  return {shelfHandle:c.shelfHandle,versions,pendingState:c.pendingState,storedBytes:c.storedBytes,
+    maxVersions:c.maxVersions,maxStoredBytes:c.maxStoredBytes};
 }
 type Frame={sessionId:string;generation:number;ready:boolean;visible:boolean;error:boolean};
 function previewFrame(value:unknown,visit:Binding,catalog:Catalog,page:Page):Frame|null {
@@ -124,11 +127,23 @@ const remember=(node:HTMLButtonElement):Focus=>{
 type ReadVisit={page:Page;focus:Focus;ack?:Frame;frame?:Frame;timer?:number;returnRequested?:true;
   closing?:true;closeAck?:true;published?:true};
 type Review={id:string;deadline:number;focus:Focus;timer:number};
+type RemovalReview=Review&{page:Page;catalog:Catalog;storedBytes:number};
+type RemovalRecheck={page:Page;unknown:boolean};
 type Visit=Binding&{document:number;revisions:string;inactiveRenderer:string;trigger:HTMLButtonElement;catalog:Catalog|null;
   catalogPublished?:true;catalogTimer?:number;
-  reader?:ReadVisit;review?:Review;pair?:PairSelection;busy?:'list'|'compare'|'review'|'abandon'|'dismiss';notice:string;problem:boolean;
+  reader?:ReadVisit;review?:Review;removal?:RemovalReview;removalRecheck?:RemovalRecheck;pair?:PairSelection;
+  busy?:'list'|'compare'|'review'|'abandon'|'dismiss'|'review-removal'|'remove'|'dismiss-removal';notice:string;problem:boolean;
   closing?:Promise<boolean>;closeUnconfirmed?:true;retired?:true;focusOnClose?:boolean};
-type Presentation=Pick<Visit,'catalog'|'notice'|'problem'|'busy'|'pair'> & {reader?:ReadVisit;review?:Review;closing:boolean};
+type Presentation=Pick<Visit,'catalog'|'notice'|'problem'|'busy'|'pair'|'review'|'removal'|'removalRecheck'> & {reader?:ReadVisit;closing:boolean};
+
+function afterRemoval(value:unknown,visit:Binding,review:RemovalReview):Catalog|null {
+  const before=review.catalog,exact=shelfCatalog(value,visit,before);
+  const survivors=before.versions.filter(page=>page!==review.page);
+  if(!exact||survivors.length!==before.versions.length-1||exact.versions.length!==survivors.length||
+    exact.storedBytes!==before.storedBytes-review.storedBytes||
+    !survivors.every((page,index)=>samePage(page,exact.versions[index]??null)))return null;
+  return exact;
+}
 export type KeptStaticShelfNavigation={leave:()=>Promise<boolean>|undefined;back:()=>boolean};
 
 const clearOpenTimer=(reader?:ReadVisit)=>{if(reader?.timer!==undefined)window.clearTimeout(reader.timer);};
@@ -185,7 +200,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   const update=(original:Visit)=>{
     if(!mounted.current||visit.current!==original)return;
     setShown({catalog:publishedCatalog(original)?original.catalog:null,reader:original.reader?{...original.reader}:undefined,review:original.review,
-      pair:original.pair,busy:original.busy,notice:original.notice,problem:original.problem,closing:!!original.closing||!!original.closeUnconfirmed});
+      removal:original.removal,removalRecheck:original.removalRecheck,pair:original.pair,busy:original.busy,
+      notice:original.notice,problem:original.problem,closing:!!original.closing||!!original.closeUnconfirmed});
   };
   const note=(original:Visit,text:string,problem=true)=>{original.notice=text;original.problem=problem;update(original);};
   const current=(original:Visit)=>{
@@ -207,9 +223,10 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     original.catalogTimer=undefined;
   };
   const retire=(original:Visit)=>{
-    clearCatalogTimer(original);clearOpenTimer(original.reader);clearReviewTimer(original.review);
+    clearCatalogTimer(original);clearOpenTimer(original.reader);clearReviewTimer(original.review);clearReviewTimer(original.removal);
     original.retired=true;
-    original.catalog=null;original.reader=undefined;original.review=undefined;original.pair=undefined;original.busy=undefined;
+    original.catalog=null;original.reader=undefined;original.review=undefined;original.removal=undefined;original.removalRecheck=undefined;
+    original.pair=undefined;original.busy=undefined;
     if(visit.current!==original)return;
     visit.current=null;nextFocus.current=null;if(mounted.current)setShown(null);
   };
@@ -226,6 +243,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     if(original.closing)return original.closing;
     if(!current(original))return Promise.resolve(false);
     clearCatalogTimer(original);clearOpenTimer(original.reader);clearReviewTimer(original.review);original.review=undefined;original.closeUnconfirmed=undefined;
+    clearReviewTimer(original.removal);original.removal=undefined;
     original.pair=undefined;if(original.busy==='compare')original.busy=undefined;
     original.closing=requestClose(original).then(confirmed=>{
       original.closing=undefined;
@@ -307,8 +325,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     if(visit.current===original)checkPreview(original);
   };
   const read=(original:Visit)=>{
-    if(!current(original)||original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review)return;
-    const catalog=original.catalog;
+    if(!current(original)||original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review||original.removal)return;
+    const catalog=original.catalog,recheck=original.removalRecheck;
     if(catalog&&!publishedCatalog(original))return;
     original.pair=undefined;original.busy='list';note(original,'',false);
     void bridge.command(listPages,{...wire(original),...(catalog?{shelfHandle:catalog.shelfHandle}:{})}).then(value=>{
@@ -317,6 +335,14 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
       if(!exact)throw Error();
       original.catalog=exact;checkCatalog(original);
       if(!current(original))return;
+      if(recheck){
+        original.removalRecheck=undefined;
+        if(recheck.unknown){
+          const stillPresent=exact.versions.some(page=>samePage(recheck.page,page));
+          note(original,stillPresent?'已核对：这版网页仍保留在本机。没有重新提交移除。':
+            '已核对：当前列表没有这版网页。无法确认上次操作的回执，没有重新提交移除。',false);
+        }
+      }
       if(publishedCatalog(original)){original.busy=undefined;update(original);return;}
       original.catalogTimer=window.setTimeout(()=>{
         if(!current(original)||original.closing)return;
@@ -328,7 +354,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     }).catch(()=>{
       if(!current(original)||original.closing)return;
       original.busy=undefined;original.catalog=null;original.catalogPublished=undefined;
-      note(original,'未核对到这次保留列表。请先返回，再重新打开列表。');
+      note(original,recheck?.unknown?'移除结果未确认，列表也未能核对。请返回同一项目后查看。':
+        '未核对到这次保留列表。请先返回，再重新打开列表。');
     });
   };
   const enter=(event:MouseEvent<HTMLButtonElement>)=>{
@@ -339,7 +366,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     visit.current=original;read(original);
   };
   const mayCompare=(original:Visit,catalog:Catalog)=>current(original)&&publishedCatalog(original)&&original.catalog===catalog&&
-    !original.busy&&!original.closing&&!original.closeUnconfirmed&&!original.reader&&!original.review&&available(comparePages);
+    !original.busy&&!original.closing&&!original.closeUnconfirmed&&!original.reader&&!original.review&&!original.removal&&
+    !original.removalRecheck&&available(comparePages);
   const choose=(original:Visit,catalog:Catalog,side:'before'|'after',versionId:string)=>{
     if(!mayCompare(original,catalog))return;
     const page=catalog.versions.find(row=>row.versionId===versionId);
@@ -377,7 +405,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   };
   const open=(original:Visit,page:Page,trigger:HTMLButtonElement)=>{
     const catalog=original.catalog;
-    if(!current(original)||!publishedCatalog(original)||!catalog?.versions.includes(page)||original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review||!focusable(trigger))return;
+    if(!current(original)||!publishedCatalog(original)||!catalog?.versions.includes(page)||original.busy||original.closing||original.closeUnconfirmed||
+      original.reader||original.review||original.removal||original.removalRecheck||!focusable(trigger))return;
     const reader:ReadVisit={page,focus:remember(trigger)};
     original.reader=reader;note(original,'');
     const failed=(error?:unknown)=>{
@@ -410,7 +439,8 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   };
   const startReview=(original:Visit,trigger:HTMLButtonElement)=>{
     const catalog=original.catalog;
-    if(!current(original)||!publishedCatalog(original)||catalog?.pendingState!=='reviewable'||original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review||!focusable(trigger))return;
+    if(!current(original)||!publishedCatalog(original)||catalog?.pendingState!=='reviewable'||original.busy||original.closing||original.closeUnconfirmed||
+      original.reader||original.review||original.removal||original.removalRecheck||!focusable(trigger))return;
     const focus=remember(trigger),started=performance.now();
     original.busy='review';note(original,'',false);
     void bridge.command(reviewPending,{...wire(original),shelfHandle:catalog.shelfHandle}).then(value=>{
@@ -463,11 +493,84 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
       note(original,confirmed?'清除结果未确认。请先核对列表，不要重复提交。':'退出核对未确认，没有提交清除。请先核对列表。');
     });
   };
+  const requestRemoval=(original:Visit,page:Page,trigger:HTMLButtonElement)=>{
+    const catalog=original.catalog;
+    if(!current(original)||!publishedCatalog(original)||!catalog?.versions.includes(page)||!supportsRemoval()||
+      original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review||original.removal||
+      original.removalRecheck||!focusable(trigger))return;
+    const focus=remember(trigger),started=performance.now();
+    original.busy='review-removal';note(original,'',false);
+    const stillHere=()=>current(original)&&publishedCatalog(original)&&original.catalog===catalog&&
+      original.busy==='review-removal'&&!original.closing&&!original.closeUnconfirmed;
+    void bridge.command(reviewRemoval,{...wire(original),shelfHandle:catalog.shelfHandle,versionId:page.versionId,
+      manifestIdentity:page.manifestIdentity}).then(value=>{
+      if(!stillHere())return;
+      const r=row(value);
+      if(r.kind!=='owner_saved_static_page_removal_review'||!sameShelf(r,original,catalog)||
+        !samePage(page,keptStaticPage(r.page,original.projectId))||!id(r.reviewId)||
+        !integer(r.storedBytes,page.bytes+69,catalog.storedBytes)||!integer(r.expiresInMs,1,120_000))throw Error();
+      const deadline=started+r.expiresInMs,remaining=deadline-performance.now();
+      if(remaining<=0)throw Error();
+      const removal:RemovalReview={id:r.reviewId,deadline,focus,page,catalog,storedBytes:r.storedBytes,timer:window.setTimeout(()=>{
+        if(!current(original)||original.closing||original.removal!==removal)return;
+        original.removal=undefined;nextFocus.current=removal.focus;original.removalRecheck={page,unknown:false};
+        note(original,'核对已到期，未提交移除。请先核对列表。');
+      },remaining)};
+      original.busy=undefined;original.removal=removal;update(original);
+    }).catch(()=>{
+      if(!stillHere())return;
+      original.busy=undefined;original.removalRecheck={page,unknown:false};
+      note(original,'未核对到该保留版本，未提交移除。请先核对列表。');
+    });
+  };
+  const finishRemoval=(original:Visit,removal:RemovalReview,confirmed:boolean)=>{
+    const {page,catalog}=removal;
+    if(!current(original)||!publishedCatalog(original)||original.catalog!==catalog||original.removal!==removal||
+      original.busy||original.closing||original.closeUnconfirmed||original.reader||original.review)return;
+    clearReviewTimer(removal);original.removal=undefined;nextFocus.current=removal.focus;
+    if(performance.now()>=removal.deadline||!supportsRemoval()){
+      original.removalRecheck={page,unknown:false};note(original,'核对已结束，未提交移除。请先核对列表。');return;
+    }
+    const pending=confirmed?'remove':'dismiss-removal';
+    original.busy=pending;note(original,'',false);
+    const stillHere=()=>current(original)&&publishedCatalog(original)&&original.catalog===catalog&&
+      original.busy===pending&&!original.closing&&!original.closeUnconfirmed;
+    const requireRecheck=(unknown:boolean,message:string)=>{
+      original.busy=undefined;original.removalRecheck={page,unknown};note(original,message);
+    };
+    void bridge.command(confirmed?removePage:dismissRemoval,{...wire(original),shelfHandle:catalog.shelfHandle,
+      reviewId:removal.id,versionId:page.versionId,manifestIdentity:page.manifestIdentity,...(confirmed?{confirmed:true}:{})}).then(value=>{
+      if(!stillHere())return;
+      const r=row(value);
+      if(!sameShelf(r,original,catalog)||r.reviewId!==removal.id||!samePage(page,keptStaticPage(r.page,original.projectId)))throw Error();
+      if(!confirmed){
+        if(r.kind!=='owner_saved_static_page_removal_dismissed'||r.dismissed!==true)throw Error();
+        original.busy=undefined;note(original,'未移除这版网页。',false);return;
+      }
+      if(r.kind!=='owner_saved_static_page_removal')throw Error();
+      if(r.status==='removed'){
+        const exact=afterRemoval(r.catalog,original,removal);
+        if(!exact)throw Error();
+        original.catalog=exact;original.busy=undefined;
+        if(original.pair?.before===page.versionId||original.pair?.after===page.versionId)original.pair=undefined;
+        note(original,'已移除这版保留网页。项目文件和其他保留版本未改动。',false);
+      }else if(r.status==='not_removed'){
+        requireRecheck(false,'本次没有移除这版网页。请先核对列表。');
+      }else if(r.status==='unknown'){
+        requireRecheck(true,'移除结果未确认。请先核对列表，不要重复提交。');
+      }else throw Error();
+    }).catch(()=>{
+      if(!stillHere())return;
+      requireRecheck(confirmed,confirmed?'移除结果未确认。请先核对列表，不要重复提交。':
+        '未提交移除。请先核对列表，再查看其他版本。');
+    });
+  };
   const back=()=>{
     const original=visit.current;
     if(!original)return false;
     if(!original.closing){
       if(original.closeUnconfirmed)void close(original,true);
+      else if(original.removal)finishRemoval(original,original.removal,false);
       else if(original.review)finish(original,original.review,false);
       else if(original.reader)closeReader(original,original.reader);
       else void close(original,true);
@@ -497,7 +600,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     const original=visit.current;
     if(original&&!active)handlers.current.inspect(original);
   },[active]);
-  const focusKind=shown?.reader?.page.versionId??shown?.review?.id;
+  const focusKind=shown?.reader?.page.versionId??shown?.review?.id??shown?.removal?.id;
   useLayoutEffect(()=>{
     if(!focusKind)return;
     const scroll=panelHeading.current?.closest<HTMLElement>('.pw-settings-dialog-content');
@@ -505,7 +608,7 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
     panelHeading.current?.focus({preventScroll:true});
   },[focusKind]);
   useLayoutEffect(()=>{
-    if(!shown||shown.reader||shown.review||shown.busy||shown.closing||!nextFocus.current)return;
+    if(!shown||shown.reader||shown.review||shown.removal||shown.busy||shown.closing||!nextFocus.current)return;
     const {node,scroll,top}=nextFocus.current;nextFocus.current=null;
     if(scroll?.isConnected)scroll.scrollTop=top;
     if(!node.disabled&&focusable(node))node.focus({preventScroll:true});
@@ -518,34 +621,41 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
   const canEnter=active&&id(project.id)&&ownerRevisions(native,project.id)!==null&&inactiveRenderer(native.state.projectPreview)!==null;
   const frame=showing&&!shown?.closing&&!shown?.reader?.returnRequested?shown?.reader?.frame:undefined;
   const viewport=useProjectPreviewViewport(!!frame,frame?.sessionId??'',!frame||frame.error,available,original?.visitId??'', '.pw-settings-dialog-content');
-  const reader=shown?.reader,review=shown?.review,catalog=shown?.catalog;
+  const reader=shown?.reader,review=shown?.review,removal=shown?.removal,catalog=shown?.catalog;
+  const rowsHidden=!!reader||!!review||!!removal||!!shown?.closing;
+  const rowsDisabled=!!shown?.busy||!!shown?.closing||!!shown?.removalRecheck;
   return <>
     {(canEnter||showing)&&<Button variant="ghost" size="small" leadingIcon={IconFile} trailingIcon={IconChevronRight} disabled={showing} onClick={enter}>保留的网页</Button>}
-    {showing&&original&&shown&&<SettingsDialog isOpen title="保留的网页" onClose={back} closeLabel={!shown.closing&&(reader||review)?'返回保留列表':'关闭保留列表'}>
+    {showing&&original&&shown&&<SettingsDialog isOpen title="保留的网页" onClose={back} closeLabel={!shown.closing&&(reader||review||removal)?'返回保留列表':'关闭保留列表'}>
       <div className="pw-form-flow" aria-busy={!!shown.busy||!!original.closing||!!reader&&!original.closeUnconfirmed&&(!frame?.ready||!!reader.closing)}>
-        <div hidden={!!reader||!!review||shown.closing} inert={!!reader||!!review||shown.closing}>
+        <div hidden={rowsHidden} inert={rowsHidden}>
           <div className="pw-form-flow">
-            <h3 tabIndex={-1} ref={!reader&&!review?panelHeading:undefined}>{project.name}</h3>
+            <h3 tabIndex={-1} ref={!rowsHidden?panelHeading:undefined}>{project.name}</h3>
             <p className="pw-reading-note">打开保留时的网页与资源，不重新构建，也不读取现在的文件。</p>
             {catalog&&<p className="pw-field-hint">每个项目最多保留 {catalog.maxVersions} 版，合计不超过 {catalog.maxStoredBytes/(1024*1024)} MiB。不会自动替换已有版本。</p>}
             {shown.busy==='list'&&<p role="status">正在核对保留的网页…</p>}
+            {shown.busy==='review-removal'&&<p role="status">正在核对所选保留版本…</p>}
             {catalog?.versions.length===0&&<p>这个项目还没有确认保留的网页。</p>}
             {catalog&&catalog.versions.length>0&&<ul className="pw-form-flow">{catalog.versions.map((page,index)=>{
               const when=new Date(page.savedAt);
               return <li key={page.versionId}>
                 <strong>index.html</strong>{' · '}<time dateTime={when.toISOString()}>{when.toLocaleString()}</time>
                 <p className="pw-field-hint">本机保留 · {page.resourceCount} 个文件</p>
-                <Button variant="secondary" size="small" aria-label={`打开第 ${index+1} 项保留的网页，${when.toLocaleString()}`}
-                  disabled={!!shown.busy||shown.closing} onClick={event=>open(original,page,event.currentTarget)}>打开这版网页</Button>
+                <div className="pw-form-actions">
+                  <Button variant="secondary" size="small" aria-label={`打开第 ${index+1} 项保留的网页，${when.toLocaleString()}`}
+                    disabled={rowsDisabled} onClick={event=>open(original,page,event.currentTarget)}>打开这版网页</Button>
+                  {supportsRemoval()&&<Button variant="ghost" size="small" aria-label={`核对移除第 ${index+1} 项保留网页，${when.toLocaleString()}`}
+                    disabled={rowsDisabled} onClick={event=>requestRemoval(original,page,event.currentTarget)}>移除…</Button>}
+                </div>
               </li>;
             })}</ul>}
             {catalog&&available(comparePages)&&<KeptManifestPair catalog={catalog} selection={shown.pair??emptyPair}
-              disabled={!!shown.busy||shown.closing} loading={shown.busy==='compare'}
+              disabled={rowsDisabled} loading={shown.busy==='compare'}
               choose={(side,version)=>choose(original,catalog,side,version)} compare={()=>compare(original,catalog)}
               open={(page,trigger)=>open(original,page,trigger)} />}
             {catalog&&<div className="pw-form-actions">
               <Button variant="ghost" size="small" disabled={!!shown.busy} onClick={()=>read(original)}>核对列表</Button>
-              {catalog.pendingState==='reviewable'&&<Button variant="ghost" size="small" disabled={!!shown.busy}
+              {catalog.pendingState==='reviewable'&&<Button variant="ghost" size="small" disabled={rowsDisabled}
                 onClick={event=>startReview(original,event.currentTarget)}>核对未完成的保留</Button>}
             </div>}
             {catalog?.pendingState==='unconfirmed'&&<p className="pw-field-hint">暂存状态未核对。可以再核对列表。</p>}
@@ -569,9 +679,20 @@ export function ProjectKeptStaticPages({project,active,registerNavigation}:{proj
             <Button onClick={()=>finish(original,review,true)}>清除这次暂存</Button>
           </div>
         </section>}
+        {removal&&!shown.closing&&<section className="pw-form-flow" aria-label="确认移除这版保留网页">
+          <h3 ref={panelHeading} tabIndex={-1}>移除这版保留网页？</h3>
+          <p><bdi>{project.name}</bdi> · index.html · 保留于 {new Date(removal.page.savedAt).toLocaleString()}</p>
+          <p className="pw-field-hint">{removal.page.resourceCount} 个文件 · 本机占用 {removal.storedBytes.toLocaleString()} 字节 · 版本 <code title={removal.page.versionId}>{removal.page.versionId.slice(0,8)}</code> · 清单 <code title={removal.page.manifestIdentity}>{removal.page.manifestIdentity.slice(0,12)}</code></p>
+          <p>只永久移除 PocketWorld 保留的这版网页及其随附资源，无法撤销。项目文件、编辑草稿和其他保留版本不会改动。</p>
+          <div className="pw-form-actions">
+            <Button variant="secondary" onClick={()=>finishRemoval(original,removal,false)}>取消</Button>
+            <Button variant="secondary" onClick={()=>finishRemoval(original,removal,true)}>永久移除这版</Button>
+          </div>
+        </section>}
         {!!original.closing?<p role="status">正在关闭原保留列表…</p>:shown.notice&&
           <p className={shown.problem?'pw-error':'pw-reading-note'} role={shown.problem?'alert':'status'}>{shown.notice}</p>}
         {shown.busy==='abandon'&&<p role="status">正在核对这次清除…</p>}
+        {shown.busy==='remove'&&<p role="status">正在核对这版网页的移除结果…</p>}
       </div>
     </SettingsDialog>}
   </>;
