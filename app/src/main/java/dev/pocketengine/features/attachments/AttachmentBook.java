@@ -147,6 +147,28 @@ public final class AttachmentBook {
             read.checkpoint();verified=true;return bytes;
         }finally{if(!verified)Arrays.fill(bytes,(byte)0);}
     }
+    /** Recheck one already verified, plain imported TXT's registration for the draft editor.
+     * No original body, URI/provider access, execution eligibility, or recovery writes. */
+    public synchronized void requireImportedTxtDraftRegistration(OwnerFilePreviewSource source,RunControl read)throws Exception{
+        read.checkpoint();
+        JSONObject shown=source.metadata();
+        String id=shown.getString("id");
+        if(source.tombstone||!UUID.fromString(id).toString().equals(id)||UUID.fromString(id).version()!=4||
+                !"text/plain".equals(source.mimeType)||!source.name.toLowerCase(java.util.Locale.ROOT).endsWith(".txt")||
+                source.sizeBytes<1||source.sizeBytes>MAX_FILE_BYTES)throw new SecurityException("原 TXT 记录已变化");
+        for(String suffix:new String[]{".part",".json.pending",".import",".import.pending"})
+            if(exists(new File(root,id+suffix)))throw new SecurityException("原 TXT 未完整登记");
+        JSONObject row=readIndex(new File(root,id+".json").toPath(),new IndexReadBudget()),origin=row.optJSONObject("source");
+        if(!id.equals(row.opt("id"))||!source.sha256.equals(row.opt("sha256"))||!source.name.equals(row.opt("name"))||
+                !source.mimeType.equals(row.opt("mimeType"))||source.sizeBytes!=row.getLong("size")||
+                row.optLong("createdAt",-1)!=shown.optLong("createdAt",-2)||!privateOutputSource(row)||row.has("groupSource")||
+                origin==null||!"content_uri".equals(origin.opt("kind"))||origin.length()!=3||
+                !(origin.opt("uri") instanceof String)||!(origin.opt("persistentReadPermission") instanceof Boolean))
+            throw new SecurityException("原 TXT 记录已变化");
+        BasicFileAttributes stat=Files.readAttributes(new File(root,id+".blob").toPath(),BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
+        if(!stat.isRegularFile()||stat.size()!=source.sizeBytes)throw new SecurityException("原 TXT 记录不可核对");
+        read.checkpoint();
+    }
     /** Presentation-only fixed reply document. Unlike internal()/verifiedBytes(), this
      * neither publishes nor revokes native output eligibility, even on a failed read. */
     private JSONObject historicalReplyDocumentIndex(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
@@ -457,17 +479,17 @@ public final class AttachmentBook {
             return new JSONObject(StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString());
         }
     }
-    /** One proved Word publication's index and nofollow blob stat only. No byte read,
+    /** One proved document publication's index and nofollow blob stat only. No byte read,
      * use of generic Book authority, or publish/revoke side effect on a stale lookup. */
-    synchronized void requireConfirmedHistoryWord(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
+    synchronized void requireConfirmedHistoryDocument(OriginalReplyDocument pin,String task,String run,RunControl read)throws Exception{
         read.checkpoint();String id=pin.id();checkId(id);
         java.nio.file.Path record=new File(root,id+".json").toPath(),blob=new File(root,id+".blob").toPath();
         if(Files.exists(new File(root,id+".part").toPath(),LinkOption.NOFOLLOW_LINKS)||
                 Files.exists(new File(root,id+".json.pending").toPath(),LinkOption.NOFOLLOW_LINKS))
-            throw new SecurityException("原 Word 尚未完整登记");
+            throw new SecurityException("原文档尚未完整登记");
         BasicFileAttributes actual=Files.readAttributes(blob,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
         if(!actual.isRegularFile()||actual.size()!=pin.size()||!pin.matchesBook(readIndex(record,new IndexReadBudget()),task,run))
-            throw new SecurityException("原 Word 已撤回或不是这份固定版本");
+            throw new SecurityException("原文档已撤回或不是这份固定版本");
         read.checkpoint();
     }
     public synchronized JSONObject get(String id)throws Exception{return visible(internal(id));}

@@ -41,7 +41,9 @@ type ExactFile=NonNullable<ReturnType<typeof exactFileTarget>>;
 type WorkTextVisit={taskId:string;runId:string;epoch:number;visit:string};
 type WorkPdfCopyAttempt=NonNullable<ReturnType<typeof capturePdfCopyViewport>>&{nonce:string;scope:string;windowId:string};
 type TextReturn={scope:string;document:number;range:DisplayedOriginalText;top:number;textStart?:number;reopening?:true;start?:{viewerId:string;top:number};work?:WorkTextVisit;libraryList?:'returning'|'listed'};
-type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'|'resume'|'quoted';pendingDocument?:string;warmReentry?:true};
+type TxtDraftSource={receipt:string;fileId:string;sha256:string};
+type StandaloneVisit={windowId:string;document:number;page:Document;presentation:string;entry:'catalog'|'blank'|'resume'|'quoted'|'txt';
+ pendingDocument?:string;warmReentry?:true;txtSource?:TxtDraftSource};
 const standalonePendingDocument=(view:Json)=>typeof view.pendingDocumentTask==='string'?view.pendingDocumentTask:undefined;
 function standaloneLibrarySurface(view:Json){
  return view.open===true&&view.taskId==null&&view.group===false&&view.team===false&&view.deviceOriginalOnly===false&&
@@ -149,6 +151,7 @@ function standaloneDraftPresentation(native:ReturnType<typeof bridge.getState>,v
  if(visit.page!==document||document.hidden||native.host?.ready!==true||!ordinaryLibraryOwner(native)||
     native.state.filePath!=null||!standaloneLibrarySurface(current)||!frame||
     (visit.entry==='quoted')!==(current.focusedStandaloneDraft===true)||
+    visit.entry==='txt'&&(!visit.txtSource||current.txtDraftLanding!==visit.txtSource.receipt)||
     current.standaloneDraftLibraryVisit!==visit.presentation||standalonePendingDocument(current)!==visit.pendingDocument||
     typeof current.standaloneDraftLibrary!=='boolean')return;
  return {frame,leased:current.standaloneDraftLibrary};
@@ -190,6 +193,17 @@ function listedLocalTxt(view:Json,target:ExactFile|null){
  const sources=rows(obj(view.snapshot).sources).filter(row=>row.id===target.fileId),source=sources[0];
  return sources.length===1&&source.sha256===target.sha256&&source.role==='source'&&source.availability==='available'&&
   source.sourceKind==='content_uri'&&source.sourceTaskId==null&&typeof source.name==='string'&&/\.txt$/i.test(source.name);
+}
+function wholeTxtDraftOffer(view:Json,range:DisplayedOriginalText|undefined){
+ const target=exactFileTarget(obj(view.file)),offer=obj(view.txtDraftOffer),reader=obj(view.originalFile),read=obj(reader.information);
+ if(!range||!target||!privateTxtPositionScope(view)||!listedLocalTxt(view,target)||view.file.mimeType!=='text/plain'||
+    view.busy!==false||view.exportPending!==false||reader.busy!==false||reader.error||!matchesTextViewer(view,range)||
+    offer.viewerId!==range.viewerId||typeof offer.receipt!=='string'||!offer.receipt||typeof offer.library!=='string'||!offer.library||
+    range.encoding!=='UTF-8'||range.offset!==0||read.encoding!=='UTF-8'||read.offset!==0||
+    read.atEnd!==true||read.nextOffset!==null||read.originalBytesChanged!==false||
+    read.sourceIdentity!==range.identity||read.sha256!==target.sha256||typeof read.content!=='string'||!read.content.trim()||
+    read.content.length>12000||read.decodedCharacters!==read.content.length)return;
+ return {source:{...target,receipt:offer.receipt as string},library:offer.library as string,body:read.content as string};
 }
 function workOriginalEntryFrame(view:Json,taskId:string){
  return view.taskId===taskId&&view.fromWorkResult===true&&view.originalReturn==='entry'&&view.restoredWorkReturn===false&&
@@ -391,15 +405,17 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  // Keep the same editor mounted while native window authority is temporarily revoked.
  const view=incoming.open&&!incoming.ready&&retained.current?{...retained.current,ready:false}:incoming,file=obj(view.file),snapshot=obj(view.snapshot);
  const [error,setError]=useState(''),[pending,setPending]=useState(0),[page,setPage]=useState('1');
- const [localDrafts,setLocalDrafts]=useState<{visit:StandaloneVisit;loading:boolean;initial?:Json}>();
+ const [localDrafts,setLocalDrafts]=useState<{visit:StandaloneVisit;loading:boolean;initial?:Json;initialTxt?:{name:string;body:string}}>();
  const draftVisit=useRef<StandaloneVisit|undefined>(undefined),draftDeskExit=useRef<((close:boolean)=>void)|null>(null);
  const usedQuotedDraft=useRef<QuotedDraftArrival|undefined>(undefined);
  const draftDeskReturn=useRef<{windowId:string;entry:StandaloneVisit['entry']}|undefined>(undefined);
  const pendingDraftGeneration=standalonePendingDocument(view);
  const draftDesk=localDrafts&&standaloneLibrarySurface(view)&&!onReturnToSearch&&state.chatAttachmentPickerOpen===false&&
   pendingDraftGeneration===localDrafts.visit.pendingDocument&&
-  (localDrafts.visit.entry!=='resume'&&localDrafts.visit.entry!=='quoted'||incoming.ready===true&&incoming.windowId===localDrafts.visit.windowId&&
-   incoming.standaloneDraftLibrary===true&&localDrafts.visit.document===bridge.getDocumentEpoch())&&
+  (localDrafts.visit.entry!=='resume'&&localDrafts.visit.entry!=='quoted'&&localDrafts.visit.entry!=='txt'||
+   incoming.ready===true&&incoming.windowId===localDrafts.visit.windowId&&incoming.standaloneDraftLibrary===true&&
+   localDrafts.visit.document===bridge.getDocumentEpoch()&&
+   (localDrafts.visit.entry!=='txt'||incoming.txtDraftLanding===localDrafts.visit.txtSource?.receipt))&&
   (incoming.ready!==true||incoming.standaloneDraftLibraryVisit===localDrafts.visit.presentation)?localDrafts:undefined;
  const draftShelfSurface=view.focusedStandaloneDraft!==true&&standaloneLibrarySurface(view)&&view.ready===true&&typeof view.standaloneDraftLibraryVisit==='string'&&
   !!view.standaloneDraftLibraryVisit&&!onReturnToSearch&&state.chatAttachmentPickerOpen===false;
@@ -416,7 +432,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const draftFlight=useRef<DraftHandoff|null>(null);
  const reportFlight=useRef(false);
  const attachmentFlight=useRef(false);
- const documentParentFlight=useRef(false),generatedDraftFlight=useRef(false);
+ const documentParentFlight=useRef(false),generatedDraftFlight=useRef(false),txtDraftFlight=useRef(false);
  const [previewContinuation,setPreviewContinuation]=useState('');
  const [readerActionMenu,setReaderActionMenu]=useState('');
  const [workPdfCopyFeedback,setWorkPdfCopyFeedback]=useState<{key:string;message:string;error?:true}>();
@@ -524,6 +540,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const handoff=!topic&&((currentHandoff?.phase==='added'&&!draftHasFile)||(currentHandoff?.phase==='failed'&&draftHasFile))?null:currentHandoff;
  const draftBusy=draftHandoff?.phase==='adding'||draftHandoff?.phase==='opening';
  const displayedText=useRef<DisplayedOriginalText|null>(null),textReturn=useRef<TextReturn|null>(null);
+ const [mountedTxtRead,setMountedTxtRead]=useState<DisplayedOriginalText>();
  const workTextReader=useRef(readWorkTextVisit);workTextReader.current=readWorkTextVisit;
  const mayRestoreText=!onReturnToSearch&&state.chatAttachmentPickerOpen===false;
  const libraryTextScope=mayRestoreText?privateTxtPositionScope(incoming):'';
@@ -532,6 +549,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  const textScope=libraryTextScope||workTextScope;
  const textDisplayed=useCallback((range:DisplayedOriginalText)=>{
   displayedText.current=range;
+  const liveTxt=obj(bridge.getState().state.attachmentWorkspace);
+  if(range.encoding==='UTF-8'&&range.offset===0&&privateTxtPositionScope(liveTxt)&&liveTxt.file?.mimeType==='text/plain')
+   setMountedTxtRead(prior=>prior?.viewerId===range.viewerId&&prior.windowId===range.windowId?prior:range);
   const pin=textReturn.current,body=scroller.current;
   if(!pin?.start||pin.start.viewerId!==range.viewerId||!body)return;
   textReturn.current=null; // The newly painted reader gets one chance; later reads never retarget it.
@@ -629,7 +649,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   }else if(!draftFrame(visit))throw new Error('原草稿窗口已变化');
   return result;
  };
- const openDraftDesk=(entry:Exclude<StandaloneVisit['entry'],'resume'|'quoted'>)=>{
+ const openDraftDesk=(entry:Exclude<StandaloneVisit['entry'],'resume'|'quoted'|'txt'>)=>{
   const frame=attachmentFrame(view),reenter=entry==='catalog'&&mayReenterDraftShelf;
   if((!offerDraftDesk&&!reenter)||(entry==='blank'&&pendingDraftGeneration)||!frame||draftVisit.current||pending||generatedDraftFlight.current||backFlight.current)return;
   const visit:StandaloneVisit={windowId:frame.windowId,document:bridge.getDocumentEpoch(),page:document,
@@ -716,6 +736,15 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
  };
  const leaveDraftDesk=async(visit:StandaloneVisit,close:boolean)=>{
   const current=draftFrame(visit);
+  if(visit.entry==='txt'){
+   const source=visit.txtSource;
+   if(!current||!source)throw new Error('原草稿窗口已变化');
+   const result=await act('drafts.exitTxtEditor',{receipt:source.receipt,close},current,false);
+   if(result.left!==true||result.closed!==close||result.receipt!==source.receipt||result.windowId!==visit.windowId||
+      result.fileId!==source.fileId||result.sha256!==source.sha256)throw new Error('没有核对到原 TXT 的退出回执');
+   if(draftVisit.current===visit){draftVisit.current=undefined;setLocalDrafts(undefined)}
+   return;
+  }
   if(current){
    const result=await draftAct(visit,'drafts.leave');if(result.left!==true)throw new Error('原草稿窗口尚未退出');
   }
@@ -731,7 +760,10 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   if(draftVisit.current===visit){draftVisit.current=undefined;setLocalDrafts(undefined)}
  };
  useLayoutEffect(()=>{
-  if(localDrafts&&!draftDesk){draftVisit.current=undefined;setLocalDrafts(undefined)}
+  // The bridge acknowledgement and current native projection may reach React in separate renders.
+  if(localDrafts&&!draftDesk&&!(localDrafts.visit.entry==='txt'&&draftFrame(localDrafts.visit))){
+   draftVisit.current=undefined;setLocalDrafts(undefined)
+  }
   const returned=draftDeskReturn.current;
   if(!draftDesk&&returned){
    if(returned.windowId===view.windowId){
@@ -775,6 +807,14 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   if(!current.open)return false;
   if(current.ready&&readerActionMenu===readerActionScope){setReaderActionMenu('');return true}
   if(draftDesk){draftDeskExit.current?.(draftDesk.visit.entry==='quoted');return true}
+  if(typeof current.txtDraftLanding==='string'){
+   // If the editor acknowledgement was lost, Back still closes only its native ephemeral landing.
+   if(current.ready&&!backFlight.current){
+    backFlight.current=true;
+    void act('drafts.exitTxtEditor',{receipt:current.txtDraftLanding,close:false}).catch(()=>{}).finally(()=>{backFlight.current=false});
+   }
+   return true;
+  }
   if(isLiveMessageOriginal(current)){
    if(current.ready&&!backFlight.current){
     const exactLinkedOriginal=current.savedChatLinkedOnly===true&&typeof obj(current.originalFile).id==='string';
@@ -1510,6 +1550,32 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   </div>}
   {view.wordExcerptSaveAttempted===true&&!view.busy&&<p role="status">保存尚未确认。请返回后在成果清单核对，不会自动重复保存。</p>}
  </section>;
+ const txtOffer=mode==='original'&&privateLibrary&&!draftDesk?wholeTxtDraftOffer(view,mountedTxtRead):undefined;
+ const startTxtDraft=async()=>{
+  if(!txtOffer||busy||draftBusy||view.exportPending||txtDraftFlight.current||draftVisit.current||backFlight.current)return;
+  const native=bridge.getState(),windowId=view.windowId,epoch=bridge.getDocumentEpoch();
+  const live=obj(native.state.attachmentWorkspace),frame=attachmentFrame(live);
+  const painted=scroller.current?.querySelectorAll<HTMLPreElement>('.pw-original-text > pre.pw-file-text');
+  const exact=wholeTxtDraftOffer(live,mountedTxtRead);
+  if(document.hidden||!frame||frame.windowId!==windowId||!ordinaryLibraryOwner(native)||!exact||
+     exact.source.receipt!==txtOffer.source.receipt||exact.source.fileId!==txtOffer.source.fileId||exact.source.sha256!==txtOffer.source.sha256||
+     !painted||painted.length!==1||!painted[0].isConnected||!painted[0].getClientRects().length||painted[0].textContent!==exact.body)return;
+  const visit:StandaloneVisit={windowId,document:epoch,page:document,presentation:exact.library,entry:'txt',txtSource:exact.source};
+  txtDraftFlight.current=true;
+  try{
+   const result=await act('drafts.newFromTxt',{receipt:exact.source.receipt},frame,false);
+   if(result.opened!==true||result.windowId!==windowId||result.library!==exact.library||result.receipt!==exact.source.receipt||
+      typeof result.editorHandle!=='string'||!result.editorHandle||typeof result.name!=='string'||!result.name.trim()||result.name.length>80||
+      typeof result.blankName!=='string'||result.blankName.length>80||result.blankFormat!=='docx'||result.blankFontPoints!==12||
+      !await waitForDraftLibraryFrame(visit)||draftVisit.current||!alive.current)throw new Error('原 TXT 草稿尚未打开');
+   const initial={editorHandle:result.editorHandle,fields:{format:result.blankFormat,name:result.blankName,title:'',body:'',fontPoints:result.blankFontPoints}};
+   draftVisit.current=visit;
+   setLocalDrafts({visit,loading:false,initial,initialTxt:{name:result.name,body:exact.body}});
+  }catch{
+   if(alive.current&&!document.hidden&&bridge.getDocumentEpoch()===epoch&&obj(bridge.getState().state.attachmentWorkspace).windowId===windowId)
+    setError('未核对到这份 TXT 的文档草稿。没有保存或更改原件。');
+  }finally{txtDraftFlight.current=false}
+ };
  const markdown=obj(view.markdownDraft),markdownTarget=mode==='original'&&privateLibrary&&view.ready===true&&
   file.role==='source'&&file.sourceKind==='content_uri'&&typeof markdown.name==='string'&&markdown.name.length>0&&markdown.name.length<=80?
   exactFileTarget(file):undefined;
@@ -1565,7 +1631,7 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
    draftDesk.visit.entry==='resume'?'正在核对生成前的原草稿…':draftDesk.visit.entry==='quoted'?'正在打开刚保留的草稿…':'正在打开本机文档草稿…'}</p>:
   <AttachmentStandaloneDrafts active={draftDeskActive} recoverable={draftDeskReadOnly} loading={draftDesk.loading} initial={draftDesk.initial}
   generationPending={!!draftDesk.visit.pendingDocument} initialBlank={draftDesk.visit.entry==='blank'} initialResume={draftDesk.visit.entry==='resume'||draftDesk.visit.entry==='quoted'}
-  fromMessage={draftDesk.visit.entry==='quoted'}
+  fromMessage={draftDesk.visit.entry==='quoted'} initialTxt={draftDesk.initialTxt}
   warmResumeKey={suspendedDraftKey} onWarmResume={key=>resumeSavedDraft(draftDesk.visit,key)}
   invoke={(command,args)=>draftAct(draftDesk.visit,command,args)} registerExit={handler=>{draftDeskExit.current=handler}}
   onExit={close=>leaveDraftDesk(draftDesk.visit,close)}/>):view.documentDraft?<AttachmentDocumentEditor key={attachmentDocumentKey(view)} original={view.documentDraft} baseVersion={draftBaseVersion} unpublished={view.documentDraftEdited===true} windowId={view.windowId} foregroundReady={view.ready===true} pendingTask={view.pendingDocumentTask} busy={busy} act={act} beforeBack={registerBeforeBack}
@@ -1681,6 +1747,9 @@ export function AttachmentWorkspace({state,registerBack,onReturnToSearch,onRetur
   {canReturnGeneratedDraft&&generatedDraftAction(preferSave||useInTopic?'secondary':'primary')}
   {offerDocumentEdit&&editDocument(canReturnGeneratedDraft?'ghost':preferSave||useInTopic?'secondary':'primary')}
   {wordOriginAction}
+  {txtOffer&&<Button variant="secondary" disabled={busy||draftBusy||view.exportPending}
+   aria-description="将已显示的文字带到未保存的本机草稿，不改动原件"
+   onClick={event=>{if(event.nativeEvent.isTrusted)void startTxtDraft()}}>用这份 TXT 新建文档草稿</Button>}
   {markdownTarget&&(markdown.state==='READY'||markdown.state==='UNKNOWN')&&
    <Button variant="secondary" disabled={busy||draftBusy||view.exportPending} onClick={retainMarkdown}>
     {markdown.state==='UNKNOWN'?'核对这次草稿':'保留原文为本机文档草稿'}</Button>}

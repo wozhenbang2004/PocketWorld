@@ -72,7 +72,9 @@ export type ConfirmedManualSave = { id: string; revision: 1 };
 type CorrectionSubmission = { beforeRevision: number; draft: string };
 type MemoryFeedback = { value: Data; operation: MutationOperation; needsQuery: boolean; targetId?: string; submittedText?: string; directory?: MemoryDirectory; candidateTerm?: { revision: number; expiresAt: number }; term?: { id: string; revision: number; until: number }; priority?: { revision: number; core: boolean }; priorSave?: ConfirmedManualSave; correction?: CorrectionSubmission; answerForget?: AnswerMemoryForgetEntry };
 type MemoryOpenPin = { kind: 'answer'; revision: number; conversation: string; originalAnswer?: OriginalMemoryEntry }
-  | { kind: 'receipt'; revision: number; feedback: MemoryFeedback };
+  | { kind: 'receipt'; revision: number; feedback: MemoryFeedback }
+  | { kind: 'recent'; revision: number };
+type MemorySaveRange = 'all' | 'sevenDays' | 'lastWeek';
 type AvatarPicker = { id: string; editor: number };
 type AvatarPoll = { sequence: number; key: string | undefined; visibility: number; picker: AvatarPicker };
 const labels: Record<View, string> = { home: '我与管家', identity: '编辑资料', communication: '交流偏好', behavior: '做事偏好', memories: '个人记忆', memory: '编辑记忆', 'memory-new': '记住一件事', 'memory-settings': '全局记忆设置', 'memory-history': '过去的记忆' };
@@ -81,6 +83,7 @@ const detailOptions = [{ id: 'concise', label: '简短' }, { id: 'standard', lab
 const paceOptions = [{ id: 'fast', label: '高效' }, { id: 'standard', label: '均衡' }, { id: 'careful', label: '细致' }];
 const initiativeOptions = [{ id: 'requested', label: '按需' }, { id: 'balanced', label: '适度' }, { id: 'proactive', label: '主动建议' }];
 const expiryOptions = [{ id: 'none', label: '不设到期时间' }, { id: '7', label: '7 天后到期' }, { id: '30', label: '30 天后到期' }, { id: 'custom', label: '选择日期与时间' }];
+const memorySaveRangeOptions = [{ id: 'all', label: '不限' }, { id: 'sevenDays', label: '近 7 天', description: '今天及前 6 天' }, { id: 'lastWeek', label: '上周', description: '上个自然周，周一至周日' }];
 const emptyMemories = (): Memories => ({ current: [], candidates: [], pendingConflicts: [], history: [], complete: false });
 const object = (value: any): Data => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const rows = (value: any): Data[] => Array.isArray(value) ? value.filter(row => row && typeof row === 'object' && !Array.isArray(row)) : [];
@@ -108,6 +111,14 @@ function preferenceSectionOf(value: Data): 'communication' | 'behavior' | null {
 const settingsRequiredFor = (feedback: MemoryFeedback | null, operation: MutationOperation, targetId?: string, text?: string) => !!feedback && !feedback.needsQuery && !!preferenceSectionOf(feedback.value) && feedback.operation === operation && feedback.targetId === targetId && (text === undefined || feedback.submittedText === text);
 const timeValue = (value: any) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : typeof value === 'string' ? Date.parse(value) : NaN;
 const dateLabel = (value: any) => Number.isFinite(timeValue(value)) ? new Date(timeValue(value)).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+const memorySavedAt = (row: Data): number => Number.isSafeInteger(row.createdAt) && row.createdAt > 0 && row.createdAt <= 8_640_000_000_000_000 ? row.createdAt : 0;
+function memorySaveWindow(range: MemorySaveRange, now: Date): { from: number; until: number } | null {
+  if (range === 'all') return null;
+  const dayAt = (offset: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset).getTime();
+  const monday = -((now.getDay() + 6) % 7);
+  // Calendar days on this device, not fixed 24-hour periods across a clock change.
+  return range === 'sevenDays' ? { from: dayAt(-6), until: dayAt(1) } : { from: dayAt(monday - 7), until: dayAt(monday) };
+}
 const expiredMemory = (row: Data) => Number.isFinite(timeValue(row.expiresAt)) && timeValue(row.expiresAt) <= Date.now();
 const historicalMemory = (row: Data) => row.active === false || expiredMemory(row) || ['expired', 'superseded', 'archived'].includes(row.status);
 const pendingSuggestion = (row: Data) => row.status === 'pending' && !expiredMemory(row);
@@ -168,9 +179,9 @@ function matchExcerpt(text: string, at: RegExpExecArray) {
   const after = Array.from(text.slice(end, end + 50)).slice(0, 24).join('');
   return <>{before.length < at.index ? '…' : ''}{before}<mark>{shown}{shown.length < match.length ? '…' : ''}</mark>{after}{end + after.length < text.length ? '…' : ''}</>;
 }
-function memoryDates(row: Data): string {
-  const expiry = dateLabel(row.expiresAt), updated = dateLabel(row.updatedAt || row.createdAt);
-  return [updated ? `${updated} 更新` : '', expiry ? `${expiredMemory(row) ? '已到期' : '有效至'} ${expiry}` : ''].filter(Boolean).join(' · ');
+function memoryDates(row: Data, showSavedDate = false): string {
+  const expiry = dateLabel(row.expiresAt), dated = dateLabel(showSavedDate ? memorySavedAt(row) : row.updatedAt || row.createdAt);
+  return [dated ? `${dated} ${showSavedDate ? '保存' : '更新'}` : '', expiry ? `${expiredMemory(row) ? '已到期' : '有效至'} ${expiry}` : ''].filter(Boolean).join(' · ');
 }
 const retentionLabel = (value: unknown): string => value === null ? '不设到期时间' : typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }) : '期限未核对';
 function duplicateRetention(feedback: MemoryFeedback): string {
@@ -341,6 +352,7 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
   const [leaveOpen, setLeaveOpen] = useState(false), [memoryConflict, setMemoryConflict] = useState(false), [uncertainMemory, setMemoryUnknown] = useState(false);
   const [latestMemory, setLatestMemory] = useState<Data | null>(null);
   const [query, setQuery] = useState(''), [topic, setTopic] = useState('all'), [showCandidates, setShowCandidates] = useState(false);
+  const [memorySaveRange, setMemorySaveRange] = useState<MemorySaveRange>('all');
   const [newMemoryText, setNewMemoryText] = useState(''), [newMemoryExpiry, setNewMemoryExpiry] = useState('none'), [createUnknown, setCreateUnknown] = useState(false);
   const [newMemoryCalendar, setNewMemoryCalendar] = useState<CalendarTime | null>(null);
   const [policy, setPolicy] = useState<MemoryPolicy | null>(null), [controlsError, setControlsError] = useState('');
@@ -393,16 +405,20 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
     if (hit) hits.set(row, hit);
     return hit !== null;
   };
-  const matchingMemories = activeMemories.filter(searched);
+  const saveWindow = view === 'memories' && !showCandidates ? memorySaveWindow(memorySaveRange, new Date()) : null;
+  const matchingMemories = (saveWindow ? activeMemories.filter(row => {
+    const at = memorySavedAt(row);
+    return at > 0 && at >= saveWindow.from && at < saveWindow.until && row.assertionStatus === 'current' && row.archiveOnly !== true;
+  }).sort((left, right) => memorySavedAt(right) - memorySavedAt(left)) : activeMemories).filter(searched);
   const visibleMemories = topic === 'all' ? matchingMemories : matchingMemories.filter(row => topicOf(row).id === topic);
   const topics = [...new Map(activeMemories.map(row => [topicOf(row).id, topicOf(row)])).values()];
   const visibleCandidates = pendingCandidates.filter(searched);
   const historyRows = memories.history.filter(searched);
   const hasMemoryRows = activeMemories.length + pendingCandidates.length + memories.history.length > 0;
-  const savedMiss = memoryAvailable && !showCandidates && !visibleMemories.length && (!!searchText || topic !== 'all');
-  const candidateMatchLink = savedMiss && !!searchText && visibleCandidates.length > 0;
-  const historyMatchLink = savedMiss && !!searchText && historyRows.length > 0;
-  useCollectionMotion(scroller, JSON.stringify([presentationKey, view, searchText, topic, showCandidates]), JSON.stringify([
+  const savedMiss = memoryAvailable && !showCandidates && !visibleMemories.length && (!!saveWindow || !!searchText || topic !== 'all');
+  const candidateMatchLink = !saveWindow && savedMiss && !!searchText && visibleCandidates.length > 0;
+  const historyMatchLink = !saveWindow && savedMiss && !!searchText && historyRows.length > 0;
+  useCollectionMotion(scroller, JSON.stringify([presentationKey, view, searchText, topic, showCandidates, saveWindow && memorySaveRange]), JSON.stringify([
     visibleMemories.map(row => [row.id, row.revision, topicOf(row).id]),
     visibleCandidates.map(row => [row.id, row.status]), historyRows.map(row => [row.id, row.revision]),
     notice, error, feedback?.value.status, feedback?.needsQuery,
@@ -852,14 +868,19 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       ? { revision: expected.revision, conversation: expected.originalAnswer.conversation, current: expected.originalAnswer.current } : undefined;
     const presentation = livePresentation.current, memoryRevision = liveMemoryRevision.current;
     const conversation = current.current.conversation, origin = current.current.view;
-    const priorSave = receipt?.priorSave, privateWindow = priorSave ? privateProfileReadWindow() : null;
+    const recent = expected?.kind === 'recent';
+    const priorSave = receipt?.priorSave, privateWindow = priorSave || recent ? privateProfileReadWindow() : null;
     const readObservation = savedChat ? bridge.getState().state.memoryRefreshRevision : undefined;
     const savedScopeCurrent = () => !savedChat || Number.isSafeInteger(readObservation) &&
       bridge.getState().state.memoryRefreshRevision === readObservation;
     const unavailable = savedChat ? '这条记忆曾保存。原版本可能已变化、到期或暂不可读，没有打开其他内容。'
       : receipt ? '回执指向的原版本已经变化或暂时不可读，没有打开其他记忆。可从列表查看当前内容。'
+      : recent ? '这条记忆已变化或暂不可读，请刷新记忆后重新选择。'
       : '未能核对原回答选中的记忆版本，没有打开其他内容。请返回原回答。';
-    const sameWindow = () => !document.hidden && (expected?.kind === 'receipt'
+    const sameWindow = () => !document.hidden && (expected?.kind === 'recent'
+      ? origin === 'memories' && current.current.view === origin && livePresentation.current === presentation &&
+        privateWindow !== null && privateProfileReadWindow() === privateWindow
+      : expected?.kind === 'receipt'
       ? previousPresentation.current === presentation && livePresentation.current === presentation
         && liveMemoryRevision.current === memoryRevision && current.current.conversation === conversation && current.current.feedback === receipt
         && (!priorSave || privateWindow !== null && privateProfileReadWindow() === privateWindow && current.current.view === origin)
@@ -871,14 +892,16 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
       } else if (receipt) {
         const pin = memoryReceiptPin(receipt);
         if (!pin || pin.id !== row.id || pin.candidate !== candidate || pin.revision !== expected?.revision || !sameWindow()) throw new Error(unavailable);
+      } else if (expected?.kind === 'recent' && (candidate || !Number.isSafeInteger(expected.revision) || expected.revision < 1 || !sameWindow())) {
+        throw new Error(unavailable);
       }
       const result = await readMemory(row.id, candidate, exact).catch(failure => { throw expected ? new Error(unavailable) : failure; });
       if (!alive.current) { closeHandle(result.handle); return; }
-      // Neither a later revision nor a retired row may substitute for an original receipt or answer.
+      // Exact entries must never substitute a later revision or a retired row.
       if (expected && (result.row.revision !== expected.revision || !sameWindow() || (candidate
         ? result.row.status !== 'pending' || expiredMemory(result.row)
         : result.row.active !== true || historicalMemory(result.row) ||
-          (!!priorSave || !!savedChat) && (result.row.archiveOnly === true || result.row.assertionStatus !== 'current' ||
+          (!!priorSave || !!savedChat || recent) && (result.row.archiveOnly === true || result.row.assertionStatus !== 'current' ||
             !!savedChat && !manualMemory(result.row))))) {
         closeHandle(result.handle); throw new Error(unavailable);
       }
@@ -1477,11 +1500,11 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         : view === 'memories' || view === 'memory-history' ? <IconButton icon={IconSettings} aria-label={labels['memory-settings']} title={labels['memory-settings']} disabled={locked} onClick={openMemorySettings} />
           : view === 'home' ? <IconButton icon={IconSettings} aria-label="隐私与数据设置" title="隐私与数据" onClick={() => guarded(onSettings)} /> : <span />;
   const entry = (id: string, title: string, description: string, icon: typeof IconChat, open: () => void, badge?: ReactNode) => <Button variant="ghost" className="pw-profile-entry" leadingIcon={icon} trailingIcon={IconChevronRight} onClick={open} disabled={!loaded || locked} data-profile-entry={id}><span className="pw-profile-entry-copy"><strong>{title}</strong><small>{description}</small></span>{badge}</Button>;
-  const memoryRow = (row: Data, candidate: boolean) => {
+  const memoryRow = (row: Data, candidate: boolean, bySaveTime = false) => {
     const hit = hits.get(row), text = string(row.text) || string(row.title) || '未命名记忆';
     return <Button key={(candidate ? 'candidate:' : 'memory:') + row.id} variant="ghost" className="pw-profile-memory-row" trailingIcon={IconChevronRight}
-      data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate)}>
-      <span><strong>{hit?.body ? matchExcerpt(text, hit.body) : text}</strong><small>{[hit?.via.length ? '匹配' + hit.via.join('、') : '', memoryOrigin(row, candidate), memoryDates(row)].filter(Boolean).join(' · ')}</small></span>
+      data-personal-memory={string(row.id)} data-motion-key={(candidate ? 'candidate:' : 'memory:') + row.id} disabled={locked || !supported('profile.memory.get')} onClick={() => openMemory(row, candidate, bySaveTime ? { kind: 'recent', revision: row.revision } : undefined)}>
+      <span><strong>{hit?.body ? matchExcerpt(text, hit.body) : text}</strong><small>{[hit?.via.length ? '匹配' + hit.via.join('、') : '', memoryOrigin(row, candidate), memoryDates(row, bySaveTime)].filter(Boolean).join(' · ')}</small></span>
     </Button>;
   };
   const followUp = object(duties?.policy), quietHours = object(followUp.quietHours);
@@ -1589,26 +1612,30 @@ export function ProfileWorkspace({ state, supported, run, onBack, onSettings, re
         {loaded && view === 'memories' && <>
           <p className="pw-profile-intro">这里是已保存的个人记忆，可以纠正或忘记。待选建议单独显示，不算已保存。</p>
           {memoryError && <div className="pw-profile-feedback is-error" role="alert"><p>{memoryError}</p><Button variant="ghost" size="small" leadingIcon={IconRefresh} disabled={locked} onClick={refresh}>重新读取记忆</Button></div>}
-          {(hasMemoryRows || !!query || showCandidates) && <div className="pw-profile-collection-tools">
+          {(hasMemoryRows || !!query || showCandidates || !!saveWindow) && <div className="pw-profile-collection-tools">
             <SearchField className="pw-profile-memory-search" fieldClassName="pw-profile-input" aria-label={showCandidates ? '搜索待确认建议' : '搜索已读取的个人记忆'} placeholder={showCandidates ? '搜索待确认建议，空格分词' : '搜索个人记忆，空格分词'} clearLabel="清除搜索" maxLength={256} value={query} onChange={setQuery} shape="rounded" isDisabled={locked} />
             <div className="pw-profile-collection-nav">
               <Button variant="secondary" leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button>
               {!candidateMatchLink && (pendingCandidates.length > 0 || showCandidates) && <Button variant="ghost" aria-pressed={showCandidates} disabled={locked} onClick={() => setShowCandidates(value => !value)}>{showCandidates ? '查看已保存' : `待确认 ${pendingCandidates.length} 条`}</Button>}
             </div>
             {!showCandidates && topics.length > 1 && <SelectField className="pw-profile-topic-select" label="主题" value={topic} options={[{ id: 'all', label: '所有主题' }, ...topics]} onChange={setTopic} isDisabled={locked} />}
+            {!showCandidates && memoryAvailable && (activeMemories.length > 0 || !!saveWindow) && <SelectField className="pw-profile-topic-select" label="保存时间" value={memorySaveRange} options={memorySaveRangeOptions} compactValue
+              onChange={value => setMemorySaveRange(value === 'sevenDays' || value === 'lastWeek' ? value : 'all')} isDisabled={locked} />}
             {memoryAvailable && !showCandidates && searchText && visibleMemories.length > 0 && <p className="pw-profile-list-hint" role="status">已保存 · 当前筛选匹配 {visibleMemories.length} 条</p>}
-            {!memories.complete && memoryAvailable && <p className="pw-profile-list-hint">当前搜索范围为已读取的个人记忆。</p>}
+            {!memories.complete && memoryAvailable && <p className="pw-profile-list-hint">{saveWindow ? '仅筛选已读取的个人记忆。' : '当前搜索范围为已读取的个人记忆。'}</p>}
           </div>}
           {showCandidates ? memoryAvailable && <section className="pw-profile-memory-group"><h2>待你确认<span>{searchText ? `${visibleCandidates.length} 条匹配` : pendingCandidates.length}</span></h2><p className="pw-profile-list-hint">这些建议还不是已保存的个人记忆。有原文时可先核对，不必现在决定。</p><div className="pw-profile-memory-list">{visibleCandidates.map(row => memoryRow(row, true))}</div>{!visibleCandidates.length && <p className="pw-profile-list-hint">{searchText ? '已读取的建议中没有匹配项。' : '暂未读到待确认的内容。'}</p>}</section>
+            : saveWindow ? memoryAvailable && visibleMemories.length > 0 && <section className="pw-profile-memory-group"><h2>已保存{!searchText && <span>{visibleMemories.length} 条</span>}</h2><div className="pw-profile-memory-list">{visibleMemories.map(row => memoryRow(row, false, true))}</div></section>
             : topics.filter(item => visibleMemories.some(row => topicOf(row).id === item.id)).map(item => <section className="pw-profile-memory-group" key={item.id}><h2>{item.label}</h2><div className="pw-profile-memory-list">{visibleMemories.filter(row => topicOf(row).id === item.id).map(row => memoryRow(row, false))}</div></section>)}
           {savedMiss && <section className="pw-profile-empty">
-            <h2>{topic === 'all' ? '当前已保存列表没有匹配项' : '所选主题没有匹配的记忆'}</h2>
+            <h2>{saveWindow ? memories.complete ? '这个时段没有匹配的已保存记忆' : '已读取的记忆中没有匹配项' : topic === 'all' ? '当前已保存列表没有匹配项' : '所选主题没有匹配的记忆'}</h2>
+            {saveWindow && <Button variant="secondary" disabled={locked} onClick={() => setMemorySaveRange('all')}>清除时间筛选</Button>}
             {topic !== 'all' && <Button variant="secondary" disabled={locked} onClick={() => setTopic('all')}>{matchingMemories.length ? `查看其他主题的 ${matchingMemories.length} 条记忆` : '取消主题筛选'}</Button>}
             {candidateMatchLink && <Button variant="ghost" disabled={locked} onClick={() => setShowCandidates(true)}>查看 {visibleCandidates.length} 条匹配的待确认建议</Button>}
             {historyMatchLink && <Button variant="ghost" disabled={locked} onClick={() => go('memory-history')}>查看 {historyRows.length} 条匹配的过去记忆</Button>}
             {searchText && !matchingMemories.length && !candidateMatchLink && !historyMatchLink && <p>试试其他关键词。</p>}
           </section>}
-          {memoryAvailable && !showCandidates && !activeMemories.length && !searchText && topic === 'all' && <div className="pw-profile-empty"><IconSparkles aria-hidden="true" /><h2>当前列表里没有已保存的记忆</h2>
+          {memoryAvailable && !showCandidates && !saveWindow && !activeMemories.length && !searchText && topic === 'all' && <div className="pw-profile-empty"><IconSparkles aria-hidden="true" /><h2>当前列表里没有已保存的记忆</h2>
             {hasMemoryRows ? <p>待确认建议和过去的记忆不计入当前列表。</p> : !memories.complete ? <p>清单尚未完整读取，可先刷新记忆。</p> : <><p>告诉我一件你希望下次不用再解释的事。</p><Button leadingIcon={IconAdd} disabled={locked || !supported('profile.memory.createReview')} onClick={openNewMemory}>记住一件事</Button><p>也可以在对话中直接说“记住这件事”。</p></>}
           </div>}
           {memories.pendingConflicts.length > 0 && <Accordion className="pw-profile-disclosure"><AccordionItem id="personal-conflicts" title={`有 ${memories.pendingConflicts.length} 项信息需要核对`}><p className="pw-profile-help">这些信息存在差异，尚未自动覆盖已保存内容。</p>{memories.pendingConflicts.map((row, index) => <p key={string(row.id) || index} className="pw-profile-conflict-text">{string(row.text || row.summary || row.reason) || '请核对相关个人记忆的来源与内容。'}</p>)}</AccordionItem></Accordion>}

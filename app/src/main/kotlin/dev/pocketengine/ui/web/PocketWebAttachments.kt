@@ -1,8 +1,12 @@
 package dev.pocketengine.ui.web
 
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.webkit.WebResourceResponse
+import dev.pocketengine.core.RunControl
+import dev.pocketengine.features.attachments.AttachmentRepository
 import dev.pocketengine.features.attachments.creation.DocumentDraft
 import dev.pocketengine.features.attachments.NativeOriginalFileSession
 import dev.pocketengine.features.attachments.OwnerFilePreviewSource
@@ -49,7 +53,8 @@ internal class PocketWebAttachments(
             "drafts.checkFirst", "drafts.save", "drafts.leave", "drafts.remove", "drafts.reviewDocument", "drafts.dismissDocument", "drafts.createDocument",
             "drafts.retainRevision", "drafts.checkRevision", "drafts.retainMarkdown", "drafts.checkMarkdown",
             "drafts.retainPdfPage", "drafts.checkPdfPage",
-            "drafts.returnGenerated", "drafts.openGeneratedSource", "drafts.openQuotedSource", "drafts.resumeSaved")
+            "drafts.returnGenerated", "drafts.openGeneratedSource", "drafts.openQuotedSource", "drafts.resumeSaved",
+            "drafts.newFromTxt", "drafts.exitTxtEditor")
         private val DRAFTS_WHILE_DOCUMENT_PENDING = setOf("drafts.list", "drafts.open", "drafts.save", "drafts.leave", "drafts.resumeSaved")
         private val FOCUSED_DRAFT_COMMANDS = setOf("drafts.openQuotedSource", "drafts.save", "drafts.leave", "drafts.reviewDocument",
             "drafts.dismissDocument", "drafts.createDocument")
@@ -77,7 +82,7 @@ internal class PocketWebAttachments(
     private data class Frame(val location: String, val files: List<JSONObject>,
         val libraryPdfResume: PocketWebOriginalFiles.LibraryPdfResume?, val displayedPdfPage: AttachmentPdfPageText?,
         val displayedWord:AttachmentWordExcerpt?, var workPdfShare: WorkPdfPin?, val workPdfText: WorkPdfPin?,
-        val workPdfCopy: WorkPdfPin?, val pendingGenericPdfExit: GenericPdfVisit?)
+        val workPdfCopy: WorkPdfPin?, val pendingGenericPdfExit: GenericPdfVisit?, val txtDraftReceipt:String?)
     private data class Review(val id: String, val location: String, val draft: JSONObject, val expires: Long)
     private data class ProcessingReview(val id: String, val value: NativeFileProcess.Review)
     private data class DraftLibraryVisit(val id: String, val current: () -> Boolean)
@@ -101,6 +106,11 @@ internal class PocketWebAttachments(
     }
     // Set only by a freshly admitted explicit ordinary Library entry from the business bridge.
     private var globalDraftLibrary: DraftLibraryVisit? = null
+    private data class TxtDraftLanding(val window:Window,val library:DraftLibraryVisit,val catalog:JSONObject,
+        val file:JSONObject,val receipt:String)
+    private val txtDraftMain=Handler(Looper.getMainLooper())
+    private var txtDraftOpening:RunControl?=null
+    private var txtDraftLanding:TxtDraftLanding?=null
     private data class QuotedDraft(val window: Window, val library: DraftLibraryVisit, val pin: Pin)
     private var quotedDraft: QuotedDraft? = null
     private data class RetiredSavedDraft(val library: String,val previousWindow: String,val editor: PocketWebStandaloneDocumentDrafts.WarmEditor)
@@ -330,6 +340,77 @@ internal class PocketWebAttachments(
         return file.takeIf { listed?.opt("sha256") == it.opt("sha256") && listed?.opt("role") == "source" &&
             listed?.opt("sourceKind") == "content_uri" && listed?.opt("availability") == "available" }
     }
+    /** Same ordinary live lease as the existing data-free draft entrance; no warm/post-SAF rebind. */
+    private fun txtDraftOffer(): PocketWebOriginalFiles.TxtDraftRead? {
+        val file=importedDraftFile()?:return null
+        val source=flow.state.originalFile?:return null
+        if(file.opt("mimeType")!="text/plain"||file.opt("name")!=source.name||
+            file.optLong("size",-1)!=source.sizeBytes||!source.name.endsWith(".txt",ignoreCase=true))return null
+        return viewer.importedTxtDraftRead(file,source)
+    }
+
+    private fun keepsTxtDraftLanding(landed:TxtDraftLanding):Boolean {
+        val state=flow.state
+        return txtDraftLanding===landed&&window===landed.window&&globalDraftLibrary===landed.library&&
+            state.snapshot===landed.catalog&&mayUseDraftLibrary()&&state.pendingDocumentTask==null
+    }
+
+    private fun openTxtDraft(frame:PocketWebStandaloneDocumentDrafts.Frame,receipt:String,done:(JSONObject?)->Unit){
+        val active=checkNotNull(window)
+        val lease=checkNotNull(globalDraftLibrary)
+        val catalog=checkNotNull(flow.state.snapshot)
+        val file=checkNotNull(importedDraftFile())
+        val marked=checkNotNull(frames[frame.frameId])
+        val read=checkNotNull(txtDraftOffer())
+        val adapter=drafts.value
+        fun current()=window===active&&active.id==frame.windowId&&globalDraftLibrary===lease&&
+            flow.state.snapshot===catalog&&flow.state.file===file&&frames[frame.frameId]===marked&&
+            marked.location==location(flow.state)&&keepsDraftLibraryVisit(lease.id)&&txtDraftOffer()===read&&
+            !adapter.showing()&&!adapter.retainingLinked()&&adapter.textSource()==null
+        check(receipt==read.receipt&&receipt==marked.txtDraftReceipt&&current()&&txtDraftOpening==null&&txtDraftLanding==null)
+        val control=RunControl()
+        txtDraftOpening=control
+        val context=controller.webPresentationActivity().applicationContext
+        try {
+            controller.runPluginCatalogWork(Runnable {
+                val verified=runCatching { AttachmentRepository.get(context).book.requireImportedTxtDraftRegistration(read.source,control) }.isSuccess
+                txtDraftMain.post {
+                    val now=txtDraftOpening===control
+                    if(now)txtDraftOpening=null
+                    val admitted=now&&verified&&!control.isCancelled&&current()
+                    control.cancel()
+                    if(!admitted){done(null);return@post}
+                    var entered=false
+                    val result=runCatching {
+                        flow.leaveImportedTxtForDraft(file,read.source,catalog,lease.id)
+                        entered=true
+                        frames.clear();viewer.clear()
+                        val landingFrame=snapshot(draftPresentation=true)
+                        check(globalDraftLibrary===lease&&window===active&&mayUseDraftLibrary())
+                        val blank=adapter.newDraft(PocketWebStandaloneDocumentDrafts.Frame(
+                            landingFrame.getString("windowId"),landingFrame.getString("frameId")))
+                        txtDraftLanding=TxtDraftLanding(active,lease,catalog,file,receipt)
+                        JSONObject().put("opened",true).put("receipt",receipt).put("library",lease.id)
+                            .put("windowId",active.id).put("editorHandle",blank.editorHandle).put("name",read.name)
+                            .put("blankName",blank.fields.name()).put("blankFormat",blank.fields.format().value)
+                            .put("blankFontPoints",blank.fields.fontPoints())
+                    }.getOrElse {
+                        if(entered&&window===active&&globalDraftLibrary===lease&&flow.state.snapshot===catalog&&flow.state.file==null){
+                            adapter.retire()
+                            txtDraftLanding=null
+                            flow.selectWebLibraryDetails(file);frames.clear()
+                        }
+                        null
+                    }
+                    done(result);changed()
+                }
+            })
+        } catch(_:Exception){
+            if(txtDraftOpening===control)txtDraftOpening=null
+            control.cancel();done(null)
+        }
+    }
+
     private fun retainsDraftText(seed: TextSeed): Boolean {
         val state = flow.state
         return when (seed) {
@@ -432,6 +513,7 @@ internal class PocketWebAttachments(
             frames[selected.frameId]?.location == location(flow.state) && linkedEditorSource() != null
     }
     private fun retireDraftLibrary(keepPresentation: Boolean = false) {
+        txtDraftOpening?.cancel();txtDraftOpening=null;txtDraftLanding=null
         val state = flow.state
         val visit = globalDraftLibrary
         val previous = window
@@ -706,8 +788,9 @@ internal class PocketWebAttachments(
         val workText = if (workPagePresentation && state.pdfPageText == null) workPdfText(state, sharePdf) else null
         val pairedWorkText = workPagePresentation && workPagePaired && workPdfText(state)?.page == state.pdfPageText
         val pendingPdfExit = genericPdfVisit?.takeIf { source==null && keepsGenericPdf(it,state) }
+        val txtDraft=if(draftPresentation)txtDraftOffer() else null
         frames[frameId] = Frame(location(state), files, libraryPdfResume, displayedPdfPage,word,sharePdf,workText,
-            sharePdf.takeIf { workPagePresentation },pendingPdfExit)
+            sharePdf.takeIf { workPagePresentation },pendingPdfExit,txtDraft?.receipt)
         val copyViewport = if (workPagePresentation) confirmedWorkPdfCopy(state, sharePdf) else null
         while (frames.size > 16) frames.remove(frames.keys.first())
         if (drafts.isInitialized()) drafts.value.textSource()?.let { attempted ->
@@ -762,6 +845,9 @@ internal class PocketWebAttachments(
             } else null)
             .put("generatedDraftReturn", sourceDraftReturn)
             .put("markdownDraft", draftTextIndicator(markdown)).put("pdfPageDraft", draftTextIndicator(pdfDraft))
+            .put("txtDraftOffer",txtDraft?.let { JSONObject().put("receipt",it.receipt).put("viewerId",it.viewerId)
+                .put("library",globalDraftLibrary?.id) })
+            .put("txtDraftLanding",if(draftPresentation)txtDraftLanding?.takeIf(::keepsTxtDraftLanding)?.receipt else null)
             // This ordinary state projection may match a retained Web pane, never a draft command or handle.
             .put("standaloneDraftLibraryVisit", flow.state.globalStandaloneDraftVisit?.takeIf {
                 draftPresentation && ordinaryDraftLibrarySurface(state.focusedStandaloneDraft)
@@ -1281,6 +1367,23 @@ internal class PocketWebAttachments(
             // A live draft shelf may edit a different storage record, never resume or replace the pending generation.
             check(flow.state.pendingDocumentTask == null || command in DRAFTS_WHILE_DOCUMENT_PENDING)
             check(warmDraftCheck == null || command == "drafts.leave")
+            if(command=="drafts.newFromTxt"){
+                exact("receipt");openTxtDraft(frame,text("receipt"),::reply);return
+            }
+            if(command=="drafts.exitTxtEditor"){
+                exact("receipt","close")
+                val close=args.opt("close") as? Boolean?:error("原草稿退出方式无效")
+                val landed=txtDraftLanding?.takeIf { it.receipt==text("receipt")&&keepsTxtDraftLanding(it) }
+                    ?:error("原 TXT 窗口已变化")
+                check(currentDraftFrame(frame)&&landed.window.id==frame.windowId)
+                drafts.value.leave(frame)
+                txtDraftLanding=null
+                if(close){clear();if(flow.state.open)flow.close()}
+                else {flow.selectWebLibraryDetails(landed.file);frames.clear()}
+                reply(JSONObject().put("left",true).put("closed",close).put("receipt",landed.receipt).put("windowId",landed.window.id)
+                    .put("fileId",landed.file.getString("id")).put("sha256",landed.file.getString("sha256")))
+                changed();return
+            }
             if (command == "drafts.resumeSaved") {
                 exact("resumeKey")
                 val active = window ?: error("原文件库窗口已离开")
@@ -1533,6 +1636,7 @@ internal class PocketWebAttachments(
                                     // Volatile navigation only; never persist a draft address in Book, tasks or generator input.
                                     if (active != null && library != null && window === active && keepsDraftLibraryVisit(library))
                                         generatedDraftReturn = GeneratedDraftReturn(active, library, action, draft.identity, input.pin)
+                                    txtDraftLanding=null
                                     adapter.retire() // No saved-draft handles survive the move to the result inside this Library.
                                     JSONObject().put("started", true)
                                 }
@@ -1541,7 +1645,7 @@ internal class PocketWebAttachments(
                         reply(result)
                     }
                 }
-                "drafts.leave" -> { exact(); adapter.leave(frame); warmDraftCheck = null; reply(JSONObject().put("left", true)) }
+                "drafts.leave" -> { exact(); adapter.leave(frame); warmDraftCheck = null; txtDraftLanding=null; reply(JSONObject().put("left", true)) }
                 else -> error("未知的本机文档草稿操作")
             }
         } catch (_: Exception) { done(null, unavailable) }

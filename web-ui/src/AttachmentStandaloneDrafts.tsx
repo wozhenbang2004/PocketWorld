@@ -5,7 +5,7 @@ import {fileObject as obj,type FileJson as Json} from './attachment-workspace';
 import {registerOverlayBack} from './overlay-back';
 
 type Fields={format:'docx'|'pdf';name:string;title:string;body:string;fontPoints:number};
-type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string;warmResumeKey?:string};
+type Editor={handle:string;version?:string;original:Fields;input:Fields;uncertain?:'first'|'update';sourceName?:string;warmResumeKey?:string;fromTxt?:true};
 type Row={rowHandle:string;name:string;format:Fields['format'];savedAt:number;linkedRevision?:true;justCopiedMarkdown?:true;justCopiedPdfPage?:true};
 type OutputChoice={editorHandle:string;versionHandle:string;format:Fields['format']};
 type GenerationReview={id:string;editorHandle:string;versionHandle:string;fileName:string;format:Fields['format']};
@@ -33,6 +33,13 @@ function acknowledgedBlank(value:Json|undefined):Editor|undefined{
  return {handle,original:input,input};
 }
 
+function acknowledgedTxt(value:Json|undefined,txt:{name:string;body:string}):Editor|undefined{
+ const blank=acknowledgedBlank(value);
+ if(!blank||!txt.name.trim()||!txt.body.trim()||txt.body.length>12000)return;
+ const input=fields({...blank.input,name:txt.name,body:txt.body});
+ return input?{...blank,input,fromTxt:true}:undefined;
+}
+
 function acknowledgedResume(value:Json|undefined):Editor|undefined{
  if(value?.returnedSource!==true||value.status!=='VERIFIED'||!isHandle(value.editorHandle)||!isHandle(value.versionHandle))return;
  const input=fields(value.fields),sourceName=value.sourceName;
@@ -41,13 +48,14 @@ function acknowledgedResume(value:Json|undefined):Editor|undefined{
 }
 
 /** This editor owns only the current Web document's input. Native versions are opaque handles. */
-export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,fromMessage=false,
+export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,generationPending,initialBlank=false,initialResume=false,fromMessage=false,initialTxt,
  warmResumeKey,onWarmResume,invoke,registerExit,onExit}:{
  active:boolean;recoverable:boolean;loading:boolean;initial?:Json;generationPending:boolean;initialBlank?:boolean;initialResume?:boolean;fromMessage?:boolean;
+ initialTxt?:{name:string;body:string};
  warmResumeKey?:string;onWarmResume:(key:string)=>Promise<Json>;invoke:Invoke;
  registerExit:(handle:((close:boolean)=>void)|null)=>void;onExit:(close:boolean)=>Promise<void>;
 }){
- const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor|undefined>(()=>!active?undefined:initialBlank?acknowledgedBlank(initial):initialResume?acknowledgedResume(initial):undefined);
+ const [catalog,setCatalog]=useState<Json|null>(),[editor,setEditor]=useState<Editor|undefined>(()=>!active?undefined:initialTxt?acknowledgedTxt(initial,initialTxt):initialBlank?acknowledgedBlank(initial):initialResume?acknowledgedResume(initial):undefined);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const [exit,setExit]=useState<{close:boolean}>();
  const [outputChoice,setOutputChoice]=useState<OutputChoice>();
@@ -59,10 +67,10 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
  current.current=active;currentEditor.current=editor;
  const dirty=!!editor&&JSON.stringify(editor.input)!==JSON.stringify(editor.original);
  // A reopened saved draft brought native text into the page; never reveal that body after revocation.
- const typed=(!active&&recoverable&&!busy&&editor&&!editor.version&&!editor.uncertain&&editor.original.title===''&&editor.original.body===''&&
+ const typed=(!active&&recoverable&&!busy&&editor&&!editor.fromTxt&&!editor.version&&!editor.uncertain&&editor.original.title===''&&editor.original.body===''&&
   (editor.input.name!==editor.original.name||!!editor.input.title||!!editor.input.body))?editor.input:undefined;
  const canWarmResume=!active&&recoverable&&!warming&&!busy&&!exit&&dirty&&editor?.version!=null&&
-  !editor.sourceName&&!editor.uncertain&&!generation&&!removal&&writeAttempt.current!==editor.handle&&
+  !editor.sourceName&&!editor.fromTxt&&!editor.uncertain&&!generation&&!removal&&writeAttempt.current!==editor.handle&&
   isHandle(warmResumeKey)&&editor.warmResumeKey===warmResumeKey;
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  useLayoutEffect(()=>{
@@ -98,7 +106,7 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
  },[exit,active,review,removalReview]);
  useEffect(()=>{if(!active){
   setReview(undefined);setAck(false);setRemovalReview(undefined);setUnavailable(undefined);
-  setEditor(value=>value?.sourceName?undefined:value);
+  setEditor(value=>value?.sourceName||value?.fromTxt?undefined:value);
  }},[active]);
  const sourceUnavailable=(selection:RemovalReview)=>{
   focusList.current=true;setEditor(undefined);setUnavailable(selection);setGeneration(undefined);setReview(undefined);setAck(false);setNotice('');
@@ -178,8 +186,8 @@ export function AttachmentStandaloneDrafts({active,recoverable,loading,initial,g
   if(!input){setError('草稿文字超出可保留范围。');return}
   setEditor(value=>value?{...value,input}:value);setNotice('');setError('');
  };
- const shown=catalog===undefined?(initialBlank||initialResume?undefined:initial):catalog??undefined,rows=rowList(shown);
- const blankUnconfirmed=initialBlank&&!editor&&catalog===undefined,resumeUnconfirmed=initialResume&&!editor&&catalog===undefined;
+ const shown=catalog===undefined?(initialBlank||initialResume||initialTxt?undefined:initial):catalog??undefined,rows=rowList(shown);
+ const blankUnconfirmed=(initialBlank||!!initialTxt)&&!editor&&catalog===undefined,resumeUnconfirmed=initialResume&&!editor&&catalog===undefined;
  const retry=()=>perform(async()=>{if(active){const value=await invoke('drafts.list');if(mounted.current&&current.current)setCatalog(value)}});
  const editable=active&&!warming&&!busy&&!exit&&!review&&!editor?.uncertain&&!generation&&!removalReview&&!removal;
  const canReviewGeneration=!generationPending&&!!editor?.version&&!dirty&&!!editor.original.name.trim()&&!!editor.original.body.trim();

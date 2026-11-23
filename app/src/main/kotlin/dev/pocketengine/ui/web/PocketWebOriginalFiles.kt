@@ -68,6 +68,9 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
     }
     /** Only a fresh, explicit native Library-details visit can supply this raster-only identity. */
     data class GenericLibraryPdf(val fileId: String, val sha256: String)
+    /** Identity only for the original decoder receipt; never accepts a Web-supplied body. */
+    class TxtDraftRead(val receipt:String,val viewerId:String,val source:OwnerFilePreviewSource,
+        val name:String,internal val decoded:JSONObject)
     /** This is an input from the native reader, not a Web-supplied body or an output lineage. */
     class MarkdownDraftSeed(val viewerId: String, val source: OwnerFilePreviewSource, val fields: Fields,
         internal val decoded: JSONObject)
@@ -84,6 +87,7 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         @Volatile var pdfRaster: PdfRaster? = null
         var information: JSONObject? = null
         var markdownDraft: MarkdownDraftSeed? = null
+        var txtDraft: TxtDraftRead? = null
         var busy = false
     }
     private class PdfRaster(val page: Int, val pages: Int, val searchAvailable: Boolean) {
@@ -192,6 +196,28 @@ internal class PocketWebOriginalFiles(private val context: Context, private val 
         val pin = primary ?: return false
         return file != null && !pin.sourceUnavailable && !pin.lifetime.isCancelled && !pin.source.tombstone &&
             pin.fileId.isNotBlank() && pin.fileId == file.optString("id") && pin.source.sha256 == file.optString("sha256")
+    }
+    fun importedTxtDraftRead(file:JSONObject?,source:OwnerFilePreviewSource?):TxtDraftRead? {
+        val pin=primary?:return null
+        if(pin.kind!="text"||pin.busy||pin.error!=null||pin.source!==source||!matchesOriginal(file)||
+            pin.source.mimeType!="text/plain"||!pin.source.name.endsWith(".txt",ignoreCase=true))return null
+        val decoded=pin.information?:return null
+        return runCatching {
+            requireCurrent(pin)
+            pin.txtDraft?.takeIf { it.decoded===decoded }?.let { return@runCatching it }
+            val body=decoded.opt("content") as? String?:return@runCatching null
+            check(decoded.opt("encoding")=="UTF-8"&&decoded.opt("offset")==0&&decoded.opt("atEnd")==true&&
+                decoded.opt("nextOffset")===JSONObject.NULL&&decoded.opt("decodedCharacters")==body.length&&
+                decoded.opt("originalBytesChanged")==false&&decoded.opt("sourceIdentity")==pin.source.identity&&
+                decoded.opt("sha256")==pin.source.sha256&&body.length<=12_000&&body.isNotBlank())
+            val meta=pin.source.metadata();val origin=meta.getJSONObject("source")
+            check(meta.opt("id")==pin.fileId&&meta.opt("principalId")=="owner"&&meta.opt("spaceId")=="private"&&
+                !meta.optBoolean("outputSourceRetired")&&!meta.has("groupSource")&&origin.opt("kind")=="content_uri"&&
+                origin.length()==2&&origin.opt("persistentReadPermission") is Boolean)
+            val name=pin.source.name.substringBeforeLast('.').trim().take(72).trimEnd{Character.isHighSurrogate(it)}.ifBlank{"文本草稿"}
+            Fields(Format.WORD,name,"",body,12) // Same bounded input validation as the existing draft editor.
+            TxtDraftRead(UUID.randomUUID().toString(),pin.id,pin.source,name,decoded).also { pin.txtDraft=it }
+        }.getOrNull()
     }
     fun retainsMarkdownSource(seed: MarkdownDraftSeed): Boolean = primary?.let { pin ->
         pin.id == seed.viewerId && pin.source === seed.source && !pin.sourceUnavailable &&

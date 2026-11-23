@@ -900,14 +900,14 @@ public final class TaskStore {
     }
 
     /** Native ordinary History selection. The immutable publication is still needs_confirmation. */
-    public record ConfirmedHistoryWordSource(String conversation,String message,long revision,String fingerprint,long endedAt,
-                                             OwnerWorkDeliveryRef delivery) { }
-    public record ConfirmedHistoryWord(ConfirmedHistoryWordSource source,long resultRevision,String reviewDigest,
-                                       OriginalReplyDocument file) { }
-    /** Inspect this one committed producer, its exact native verdict and a bounded document receipt.
-     * The result is describe/select-only; it does not open a file or grant any model/tool action. */
-    public synchronized ConfirmedHistoryWord confirmedHistoryWord(ConfirmedHistoryWordSource source,
-            ConfirmedHistoryWord expected,RunControl read)throws Exception{
+    public record ConfirmedHistoryDocumentSource(String conversation,String message,long revision,String fingerprint,long endedAt,
+                                                 OwnerWorkDeliveryRef delivery) { }
+    public record ConfirmedHistoryDocument(ConfirmedHistoryDocumentSource source,long resultRevision,String reviewDigest,
+                                           OriginalReplyDocument file) { }
+    /** Inspect one committed producer and its exact verdict. At most one fixed PDF and one Word
+     * can be offered. Rechecking a choice reads only its exact operation receipt. */
+    public synchronized List<ConfirmedHistoryDocument> confirmedHistoryDocuments(ConfirmedHistoryDocumentSource source,
+            ConfirmedHistoryDocument expected,RunControl read)throws Exception{
         if(source==null||read==null||read.hasHostRun()||db.inTransaction()||conversationRepository==null||
                 !OriginalReplyDocument.uuid(source.conversation())||!OriginalReplyDocument.uuid(source.message())||
                 source.revision()<1||source.endedAt()<1||source.fingerprint()==null||
@@ -930,7 +930,7 @@ public final class TaskStore {
                 throw new SecurityException("原工作未验收或已变化");
             for(String key:List.of("origin","parentTaskId","teamRunId","teamAssignment","memberId","developmentContext",
                     "ownerPhoneControl","ownerDeviceWork","workProfileRef","workProfileIntent","projectMemoryRead","teamWriteScope"))
-                if(!work.isNull(key))throw new SecurityException("只可选取普通私人工作的原 Word");
+                if(!work.isNull(key))throw new SecurityException("只可选取普通私人工作的原文档");
             JSONArray children=work.optJSONArray("relatedTasks");
             if(children!=null&&children.length()>0)throw new SecurityException("有关联工作的文件请回原工作核对");
 
@@ -966,36 +966,45 @@ public final class TaskStore {
                     ref.deliveryId(),saved.getString("resultDigest"),saved.getString("generation"),source.fingerprint(),
                     "needs_confirmation",source.endedAt());
             read.checkpoint();
-            OriginalReplyDocument file;
-            if(expected==null)file=singleConfirmedHistoryWord(ref,read);
+            List<OriginalReplyDocument> files;
+            if(expected==null)files=uniqueConfirmedHistoryDocuments(ref,read);
             else{
                 OriginalReplyDocument held=expected.file();
-                file=held==null?null:originalReplyDocumentReceipt(task,run,held.operationId());
-                if(file==null||!file.equals(held))throw new SecurityException("原 Word 生成回执已变化");
+                OriginalReplyDocument file=held==null?null:originalReplyDocumentReceipt(task,run,held.operationId());
+                if(file==null||!file.equals(held)||!file.publication(task,run))
+                    throw new SecurityException("原文档生成回执已变化");
+                files=List.of(file);
             }
-            if(file==null||!file.mimeType().equals("application/vnd.openxmlformats-officedocument.wordprocessingml.document")||
-                    !file.publication(task,run))throw new SecurityException("未核对到这轮唯一的原 Word");
-            read.checkpoint();db.setTransactionSuccessful();return new ConfirmedHistoryWord(source,revision,review,file);
+            List<ConfirmedHistoryDocument> receipts=new ArrayList<>(files.size());
+            for(var file:files)receipts.add(new ConfirmedHistoryDocument(source,revision,review,file));
+            read.checkpoint();db.setTransactionSuccessful();return List.copyOf(receipts);
         }finally{db.endTransaction();}
     }
 
-    private OriginalReplyDocument singleConfirmedHistoryWord(OwnerWorkDeliveryRef ref,RunControl read)throws Exception{
-        OriginalReplyDocument chosen=null;int inspected=0;
+    private List<OriginalReplyDocument> uniqueConfirmedHistoryDocuments(OwnerWorkDeliveryRef ref,RunControl read)throws Exception{
+        OriginalReplyDocument word=null,pdf=null;int words=0,pdfs=0,inspected=0;
         try(Cursor rows=db.rawQuery("SELECT operation_id,CASE WHEN length(CAST(receipt AS BLOB))<=32768 THEN receipt END FROM operations "+
                 "WHERE task_id=? AND run_id=? AND state='receipt' AND tool=? ORDER BY created_at DESC,operation_id DESC LIMIT 9",
                 new String[]{ref.taskId(),ref.runId(),OriginalReplyDocument.TOOL})){
             while(rows.moveToNext()){
                 read.checkpoint();
-                if(inspected++>=8||rows.isNull(1))throw new SecurityException("原 Word 生成清单未完整核对");
+                if(inspected++>=8||rows.isNull(1))throw new SecurityException("原文档生成清单未完整核对");
                 OriginalReplyDocument candidate=OriginalReplyDocument.fromReceipt(new JSONObject(rows.getString(1)));
                 if(candidate==null||!rows.getString(0).equals(candidate.operationId())||
                         !candidate.publication(ref.taskId(),ref.runId()))throw new SecurityException("原文档生成回执尚未核对");
-                if(!candidate.mimeType().equals("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))continue;
-                if(chosen!=null)throw new SecurityException("这轮有多份原 Word，请从原工作选择具体文件");
-                chosen=candidate;
+                switch(candidate.mimeType()){
+                    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> {word=candidate;words++;}
+                    case "application/pdf" -> {pdf=candidate;pdfs++;}
+                    default -> throw new SecurityException("不在原文档附件的类型范围");
+                }
             }
         }
-        return chosen;
+        if(words==1&&pdfs==1){
+            List<OriginalReplyDocument> pair=List.of(word,pdf);
+            if(!OriginalReplyDocument.exactPair(pair))throw new SecurityException("两份原文档的固定身份未能分别核对");
+            return pair;
+        }
+        return words==1?List.of(word):pdfs==1?List.of(pdf):List.of();
     }
 
     private static String originalReplyDocumentInput(JSONObject task,JSONObject input){

@@ -68,7 +68,7 @@ import RemoteInboxWorkspace,{type NotificationViewMemory} from './RemoteInboxWor
 import type {TeamAttentionLocator} from './NotificationTeamAttention';
 import {ConversationOrganization,orderConversations} from './ConversationOrganization';
 import {ConversationQueuedInputs} from './ConversationQueuedInputs';
-import {ConversationHistoryWindow,type ConfirmedHistoryWordTarget,type ConversationHistoryTaskOrigin,type HistoricalReplyFileOpen,type HistoryResultOrigin} from './ConversationHistoryWindow';
+import {ConversationHistoryWindow,type ConfirmedHistoryDocumentTarget,type ConversationHistoryTaskOrigin,type HistoricalReplyFileOpen,type HistoryResultOrigin} from './ConversationHistoryWindow';
 import {MessageAttachment,type MessageAttachmentSource} from './MessageAttachment';
 import {ChatNavigationMenu} from './ChatNavigationMenu';
 import {ConversationDeliveredFiles,replyDocumentFileLabel,type DeliveredFileSource,type DeliveredReplyDocumentFile,type DeliveredReplyDocumentSource,type DeliveredWorkFileSource} from './ConversationDeliveredFiles';
@@ -395,7 +395,7 @@ type SavedAttachmentMessage={id:string;revision:number;resume:number;taskRequest
  historyResult?:LiveResultAttachment&{sourceGeneration:number}};
 type FileAttachmentPickerOrigin={file:OriginalAttachmentChoice;draft:FileDraftTarget;requestId:string;documentEpoch:number;navigation:number;sourceMessage?:SavedAttachmentMessage;ordinaryNewDraftVisit?:{route:string;resume:number};workResultCurrent?:()=>boolean};
 type FileAttachmentPickerLaunch={requestId:string;cancelled:boolean;settled:boolean;reopening?:boolean};
-type ConfirmedHistoryWordVisit={id:string;document:number;navigation:number;requestId?:string;cancelled:boolean;checking?:boolean;retiring?:Promise<boolean>};
+type ConfirmedHistoryDocumentVisit={id:string;document:number;navigation:number;requestId?:string;cancelled:boolean;checking?:boolean;retiring?:Promise<boolean>};
 type OrdinaryAttachmentPickerScope=Omit<FileAttachmentPickerOrigin,'file'|'requestId'|'sourceMessage'|'ordinaryNewDraftVisit'|'workResultCurrent'>&{resume:number;launch:FileAttachmentPickerLaunch};
 type ReopenedAttachmentPicker=OrdinaryAttachmentPickerScope&{requestId:string};
 type ProjectTaskReturn={projectId:string;taskId:string;checkoutId?:string;query?:string;entry:ProjectWorkEntry;focusOutcome:boolean;expected?:Pick<WorkIdentity,'runId'|'epoch'>;focusShelf?:()=>boolean;returning?:true;sourcePackageRun?:{runId:string;epoch:number};vitePreview?:ProjectVitePreviewArrival};
@@ -1492,8 +1492,8 @@ export default function App(){
  const registerMainPhoneRead=useCallback((handler:((visit:MainPhoneReadVisit)=>boolean)|null)=>{mainPhoneReadOpen.current=handler},[]);
  const attachmentBack=useRef<(()=>boolean)|null>(null);
  const savedChatPdfVisit=useRef<SavedChatPdfVisit['current']>(null);
- const confirmedHistoryWordVisit=useRef<ConfirmedHistoryWordVisit|null>(null);
- const [confirmedHistoryWordReady,setConfirmedHistoryWordReady]=useState('');
+ const confirmedHistoryDocumentVisit=useRef<ConfirmedHistoryDocumentVisit|null>(null);
+ const [confirmedHistoryDocumentReady,setConfirmedHistoryDocumentReady]=useState('');
  const retainedSpanSendVisit=useRef<{id:string}|null>(null);
  const beginRetainedSpanSendVisit=()=>{
   const visit={id:crypto.randomUUID()};
@@ -2136,14 +2136,14 @@ export default function App(){
      taskId===origin.taskId&&projectTaskReturn.current===origin)void closeTask(true);
  };
  const changeNavigation=useCallback((open:boolean)=>{setWorkOpen(open);if(!open)setCommandOpen(false)},[]);
- const retireConfirmedHistoryWord=useCallback(async()=>{
-  const visit=confirmedHistoryWordVisit.current;if(!visit)return true;
+ const retireConfirmedHistoryDocument=useCallback(async()=>{
+  const visit=confirmedHistoryDocumentVisit.current;if(!visit)return true;
   if(visit.retiring)return visit.retiring;
-  visit.cancelled=true;setConfirmedHistoryWordReady(current=>current===visit.id?'':current);
-  const current=()=>confirmedHistoryWordVisit.current===visit&&bridge.getDocumentEpoch()===visit.document;
+  visit.cancelled=true;setConfirmedHistoryDocumentReady(current=>current===visit.id?'':current);
+  const current=()=>confirmedHistoryDocumentVisit.current===visit&&bridge.getDocumentEpoch()===visit.document;
   visit.retiring=(async()=>{
    try{
-    if(bridge.getDocumentEpoch()!==visit.document){confirmedHistoryWordVisit.current=null;return true;}
+    if(bridge.getDocumentEpoch()!==visit.document){confirmedHistoryDocumentVisit.current=null;return true;}
     const result=await bridge.command('attachments.closePicker',{confirmedHistoryVisit:visit.id});
     if(!current()||result?.retired!==true||result.visitId!==visit.id)return false;
     const closed=()=>obj(bridge.getState().state.originalReplyAttachmentPicker).confirmedHistoryVisit!==visit.id;
@@ -2155,7 +2155,7 @@ export default function App(){
      off=bridge.subscribe(check);check();
     }))return false;
     if(!current()||!closed())return false;
-    confirmedHistoryWordVisit.current=null;return true;
+    confirmedHistoryDocumentVisit.current=null;return true;
    }catch{return false}
    finally{visit.retiring=undefined}
   })();
@@ -2325,17 +2325,17 @@ export default function App(){
     if(chatDefaultPresets.current||savedChatPdfVisit.current||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==documentEpoch||
        document.hidden||options?.stillCurrent&&!options.stillCurrent())return false;
    }
-   if(confirmedHistoryWordVisit.current){
+   if(confirmedHistoryDocumentVisit.current){
     const navigation=navigationWindow.current,epoch=bridge.getDocumentEpoch();
-    if(!await retireConfirmedHistoryWord()){
+    if(!await retireConfirmedHistoryDocument()){
      if(navigationWindow.current===navigation&&bridge.getDocumentEpoch()===epoch&&!document.hidden)
       setLocalError('原 Word 附件选择尚未确认关闭。');
      return false;
     }
-    if(confirmedHistoryWordVisit.current||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==epoch||
+    if(confirmedHistoryDocumentVisit.current||navigationWindow.current!==navigation||bridge.getDocumentEpoch()!==epoch||
        document.hidden||options?.stillCurrent&&!options.stillCurrent())return false;
    }
-   if(savedChatPdfVisit.current||chatDefaultPresets.current||confirmedHistoryWordVisit.current)return false;
+   if(savedChatPdfVisit.current||chatDefaultPresets.current||confirmedHistoryDocumentVisit.current)return false;
    const spanVisit=retainedSpanSendVisit.current;
    if(spanVisit){
     const navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch();
@@ -2344,7 +2344,7 @@ export default function App(){
     if(!current())return false;
     try{
      const reply=await bridge.command<{visitId?:string;retired?:boolean}>('composer.retireRetainedSpanSend',{visitId:spanVisit.id});
-     if(!current()||reply?.retired!==true||reply.visitId!==spanVisit.id||chatDefaultPresets.current||savedChatPdfVisit.current||confirmedHistoryWordVisit.current||
+     if(!current()||reply?.retired!==true||reply.visitId!==spanVisit.id||chatDefaultPresets.current||savedChatPdfVisit.current||confirmedHistoryDocumentVisit.current||
         options?.stillCurrent&&!options.stillCurrent())return false;
      retainedSpanSendVisit.current=null;
     }catch{
@@ -2364,7 +2364,7 @@ export default function App(){
    if(profileBeforeLeave.current?.(()=>{void commit()}))return Promise.resolve(false);
   }
   return commit();
- },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation,retireConfirmedHistoryWord,publishModelWorkArrival,retireProjectModelReturn]);
+ },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation,retireConfirmedHistoryDocument,publishModelWorkArrival,retireProjectModelReturn]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
  const captureChatDefaultPresets=(requireDefaults=true,fromMemorySheet=true):ChatDefaultOrigin|null=>{
   if(!isChatSurface||intent!=='chat'||conversationMemoryOpen!==fromMemorySheet||taskOpen||taskOpening||workOpen||commandOpen||
@@ -6225,14 +6225,27 @@ export default function App(){
    }
   }
  };
- // The native single choice is not an attachments.list result and must not reveal the
+ // These native exact choices are not an attachments.list result and must not reveal the
  // general catalogue, even briefly, if its exact projection has become unusable.
+ const confirmedHistoryFileRows=(picker:Json):Json[]=>{
+  const rows=picker.files;
+  if(!Array.isArray(rows)||rows.length<1||rows.length>2||!rows.every(row=>row&&exactFileTarget(row)&&
+     (row.mimeType==='application/pdf'||row.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document')&&
+     typeof row.name==='string'&&!!row.name&&Number.isSafeInteger(row.size)&&row.size>0)||
+     new Set(rows.map(row=>row.id)).size!==rows.length||new Set(rows.map(row=>row.mimeType)).size!==rows.length)return [];
+  return rows;
+ };
  const hasReplyAttachmentPicker=state.originalReplyAttachmentPicker!=null;
  const replyAttachmentPicker=obj(state.originalReplyAttachmentPicker),replyAttachmentRow=obj(replyAttachmentPicker.file);
  const replyAttachmentTarget=exactFileTarget(replyAttachmentRow);
  const confirmedHistoryPickerId=typeof replyAttachmentPicker.confirmedHistoryVisit==='string'?replyAttachmentPicker.confirmedHistoryVisit:'';
- const replyAttachmentVisible=hasReplyAttachmentPicker&&!!replyAttachmentTarget&&typeof replyAttachmentPicker.requestId==='string'&&
-  (!confirmedHistoryPickerId||confirmedHistoryWordReady===confirmedHistoryPickerId&&!state.conversationReader)&&
+ const historyAttachmentRows=confirmedHistoryPickerId?confirmedHistoryFileRows(replyAttachmentPicker):[];
+ const historyAttachmentVisit=confirmedHistoryDocumentVisit.current;
+ const replyAttachmentVisible=hasReplyAttachmentPicker&&typeof replyAttachmentPicker.requestId==='string'&&
+  (confirmedHistoryPickerId?historyAttachmentRows.length>0&&confirmedHistoryDocumentReady===confirmedHistoryPickerId&&
+    historyAttachmentVisit?.id===confirmedHistoryPickerId&&!historyAttachmentVisit.cancelled&&!document.hidden&&
+    historyAttachmentVisit.requestId===replyAttachmentPicker.requestId&&historyAttachmentVisit.document===bridge.getDocumentEpoch()&&
+    historyAttachmentVisit.navigation===navigationWindow.current&&!state.conversationReader:!!replyAttachmentTarget)&&
   state.chatAttachmentPickerRequest===replyAttachmentPicker.requestId&&route==='chat'&&intent==='chat'&&!draftSwitching&&!taskOpen&&
   composer.ready===true&&composer.key===replyAttachmentPicker.draftKey&&composer.epoch===replyAttachmentPicker.draftEpoch&&
   composer.key===`conversation:${state.conversationId}`;
@@ -6245,65 +6258,66 @@ export default function App(){
  };
  // A cold task may not be in the recent summary. This is only presentation;
  // even a visible completed row must pass native actual-result acceptance.
- const checkableConfirmedHistoryWord=(result:TaskResult)=>{
+ const checkableConfirmedHistoryDocument=(result:TaskResult)=>{
   const rows=asArray<Task>(bridge.getState().state.tasks).filter(row=>row.id===result.taskId);
   return rows.length===0||rows.length===1&&rows[0].status==='completed'&&rows[0].raw?.runId===result.runId&&rows[0].raw?.coordinatorEpoch===result.epoch;
  };
- const openConfirmedHistoryWord=async(source:ConfirmedHistoryWordTarget)=>{
+ const openConfirmedHistoryDocument=async(source:ConfirmedHistoryDocumentTarget)=>{
   const native=bridge.getState(),owner=native.state,input=native.composer,reader=obj(owner.conversationReader),phone=obj(native.phoneDraft),view=obj(native.view);
   const revision=input?.revision,navigation=navigationWindow.current,documentEpoch=bridge.getDocumentEpoch(),resume=view.resumeRevision;
-  const unavailable='原历史、草稿或已验收的 Word 暂不可核对，没有加入附件。';
+  const unavailable='原历史、草稿或已验收的原文档暂不可核对，没有加入附件。';
   if(!input||route!=='chat'||intent!=='chat'||taskOpen||taskOpening||pendingHere||draftSwitchPending()||document.hidden||
-     navigation!==navigationRevision||confirmedHistoryWordVisit.current||owner.attachmentWorkspace?.open!==false||
+     navigation!==navigationRevision||confirmedHistoryDocumentVisit.current||owner.attachmentWorkspace?.open!==false||
      owner.chatAttachmentPickerOpen!==false||phone.phone!==false||phone.channelOrigin!==false||view.section!==null||view.taskId!==null||
      reader.window!==source.window||reader.conversation!==source.conversationId||reader.workRequest||reader.searchAnchor||reader.reminderSource||
      reader.originalReportMessageId!=null||reader.loading||reader.error||reader.limited||owner.conversationId!==source.conversationId||
      input.conversationId!==source.conversationId||input.key!==`conversation:${source.conversationId}`||input.ready!==true||
      !Number.isSafeInteger(resume)||!Number.isSafeInteger(revision)||revision!==ordinaryDraftRevision||
      !['attachments.openPicker','attachments.closePicker','attachments.toggle'].every(can))throw new Error(unavailable);
-  const visit:ConfirmedHistoryWordVisit={id:crypto.randomUUID(),document:documentEpoch,navigation,cancelled:false};
+  const visit:ConfirmedHistoryDocumentVisit={id:crypto.randomUUID(),document:documentEpoch,navigation,cancelled:false};
   const current=()=>{
    const live=bridge.getState(),draft=live.composer,shown=obj(live.view);
-   return confirmedHistoryWordVisit.current===visit&&!visit.cancelled&&!document.hidden&&navigationWindow.current===navigation&&
+   return confirmedHistoryDocumentVisit.current===visit&&!visit.cancelled&&!document.hidden&&navigationWindow.current===navigation&&
     bridge.getDocumentEpoch()===documentEpoch&&shown.resumeRevision===resume&&shown.section===null&&shown.taskId===null&&
     live.state.conversationId===source.conversationId&&!!draft&&draft.key===input.key&&draft.epoch===input.epoch&&draft.revision===revision;
   };
-  confirmedHistoryWordVisit.current=visit;
+  confirmedHistoryDocumentVisit.current=visit;
   try{
    const ack=await bridge.command('attachments.openPicker',{key:input.key,epoch:input.epoch,revision,
-    confirmedHistoryWord:{...source,visitId:visit.id}});
+    confirmedHistoryDocument:{...source,visitId:visit.id}});
    if(!current()||ack?.opened!==true||ack.visitId!==visit.id||typeof ack.requestId!=='string'||!ack.requestId)throw new Error(unavailable);
    const readback=()=>{
     const live=bridge.getState().state,picker=obj(live.originalReplyAttachmentPicker);
     if(live.conversationReader===null&&live.chatAttachmentPickerOpen===true&&live.chatAttachmentPickerRequest===ack.requestId&&
-       picker.requestId===ack.requestId&&picker.confirmedHistoryVisit===visit.id&&picker.draftKey===input.key&&picker.draftEpoch===input.epoch)return true;
+       picker.requestId===ack.requestId&&picker.confirmedHistoryVisit===visit.id&&picker.draftKey===input.key&&picker.draftEpoch===input.epoch&&
+       confirmedHistoryFileRows(picker).length>0)return true;
    };
    if(!await awaitPickerProjection(current,readback)||!current())throw new Error(unavailable);
-   visit.requestId=ack.requestId;chatHistoryReturn.current=null;setConfirmedHistoryWordReady(visit.id);
+   visit.requestId=ack.requestId;chatHistoryReturn.current=null;setConfirmedHistoryDocumentReady(visit.id);
   }catch(error){
-   if(confirmedHistoryWordVisit.current===visit&&!visit.cancelled)await retireConfirmedHistoryWord();
+   if(confirmedHistoryDocumentVisit.current===visit&&!visit.cancelled)await retireConfirmedHistoryDocument();
    if(navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&!document.hidden)throw error;
   }
  };
  useEffect(()=>{
-  const visit=confirmedHistoryWordVisit.current;
+  const visit=confirmedHistoryDocumentVisit.current;
   if(visit?.requestId&&!visit.retiring&&state.chatAttachmentPickerRequest!==visit.requestId&&
      obj(state.originalReplyAttachmentPicker).confirmedHistoryVisit!==visit.id){
-   confirmedHistoryWordVisit.current=null;
-   setConfirmedHistoryWordReady(current=>current===visit.id?'':current);
+   confirmedHistoryDocumentVisit.current=null;
+   setConfirmedHistoryDocumentReady(current=>current===visit.id?'':current);
   }
  },[state.chatAttachmentPickerRequest,state.originalReplyAttachmentPicker]);
- const confirmHistoryWordAttachment=async(id:string,sha256:string,returnOnly:boolean)=>{
-  const visit=confirmedHistoryWordVisit.current,requestId=visit?.requestId,initial=bridge.getState(),draft=initial.composer;
-  if(!visit||!requestId||visit.checking||visit.cancelled||visit.id!==confirmedHistoryWordReady||!draft||!replyAttachmentTarget||
-     id!==replyAttachmentTarget.fileId||sha256!==replyAttachmentTarget.sha256)return;
+ const confirmHistoryDocumentAttachment=async(id:string,sha256:string,returnOnly:boolean)=>{
+  const visit=confirmedHistoryDocumentVisit.current,requestId=visit?.requestId,initial=bridge.getState(),draft=initial.composer;
+  if(!visit||!requestId||visit.checking||visit.cancelled||visit.id!==confirmedHistoryDocumentReady||!draft||!replyAttachmentVisible||
+     !historyAttachmentRows.some(row=>row.id===id&&row.sha256===sha256))return;
   const {key,epoch,revision,conversationId}=draft;
   const sameDraft=()=>filePickerDraftCurrent({key,epoch,revision,conversationId,label:''},visit.document,visit.navigation)&&!visit.cancelled;
   const ownsPicker=()=>{
-   const live=bridge.getState().state,held=obj(live.originalReplyAttachmentPicker),file=obj(held.file);
-   return confirmedHistoryWordVisit.current===visit&&sameDraft()&&live.chatAttachmentPickerOpen===true&&
+   const live=bridge.getState().state,held=obj(live.originalReplyAttachmentPicker);
+   return confirmedHistoryDocumentVisit.current===visit&&sameDraft()&&live.chatAttachmentPickerOpen===true&&
     live.chatAttachmentPickerRequest===requestId&&held.requestId===requestId&&held.confirmedHistoryVisit===visit.id&&
-    held.draftKey===key&&held.draftEpoch===epoch&&file.id===id&&file.sha256===sha256;
+    held.draftKey===key&&held.draftEpoch===epoch&&confirmedHistoryFileRows(held).some(file=>file.id===id&&file.sha256===sha256);
   };
   const rows=()=>asArray<Json>(bridge.getState().state.selectedChatAttachments).filter(row=>row?.id===id);
   const hasFile=()=>{const selected=rows();return selected.length===1&&selected[0].sha256===sha256};
@@ -6328,11 +6342,11 @@ export default function App(){
    const closed=await bridge.command('attachments.closePicker',{pickerRequestId:requestId});
    if(closed?.accepted!==true||!await awaitPickerProjection(()=>ownsPicker()||returned(),()=>returned()?true:undefined)||!returned())
     throw new Error('返回原草稿尚未确认');
-   setLocalStatus(returnOnly?'这份 Word 已在原话题草稿。未发送。':'已加入原话题草稿，未发送。');
+   setLocalStatus(returnOnly?'这份原文档已在原话题草稿，未发送。':'已加入原话题草稿，未发送。');
   }catch{
    if(focusedResultReturn.current===returned)focusedResultReturn.current=null;
    if(sameDraft()){
-    const error=confirmed()?'原 Word 已在草稿，尚未确认返回。未发送。':'未确认加入原 Word。请核对原话题草稿，未发送。';
+    const error=confirmed()?'原文档已在草稿，尚未确认返回。未发送。':'未确认加入原文档。请核对原话题草稿，未发送。';
     if(ownsPicker())setFocusedResultFeedback({requestId,pending:false,error});else setLocalError(error);
    }
   }finally{
@@ -11927,9 +11941,9 @@ export default function App(){
    onOpenResultFiles={!workReportPage&&can('tasks.resultFiles')&&can('attachmentWorkspace.open')?openChatResult:undefined}
    onOpenHistoricalReplyFile={route==='chat'&&intent==='chat'&&!workReportPage&&!workRequestPage&&!searchHistoryPage&&!taskOpen&&
     can('conversation.reader.openOriginalReplyDocument')?openHistoricalReplyFile:undefined}
-   onChooseConfirmedWord={route==='chat'&&intent==='chat'&&!workReportPage&&!workRequestPage&&!searchHistoryPage&&!taskOpen&&
-    ['attachments.openPicker','attachments.closePicker','attachments.toggle'].every(can)?openConfirmedHistoryWord:undefined}
-   isCheckableConfirmedWord={checkableConfirmedHistoryWord}/>
+   onChooseConfirmedDocument={route==='chat'&&intent==='chat'&&!workReportPage&&!workRequestPage&&!searchHistoryPage&&!taskOpen&&
+    ['attachments.openPicker','attachments.closePicker','attachments.toggle'].every(can)?openConfirmedHistoryDocument:undefined}
+   isCheckableConfirmedDocument={checkableConfirmedHistoryDocument}/>
   <ConversationQueuedInputs page={state.queuedInputsPage||null} can={can} act={act} registerBack={registerQueuedInputsBack}/>
   {deliveredFileCurrent&&deliveredFileVisit&&<ConversationDeliveredFiles conversation={deliveredFileVisit.conversation}
    sources={deliveredFileVisit.sources} covered={!!deliveredFileCover} isCurrent={()=>deliveredFilesCurrent(deliveredFileVisit)}
@@ -12092,7 +12106,7 @@ export default function App(){
    configure={can('connections.enter')&&can('remote.saveProfile')?()=>void configureSavedHost():undefined}
    close={closeSavedHost} busy={savedHostBusy} error={savedHostError}/>
  <ComposerAttachmentPicker open={!!state.chatAttachmentPickerOpen&&!state.attachmentWorkspace?.open&&(hasReplyAttachmentPicker?replyAttachmentVisible:filePickerVisible||reopenedPickerVisible||!fileAttachmentPicker&&!fileAttachmentPickerLaunch.current)}
-   inventory={hasReplyAttachmentPicker?(replyAttachmentVisible?{attachments:[replyAttachmentRow]}:undefined):
+   inventory={hasReplyAttachmentPicker?(replyAttachmentVisible?{attachments:confirmedHistoryPickerId?historyAttachmentRows:[replyAttachmentRow]}:undefined):
     fileAttachmentPicker?(focusedInventoryReady?obj(state.moduleResults)['attachments.list']:undefined):reopenedPickerVisible?(reopenedInventoryReady?obj(state.moduleResults)['attachments.list']:undefined):
     ordinaryAttachmentList?(ordinaryAttachmentPhase==='ready'?ordinaryAttachmentInventory:undefined):state.features?.attachments}
    listPhase={!hasReplyAttachmentPicker&&!fileAttachmentPicker&&!reopenedPickerVisible?ordinaryAttachmentPhase:undefined}
@@ -12116,7 +12130,8 @@ export default function App(){
    }}
    onImport={!ordinaryAttachmentChanged&&!hasReplyAttachmentPicker&&!fileAttachmentPicker&&draftKey&&can('attachments.pick')?()=>run('attachments.pick',{key:draftKey,epoch:draftEpoch,
     ...(ordinaryAttachmentList&&!reopenedPickerVisible?{ordinaryListRequest:ordinaryAttachmentList}:{})}):undefined}
-   resultAction={confirmedHistoryPickerId&&replyAttachmentVisible?{confirm:confirmHistoryWordAttachment,
+   resultAction={confirmedHistoryPickerId&&replyAttachmentVisible?{confirm:confirmHistoryDocumentAttachment,
+    historyDraftLabel:currentConversation?.title||'原话题草稿',
     pending:!!(focusedResultFeedback&&focusedResultFeedback.requestId===replyAttachmentPicker.requestId&&focusedResultFeedback.pending),
     error:focusedResultFeedback&&focusedResultFeedback.requestId===replyAttachmentPicker.requestId?focusedResultFeedback.error:undefined}:
     !hasReplyAttachmentPicker&&focusedResultPicker&&filePickerVisible?{confirm:confirmFocusedResultAttachment,

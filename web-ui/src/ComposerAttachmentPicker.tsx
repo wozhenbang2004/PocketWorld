@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, CheckboxField, IconButton, TextField } from './forms-library';
 import { Drawer } from './shell-library';
 import { PressButton, ProgressBar } from './library';
@@ -45,12 +45,19 @@ type Props = {
   listPhase?: 'loading' | 'ready' | 'failed' | 'changed';
   onToggle?: (id: string, sha256: string, selected: boolean) => void;
   original?: {fileId:string;sha256:string;name:string;draftLabel:string};
-  resultAction?: {pending:boolean;error?:string;confirm:(id:string,sha256:string,returnOnly:boolean)=>void};
+  resultAction?: {pending:boolean;error?:string;historyDraftLabel?:string;confirm:(id:string,sha256:string,returnOnly:boolean)=>void};
 };
 
 /** Keep fit guidance with the original picker. Native send still verifies source, model and scope. */
 export function ComposerAttachmentPicker({ open, inventory, selected, inputModel, importing, pagingDenied, onReviewPagingRule, openingPagingRule, listPhase, onClose, onCloseAutoFocus, onImport, onToggle, original, resultAction }: Props) {
-  const catalog = fileObject(inventory), focused = !!original, changed = listPhase === 'changed';
+  const historyLabel = resultAction?.historyDraftLabel;
+  const history = historyLabel !== undefined;
+  const lastHistory = useRef(false);
+  useLayoutEffect(() => { if (open) lastHistory.current = history; }, [open, history]);
+  // Vaul retains its body during exit. Do not replace the narrow view with an ordinary
+  // inventory (or paint retired file metadata) before that animation finishes.
+  const closingHistory = !open && lastHistory.current;
+  const catalog = fileObject(inventory), focused = !!original || history || closingHistory, changed = listPhase === 'changed';
   const [query, setQuery] = useState('');
   const [pickError, setPickError] = useState('');
   const snapshot = bridge.getState(), input = snapshot.composer, picker = snapshot.state.chatAttachmentPickerRequest;
@@ -106,13 +113,14 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
         <div className="pw-drawer-handle"/>
         <header className="pw-drawer-header">
           <div>
-            <Drawer.Title>{original?'选作草稿附件':'选择附件'}</Drawer.Title>
+            <Drawer.Title>{focused?'选作草稿附件':'选择附件'}</Drawer.Title>
             <Drawer.Description id="pw-attachment-description">{changed ? '原输入已变化。' :
-              <>{original&&`「${original.draftLabel}」 · `}{!resultAction&&`已选 ${choices.length}/${maxSelections} · `}只加入草稿，不发送。</>}</Drawer.Description>
+              <>{!closingHistory&&(historyLabel||original?.draftLabel)&&`「${historyLabel||original?.draftLabel}」 · `}
+                {!resultAction&&!closingHistory&&`已选 ${choices.length}/${maxSelections} · `}只加入草稿，不发送。</>}</Drawer.Description>
           </div>
           <IconButton icon={IconClose} aria-label="关闭附件选择" disabled={resultAction?.pending} onClick={onClose}/>
         </header>
-        <div className="pw-drawer-body">
+        {!closingHistory&&<div className="pw-drawer-body">
           {resultAction?.error && <p className="pw-error" role="alert">{resultAction.error}</p>}
           {resultAction?.pending && <p className="pw-muted" role="status">正在核对原话题草稿…</p>}
           {!changed && (pickError ? <p className="pw-error" role="alert">{pickError}</p> : !focused && typeof snapshot.state.chatFilePickFeedback === 'string' &&
@@ -134,7 +142,7 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
                 aria-label={`从草稿移除「${name}」`} onClick={() => onToggle?.(target.fileId, target.sha256, false)}/>
             </span>)}
           </div>}
-          {!original && pagingDenied && !!onReviewPagingRule && files.some(file => fileUse(file, model).paged) &&
+          {!focused && pagingDenied && !!onReviewPagingRule && files.some(file => fileUse(file, model).paged) &&
             <div className="pw-form-actions"><Button variant="ghost" leadingIcon={IconShieldCheck}
               disabled={importing || openingPagingRule} onClick={onReviewPagingRule}>核对分段读取规则</Button></div>}
           <div className="pw-attachment-objects">
@@ -153,14 +161,18 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
               const blocked = !target || (!selectedHere && (!!chosen || !!reason || choices.length >= maxSelections ||
                 overPhotoBytes || newPhoto && photoSlotsFull));
               const checkboxDisabled = blocked || !onToggle;
+              const format = history ? (file.mimeType==='application/pdf'?'PDF':'Word') : '';
               const copy = <span className="pw-attachment-copy">
                 <b>{typeof file.name === 'string' && file.name ? file.name : '未命名附件'}</b>
-                {note ? <small>{note}</small> : typeof file.size === 'number' && <small>{fileBytes(file.size)}</small>}
+                {note ? <small>{format&&`${format} · `}{note}</small> :
+                  typeof file.size === 'number' && <small>{format&&`${format} · `}{fileBytes(file.size)}</small>}
                 {origin && <small>{origin}</small>}
               </span>;
               return <div className="pw-attachment-object" key={target ? `${target.fileId}:${target.sha256}` : index}>
                 {resultAction ? <>{copy}{selectedHere&&<small className="pw-muted">已在原话题草稿</small>}
-                  {rows.length===1&&target&&<PressButton label={selectedHere?'返回原话题草稿':'加入原话题草稿并返回'}
+                  {(rows.length===1||history&&rows.length===2)&&target&&<PressButton
+                    label={selectedHere?format?`返回原话题草稿（已有 ${format}）`:'返回原话题草稿':
+                      format?`将原 ${format} 加入草稿并返回`:'加入原话题草稿并返回'}
                     disabled={!!resultAction.pending||!selectedHere&&blocked}
                     onClick={()=>resultAction.confirm(target.fileId,target.sha256,selectedHere)}/>}
                 </> : <CheckboxField isSelected={selectedHere} isDisabled={checkboxDisabled} onChange={selected => {
@@ -173,8 +185,8 @@ export function ComposerAttachmentPicker({ open, inventory, selected, inputModel
             {needle ? '当前已读取的附件没有匹配的文件名。' : original ? `「${original.name}」的原版本不再可选，没有改用其他文件。` : incomplete ? '暂未读到可选择的附件。' : addFromPhone ? '从手机选照片、PDF 等文件，返回后可在草稿中移除或发送。' : '还没有附件，可以先导入。'}
           </div>}
           {rows.length > 0 && <p className="pw-muted">发送时才核对原文件与模型。图片提供原图，文档提供提取文字或引用。</p>}
-        </div>
-        {!resultAction&&<footer className="pw-drawer-actions">
+        </div>}
+        {!closingHistory&&!resultAction&&<footer className="pw-drawer-actions">
           {onImport && <Button variant="secondary" leadingIcon={IconAdd} disabled={importing || (addFromPhone && choices.length >= maxSelections)}
             onClick={addFromPhone ? pickForDraft : onImport}>{importing ? '正在导入…' : addFromPhone ? '从手机添加到草稿' : '导入到附件库'}</Button>}
           <span className="pw-grow"/>

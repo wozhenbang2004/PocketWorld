@@ -520,6 +520,14 @@ internal class AttachmentOutcomeCoordinator(
             externalViewerResult=null,copyReceipt=null,previousCopyInFile=null)
         if(preloadThumbnail&&file.optString("mimeType").startsWith("image/"))loadThumbnail()
     }
+    /** Enter the blank private editor from the exact displayed import, without rereading the Library. */
+    internal fun leaveImportedTxtForDraft(file:JSONObject,original:OwnerFilePreviewSource,catalog:JSONObject,visit:String){
+        check(privateLibrary()&&!state.busy&&!exportPending&&state.originalReturn==AttachmentOriginalReturn.LIST&&
+            state.file===file&&state.originalFile===original&&state.snapshot===catalog&&state.globalStandaloneDraftVisit==visit)
+        cancel();restoreFile=null;restoredDocumentDraft=null
+        state=state.copy(file=null,originalFile=null,thumbnail=null,error=null,notice=null,externalViewerResult=null,
+            originalReturn=AttachmentOriginalReturn.DETAILS,copyReceipt=null,previousCopyInFile=null)
+    }
     @JvmOverloads
     fun backFromFile(afterRefresh:((Boolean)->Unit)?=null){
         if(state.originalReturn==AttachmentOriginalReturn.ENTRY){close();afterRefresh?.invoke(false);return}

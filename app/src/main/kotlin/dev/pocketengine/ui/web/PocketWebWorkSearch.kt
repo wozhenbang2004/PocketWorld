@@ -354,7 +354,7 @@ internal class PocketWebWorkSearch(
         val assistant = host.features.module("assistant") as? AssistantModule
         source("titles") {
             check(assistant != null) { "私人对话尚未准备" }
-            val quota = if (normalized.isEmpty()) count else (count + 1) / 2
+            val quota = minOf(20, if (normalized.isEmpty()) count else (count + 1) / 2)
             var page: JSONObject
             var matches: List<JSONObject>
             var reads = 0

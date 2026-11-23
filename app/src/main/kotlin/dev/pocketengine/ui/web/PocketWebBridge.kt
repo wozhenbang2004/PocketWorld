@@ -1169,10 +1169,14 @@ internal class PocketWebBridge(
                 }
             }
             exactPicker?.let {
-                projection?.getJSONObject("state")?.put("originalReplyAttachmentPicker",
-                    JSONObject().put("requestId",it.request).put("draftKey",it.key).put("draftEpoch",it.epoch).put("sourceWindow",it.sourceWindow)
-                        .put("file",PocketWebState.attachment(it.file)).put("checking",replyPickerChecking!=null)
-                        .put("confirmedHistoryVisit",it.confirmedHistory?.visit))
+                val shown=JSONObject().put("requestId",it.request).put("draftKey",it.key).put("draftEpoch",it.epoch)
+                    .put("sourceWindow",it.sourceWindow).put("checking",replyPickerChecking!=null)
+                val history=it.confirmedHistory
+                if(history==null)shown.put("file",PocketWebState.attachment(checkNotNull(it.file)))
+                else shown.put("confirmedHistoryVisit",history.visit)
+                    .put("files",JSONArray(history.choices.filter{history.attached==null||history.attached==it.file}
+                        .map{choice->PocketWebState.attachment(choice.file)}))
+                projection?.getJSONObject("state")?.put("originalReplyAttachmentPicker",shown)
             }
             controller.chatFilePickFeedback?.takeIf { it.first == controller.chatAttachmentPickerRequest() }?.let {
                 projection?.getJSONObject("state")?.put("chatFilePickFeedback", it.second)
@@ -1705,11 +1709,11 @@ internal class PocketWebBridge(
             if (action in PocketWebTeamEvidence.COMMANDS) {
                 teamEvidence.dispatch(action, args) { result, error -> complete(id, result, error); publishState() }; return
             }
-            if(action=="attachments.openPicker"&&args.has("confirmedHistoryWord")){
-                openConfirmedHistoryWordPicker(id,args);return
+            if(action=="attachments.openPicker"&&args.has("confirmedHistoryDocument")){
+                openConfirmedHistoryDocumentPicker(id,args);return
             }
             if(action=="attachments.closePicker"&&args.has("confirmedHistoryVisit")){
-                retireConfirmedHistoryWordPicker(id,args);return
+                retireConfirmedHistoryDocumentPicker(id,args);return
             }
             if(action=="attachments.openPicker"&&args.has("replyDocument")){
                 openReplyPicker(id,args);return
@@ -5417,17 +5421,18 @@ internal class PocketWebBridge(
         }else null
         return VisibleMessageAttachment(file,original,answer)
     }
-    private data class ConfirmedHistoryWordPicker(val visit:String,val proof:TaskStore.ConfirmedHistoryWord,
-        val workerCurrent:()->Boolean)
-    private data class ConfirmedHistoryWordOpening(val visit:String,val read:RunControl)
-    private data class ReplyPicker(val request:String,val key:String,val epoch:Int,val sourceWindow:String,val file:UiChatAttachment,
-        val target:OriginalReplyDocument.Target?,val confirmedHistory:ConfirmedHistoryWordPicker?=null,val current:()->Boolean)
+    private data class ConfirmedHistoryDocumentChoice(val file:UiChatAttachment,val proof:TaskStore.ConfirmedHistoryDocument)
+    private class ConfirmedHistoryDocumentPicker(val visit:String,val choices:List<ConfirmedHistoryDocumentChoice>,
+        val workerCurrent:()->Boolean) { var attached:UiChatAttachment?=null }
+    private data class ConfirmedHistoryDocumentOpening(val visit:String,val read:RunControl)
+    private data class ReplyPicker(val request:String,val key:String,val epoch:Int,val sourceWindow:String,val file:UiChatAttachment?,
+        val target:OriginalReplyDocument.Target?,val confirmedHistory:ConfirmedHistoryDocumentPicker?=null,val current:()->Boolean)
     @Volatile private var replyPicker:ReplyPicker?=null
     @Volatile private var replyPickerOpening:Any?=null
     @Volatile private var replyPickerChecking:Any?=null
     private fun retireReplyPicker(){
         val original=replyPicker
-        (replyPickerOpening as? ConfirmedHistoryWordOpening)?.read?.cancel()
+        (replyPickerOpening as? ConfirmedHistoryDocumentOpening)?.read?.cancel()
         (replyPickerChecking as? RunControl)?.cancel()
         replyPicker=null;replyPickerOpening=null;replyPickerChecking=null
         if(original!=null&&controller.chatAttachmentPickerRequest()==original.request)
@@ -5438,11 +5443,11 @@ internal class PocketWebBridge(
         if(controller.chatAttachmentPickerRequest()==original.request&&original.current())return original
         retireReplyPicker();return null
     }
-    private fun retireConfirmedHistoryWordPicker(id:String,args:JSONObject){
+    private fun retireConfirmedHistoryDocumentPicker(id:String,args:JSONObject){
         checkedPayload(args,setOf("confirmedHistoryVisit"))
         val visit=requiredString(args,"confirmedHistoryVisit")
         require(OriginalReplyDocument.uuid(visit)&&args.length()==1)
-        if((replyPickerOpening as? ConfirmedHistoryWordOpening)?.visit==visit||replyPicker?.confirmedHistory?.visit==visit){
+        if((replyPickerOpening as? ConfirmedHistoryDocumentOpening)?.visit==visit||replyPicker?.confirmedHistory?.visit==visit){
             retireReplyPicker()
             publishState(force=true)
         }
@@ -5451,10 +5456,10 @@ internal class PocketWebBridge(
 
     /** Opt-in attachment review from an actual already displayed ordinary History row.
      * No Work/delivery, verdict or file identity is taken from the Web payload. */
-    private fun openConfirmedHistoryWordPicker(id:String,args:JSONObject){
-        checkedPayload(args,setOf("key","epoch","revision","confirmedHistoryWord"))
+    private fun openConfirmedHistoryDocumentPicker(id:String,args:JSONObject){
+        checkedPayload(args,setOf("key","epoch","revision","confirmedHistoryDocument"))
         requireComposer(args)
-        val source=checkedPayload(args.getJSONObject("confirmedHistoryWord"),
+        val source=checkedPayload(args.getJSONObject("confirmedHistoryDocument"),
             setOf("window","conversationId","messageId","sourceRevision","visitId"))
         val page=requireConversationReader(source)
         val window=page.window;val conversation=page.conversation
@@ -5463,7 +5468,7 @@ internal class PocketWebBridge(
         val key=requiredString(args,"key");val epoch=requiredInt(args,"epoch");val revision=requiredLong(args,"revision")
         val foreground=controller.displayedPhoneWindowVersion();val owner=captureWindow()
         val sources=controller.conversationSourceRevision
-        val unavailable="未能核对这轮已验收工作的唯一原 Word。没有加入附件；可从原工作查看。"
+        val unavailable="暂未核对到可加入的原文档。草稿未改动，可从原工作查看。"
         require(OriginalReplyDocument.uuid(visit)&&version>0&&source.length()==5&&args.length()==4&&
             key=="conversation:$conversation"&&revision>0)
         check(replyPicker==null&&replyPickerOpening==null&&!controller.state.chatAttachmentPickerOpen){unavailable}
@@ -5492,10 +5497,10 @@ internal class PocketWebBridge(
         }
         val row=savedRow()?:error(unavailable)
         val result=checkNotNull(row.taskResult)
-        val original=TaskStore.ConfirmedHistoryWordSource(conversation,message,version,"sha256:"+digest(row.content),result.endedAt,
+        val original=TaskStore.ConfirmedHistoryDocumentSource(conversation,message,version,"sha256:"+digest(row.content),result.endedAt,
             TaskStore.OwnerWorkDeliveryRef(result.taskId,result.runId,result.epoch,result.deliveryId))
         check(originalDraft(false)&&controller.composerDraft?.revision==revision){unavailable}
-        val attempt=ConfirmedHistoryWordOpening(visit,RunControl())
+        val attempt=ConfirmedHistoryDocumentOpening(visit,RunControl())
         val host=controller.nativeButlerHost().attachmentOutcomes?:error(unavailable)
         replyPickerOpening=attempt
         attempt.read.setAuthorityCheck {
@@ -5503,11 +5508,15 @@ internal class PocketWebBridge(
         }
         fun beforeClose()=replyPickerOpening===attempt&&originalDraft(false)&&controller.composerDraft?.revision==revision&&savedRow()==row
         try{controller.runTeamPhoneWork {
-            val proof=runCatching{host.confirmedHistoryWord(original,null,attempt.read)}.getOrNull()
+            val proofs=runCatching{host.confirmedHistoryDocuments(original,null,attempt.read)}.getOrNull()
             main.post {
                 try{
-                    check(proof!=null&&beforeClose()){unavailable}
-                    val file=ChatInputRules.attachment(proof.file().view())?:error(unavailable)
+                    check(proofs!=null&&proofs.size in 1..2&&beforeClose()){unavailable}
+                    val choices=proofs.map{proof->
+                        val file=ChatInputRules.attachment(proof.file().view())?:error(unavailable)
+                        ConfirmedHistoryDocumentChoice(file,proof)
+                    }
+                    check(choices.map{it.file.id}.toSet().size==choices.size){unavailable}
                     var closedReader=-1L
                     val request=controller.openOriginalReplyAttachmentPicker {
                         if(!beforeClose())false
@@ -5519,10 +5528,10 @@ internal class PocketWebBridge(
                             controller.conversationReader==null
                         }?:false
                     }?:error(unavailable)
-                    val held=ConfirmedHistoryWordPicker(visit,proof){
+                    val held=ConfirmedHistoryDocumentPicker(visit,choices){
                         workerCurrent()&&controller.conversationReaderRevision==closedReader
                     }
-                    replyPicker=ReplyPicker(request,key,epoch,"history:$window",file,null,held){
+                    replyPicker=ReplyPicker(request,key,epoch,"history:$window",null,null,held){
                         held.workerCurrent()&&originalDraft(true)&&controller.conversationReader==null
                     }
                     complete(id,JSONObject().put("opened",true).put("requestId",request).put("visitId",visit),null,retainValue=false)
@@ -5589,25 +5598,31 @@ internal class PocketWebBridge(
         requireComposer(args);requireAttachmentDraft(args)
         val original=currentReplyPicker()?:error("这份原答复附件选择已关闭")
         val requested=requiredBoolean(args,"selected")
-        check(original.confirmedHistory==null||requested){"请在原草稿移除附件"}
-        check(requiredString(args,"pickerRequestId")==original.request&&requiredString(args,"id")==original.file.id&&
-            requiredString(args,"sha256")==original.file.sha256&&replyPickerChecking==null){"只可选择这份已核对的原答复文档"}
-        val revision=requiredLong(args,"revision")
         val historical=original.confirmedHistory
+        check(historical==null||requested){"请在原草稿移除附件"}
+        val fileId=requiredString(args,"id");val sha=requiredString(args,"sha256")
+        val chosen=historical?.choices?.singleOrNull{it.file.id==fileId&&it.file.sha256==sha}
+        val unavailable="只可选择这次核对的原文档"
+        val file=(if(historical==null)original.file else chosen?.file)?:error(unavailable)
+        check(requiredString(args,"pickerRequestId")==original.request&&fileId==file.id&&sha==file.sha256&&
+            replyPickerChecking==null){unavailable}
+        historical?.attached?.let{check(it==file){"已确认加入一份原文档，请返回原草稿"}}
+        val revision=requiredLong(args,"revision")
         val checking=if(historical==null)Any() else RunControl()
         replyPickerChecking=checking
         fun current()=replyPicker===original&&replyPickerChecking===checking&&
             controller.chatAttachmentPickerRequest()==original.request&&controller.composerDraft?.revision==revision&&original.current()
         val verified:(JSONObject?,String?)->Unit={row,error->
             try{
-                check(row!=null&&error==null&&current()&&ChatInputRules.attachment(row)==original.file){error?:"原附件已变化，草稿保留"}
+                check(row!=null&&error==null&&current()&&ChatInputRules.attachment(row)==file){error?:"原附件已变化，草稿保留"}
                 requireComposer(args);requireAttachmentDraft(args)
-                val already=controller.state.selectedChatAttachments.singleOrNull{it.id==original.file.id}
-                check(already==null||already.sha256==original.file.sha256){"草稿选的是另一版本，没有替换"}
+                val already=controller.state.selectedChatAttachments.singleOrNull{it.id==file.id}
+                check(already==null||already.sha256==file.sha256){"草稿选的是另一版本，没有替换"}
                 if(requested!=(already!=null))controller.toggleChatAttachment(row)
-                check(controller.state.selectedChatAttachments.any{it.id==original.file.id&&it.sha256==original.file.sha256}==requested){
+                check(controller.state.selectedChatAttachments.any{it.id==file.id&&it.sha256==file.sha256}==requested){
                     controller.state.error?:"没有确认这次选择，草稿保留"
                 }
+                if(historical!=null)historical.attached=file
                 complete(id,accepted(),null,retainValue=false)
             }catch(failure:Exception){complete(id,null,failure.message?:"未确认选择这份原件",retainValue=false)}
             finally {
@@ -5618,20 +5633,21 @@ internal class PocketWebBridge(
         }
         if(historical==null)controller.verifyOriginalReplyAttachment(checkNotNull(original.target),::current,verified)
         else {
+            val proof=checkNotNull(chosen).proof
             val control=checking as RunControl
-            val unavailable="原工作验收、原 Word 或草稿已变化。没有更换附件。"
+            val changed="原工作验收、原文档或草稿已变化。没有更换附件。"
             control.setAuthorityCheck {
-                check(replyPicker===original&&replyPickerChecking===checking&&historical.workerCurrent()){unavailable}
+                check(replyPicker===original&&replyPickerChecking===checking&&historical.workerCurrent()){changed}
             }
             try{controller.runTeamPhoneWork {
                 val row=runCatching {
-                    val checked=controller.nativeButlerHost().attachmentOutcomes.confirmedHistoryWord(
-                        historical.proof.source(),historical.proof,control)
-                    check(checked==historical.proof)
+                    val checked=controller.nativeButlerHost().attachmentOutcomes.confirmedHistoryDocuments(
+                        proof.source(),proof,control).singleOrNull()
+                    check(checked!=null&&checked==proof)
                     checked.file().view()
                 }.getOrNull()
-                main.post { verified(row,if(row==null)unavailable else null) }
-            }}catch(_:Exception){verified(null,unavailable)}
+                main.post { verified(row,if(row==null)changed else null) }
+            }}catch(_:Exception){verified(null,changed)}
         }
         publishState()
     }

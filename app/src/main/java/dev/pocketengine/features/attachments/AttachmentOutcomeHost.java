@@ -455,14 +455,25 @@ public final class AttachmentOutcomeHost {
         control.checkpoint();
         return pin.view();
     }
-    /** Metadata admission for one explicit confirmed History picker. Never call originalFile,
+    /** Metadata admission for an explicit confirmed History picker. Never call originalFile,
      * generic privateMetadata, or the byte-verifying native publication recovery path. */
-    public TaskStore.ConfirmedHistoryWord confirmedHistoryWord(TaskStore.ConfirmedHistoryWordSource source,
-            TaskStore.ConfirmedHistoryWord expected,RunControl read)throws Exception{
-        TaskStore.ConfirmedHistoryWord held=tasks.confirmedHistoryWord(source,expected,read);
+    public List<TaskStore.ConfirmedHistoryDocument> confirmedHistoryDocuments(TaskStore.ConfirmedHistoryDocumentSource source,
+            TaskStore.ConfirmedHistoryDocument expected,RunControl read)throws Exception{
+        List<TaskStore.ConfirmedHistoryDocument> offered=tasks.confirmedHistoryDocuments(source,expected,read);
+        List<TaskStore.ConfirmedHistoryDocument> verified=new ArrayList<>();
         var producer=source.delivery();
-        repository.book.requireConfirmedHistoryWord(held.file(),producer.taskId(),producer.runId(),read);
-        read.checkpoint();return held;
+        for(var choice:offered){
+            read.checkpoint();
+            try{
+                repository.book.requireConfirmedHistoryDocument(choice.file(),producer.taskId(),producer.runId(),read);
+                verified.add(choice);
+            }catch(Exception unavailable){
+                if(expected!=null||unavailable instanceof InterruptedException)throw unavailable;
+                // A missing PDF must not replace an independently verified Word, nor vice versa.
+                read.checkpoint();
+            }
+        }
+        read.checkpoint();return List.copyOf(verified);
     }
     public record SearchAnchorFileList(java.util.List<TaskStore.SearchAnchorFileReceipt> files,boolean limited) { }
     /** Positive headers only. The exact Book get checks the selected metadata/stat, not the blob. */

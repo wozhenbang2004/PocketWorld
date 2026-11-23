@@ -59,7 +59,7 @@ function sameHistoricalAnswer(page:Json|null,target:HistoricalAnswerSource,eligi
 }
 export type ConversationHistoryTaskOrigin={readerWindow:number;readerConversationId:string;readerMessageId:string};
 export type HistoryResultOrigin={window:number;conversationId:string;sourceRevision:number;restore:()=>boolean};
-export type ConfirmedHistoryWordTarget={window:number;conversationId:string;messageId:string;sourceRevision:number};
+export type ConfirmedHistoryDocumentTarget={window:number;conversationId:string;messageId:string;sourceRevision:number};
 type HistoricalReplyFile={id:string;sha256:string;mimeType:string};
 export type HistoricalReplyFileOpen={window:number;conversationId:string;messageId:string;sourceRevision:number;
  file:HistoricalReplyFile;current:()=>boolean;restore:()=>boolean};
@@ -74,14 +74,14 @@ const historicalReplyFiles=(row:Json|null):HistoricalReplyFile[]=>{
 };
 type Props={page:Json|null;covered?:boolean;onReturnToChat?:()=>void;activeDraft?:{conversation:string;key:string;epoch:number};submitting:boolean;can:(action:string)=>boolean;act:(action:string,args?:Json)=>Promise<any>;registerBack:(handler:(()=>boolean)|null)=>void;onCopy:(text:string)=>Promise<unknown>;onOpenTask:(taskId:string,entry:'overview'|'process',origin:ConversationHistoryTaskOrigin,nativeAlreadyOpen?:boolean)=>void;
  onOpenResultFiles?:(messageId:string,result:TaskResult,trigger:HTMLButtonElement,origin:HistoryResultOrigin)=>Promise<void>;onWorkRequestReturn?:(windowId:number)=>void;
- onChooseConfirmedWord?:(source:ConfirmedHistoryWordTarget)=>Promise<void>;isCheckableConfirmedWord?:(result:TaskResult)=>boolean;
+ onChooseConfirmedDocument?:(source:ConfirmedHistoryDocumentTarget)=>Promise<void>;isCheckableConfirmedDocument?:(result:TaskResult)=>boolean;
  onOpenHistoricalReplyFile?:(source:HistoricalReplyFileOpen)=>Promise<void>;
  onSearchReturn?:(windowId:number)=>void;searchReturnToChatWindow?:number;
  registerSearchFileReturn?:(handler:((windowId:string)=>boolean)|null)=>void;
  workReportWindow?:number;onWorkReportReturn?:(windowId:number)=>void};
 /** A second, read-only history window. The active composer stays with its original
  * submission until the owner explicitly switches after its receipt has settled. */
-export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onChooseConfirmedWord,isCheckableConfirmedWord,onOpenHistoricalReplyFile,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,registerSearchFileReturn,workReportWindow,onWorkReportReturn}:Props){
+export function ConversationHistoryWindow({page:nativePage,covered=false,onReturnToChat,activeDraft,submitting,can:available,act,registerBack,onCopy,onOpenTask,onOpenResultFiles,onChooseConfirmedDocument,isCheckableConfirmedDocument,onOpenHistoricalReplyFile,onWorkRequestReturn,onSearchReturn,searchReturnToChatWindow,registerSearchFileReturn,workReportWindow,onWorkReportReturn}:Props){
  const page=covered?null:nativePage,scope=readerScope(nativePage);
  const exit=useClosingSnapshot(page),shown:Json=exit.display??{};
  const workReportOnly=workReportWindow!==undefined&&workReportWindow===shown.window&&typeof shown.originalReportMessageId==='string';
@@ -532,9 +532,9 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
   const report=Array.from(scroll.current.querySelectorAll<HTMLElement>('[data-reader-id]')).find(row=>row.dataset.readerId===message);
   report?.focus({preventScroll:true});return !!report;
  };
- const chooseConfirmedWord=async(message:Json,trigger:HTMLButtonElement)=>{
+ const chooseConfirmedDocument=async(message:Json,trigger:HTMLButtonElement)=>{
   const original=live.current;
-  if(!original||!onChooseConfirmedWord||!isCheckableConfirmedWord||sending.current||submitting||workOverlay||searchOnly||
+  if(!original||!onChooseConfirmedDocument||!isCheckableConfirmedDocument||sending.current||submitting||workOverlay||searchOnly||
      activeDraft?.conversation!==original.conversation||!scroll.current?.contains(trigger))return;
   const current=()=>{
    const next=bridge.getState().state.conversationReader,held=exactRow(next,message.id,message.sourceRevision);
@@ -543,13 +543,13 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
     held?.role==='assistant'&&saved?.kind==='owner_work'&&saved.status==='needs_confirmation'&&saved.noticeKind===null;
   };
   const offered=messageTaskResult(message);
-  if(!current()||!offered||!isCheckableConfirmedWord(offered))return;
+  if(!current()||!offered||!isCheckableConfirmedDocument(offered))return;
   sending.current=true;setPending(true);setError('');remember();
   try{
    await persist();
-   if(current())await onChooseConfirmedWord({window:original.window,conversationId:original.conversation,messageId:message.id,sourceRevision:message.sourceRevision});
+   if(current())await onChooseConfirmedDocument({window:original.window,conversationId:original.conversation,messageId:message.id,sourceRevision:message.sourceRevision});
   }catch(failure){
-   if(current())setError(failure instanceof Error?failure.message:'未能核对这轮原 Word，没有加入附件。');
+   if(current())setError(failure instanceof Error?failure.message:'暂未核对到可加入的原文档，草稿未改动。');
   }finally{sending.current=false;setPending(false)}
  };
  const openHistoricalReplyFile=async(message:Json,file:HistoricalReplyFile,trigger:HTMLButtonElement)=>{
@@ -737,11 +737,11 @@ export function ConversationHistoryWindow({page:nativePage,covered=false,onRetur
       核对并查看原{file.mimeType==='application/pdf'?' PDF':' Word'}</Button>)}
      {fileResult&&<Button variant="ghost" size="small" leadingIcon={IconFolder} disabled={!page||pending||page.loading||page.error||page.limited}
       aria-busy={!!readingFiles&&!readingFiles.error||undefined} onClick={event=>void openHistoryResultFiles(message,fileResult,event.currentTarget)}>{readingFiles&&!readingFiles.error?'正在读取本次文件…':'查看本次文件'}</Button>}
-     {!searchOnly&&onChooseConfirmedWord&&activeDraft?.conversation===shown.conversation&&message.role==='assistant'&&
+     {!searchOnly&&onChooseConfirmedDocument&&activeDraft?.conversation===shown.conversation&&message.role==='assistant'&&
        !phone&&!message.originalHostFinal&&!message.hostGoalTaskId&&Number.isSafeInteger(message.sourceRevision)&&message.sourceRevision>0&&
-       result?.kind==='owner_work'&&result.status==='needs_confirmation'&&result.noticeKind===null&&isCheckableConfirmedWord?.(result)&&
+       result?.kind==='owner_work'&&result.status==='needs_confirmation'&&result.noticeKind===null&&isCheckableConfirmedDocument?.(result)&&
        <Button variant="ghost" size="small" leadingIcon={IconFolder} disabled={!readyPage(page)||pending||submitting}
-        onClick={event=>void chooseConfirmedWord(message,event.currentTarget)}>核对原 Word 附件…</Button>}
+        onClick={event=>void chooseConfirmedDocument(message,event.currentTarget)}>核对原文档附件…</Button>}
      {phone&&can('tasks.open')&&<Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'process')}>所属工作的当前进展</Button>}
      {message.role==='assistant'&&!phone&&!message.hostGoalTaskId&&(Number(message.sourceRevision)>0||message.phoneResult||message.taskResult)&&(message.phoneResult?.taskId||message.taskResult?.taskId||message.taskId)&&can('tasks.open')&&<>
       <Button variant="ghost" size="small" disabled={!page||pending} onClick={()=>void openLinkedTask(message,'overview')}>{workDelivery?'查看所属工作':message.phoneResult?'所属工作':'任务详情'}</Button>
