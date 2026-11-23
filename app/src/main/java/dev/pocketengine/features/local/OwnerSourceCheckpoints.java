@@ -680,7 +680,10 @@ public final class OwnerSourceCheckpoints {
         return sameDirectory(a,b)&&a.size()==b.size()&&a.lastModifiedTime().equals(b.lastModifiedTime());
     }
     private static void syncDirectory(Path path)throws Exception{
-        var fd=Os.open(path.toString(),OsConstants.O_RDONLY|OsConstants.O_DIRECTORY|OsConstants.O_NOFOLLOW,0);
-        try{Os.fsync(fd);}finally{Os.close(fd);}
+        var fd=Os.open(path.toString(),OsConstants.O_RDONLY|OsConstants.O_NONBLOCK|OsConstants.O_NOFOLLOW,0);
+        try{
+            if(!OsConstants.S_ISDIR(Os.fstat(fd).st_mode))throw new IOException("原源码版本目录不可核对");
+            Os.fsync(fd);
+        }finally{Os.close(fd);}
     }
 }
