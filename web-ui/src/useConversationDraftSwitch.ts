@@ -7,10 +7,12 @@ export function useConversationDraftSwitch(report:(message:string)=>void){
  const [switching,setSwitching]=useState(false);
  useEffect(()=>()=>active.current?.cancel(),[]);
  const pending=useCallback(()=>active.current!==null,[]);
- const open=useCallback((target:string|null,stillHere:()=>boolean)=>{
+ const open=useCallback((target:string|null,stillHere:()=>boolean,retainedDraftProjection?:number)=>{
   if(active.current)return;
   const before=bridge.getState(),documentEpoch=bridge.getDocumentEpoch();
   const previousEpoch=before.composer?.epoch,previousReader=before.state.conversationReader?.window;
+  const resume=target===null&&retainedDraftProjection!==undefined;
+  let retained:{key:string;epoch:number;revision:number}|undefined;
   let unsubscribe=()=>{},unsubscribeDocument=()=>{},timer:number|undefined;
   const handoff={cancel(){
    unsubscribe();unsubscribeDocument();window.clearTimeout(timer);
@@ -24,6 +26,13 @@ export function useConversationDraftSwitch(report:(message:string)=>void){
   const check=()=>{
    if(bridge.getDocumentEpoch()!==documentEpoch){finish();return}
    const {state,composer}=bridge.getState(),reader=state.conversationReader;
+   if(resume){
+    if(!stillHere()||document.hidden){finish();return;}
+    if(retained&&!reader&&!state.conversationId&&composer?.ready===true&&composer.ordinaryNewAttachmentDraft===true&&
+       composer.conversationId===''&&composer.key===retained.key&&composer.epoch===retained.epoch&&
+       composer.revision===retained.revision)finish();
+    return;
+   }
    // Selecting during submission can intentionally open a read-only window.
    if(target!==null&&reader?.conversation===target&&Number.isSafeInteger(reader.window)&&reader.window!==previousReader){finish();return}
    const conversation=String(state.conversationId||'');
@@ -33,9 +42,17 @@ export function useConversationDraftSwitch(report:(message:string)=>void){
   };
   active.current=handoff;setSwitching(true);
   unsubscribe=bridge.subscribe(check);unsubscribeDocument=bridge.subscribeDocumentEpoch(check);
-  const unconfirmed='尚未确认已切换对话，请核对当前草稿后再编辑。';
-  void bridge.command(target===null?'conversation.new':'conversation.select',target===null?{}:{id:target}).then(()=>{
+  const unconfirmed=resume?'尚未确认已回到原未发草稿，请核对当前输入。':'尚未确认已切换对话，请核对当前草稿后再编辑。';
+  const args=target!==null?{id:target}:resume?{retainedDraftProjection}:{};
+  void bridge.command(target===null?'conversation.new':'conversation.select',args).then(value=>{
    if(active.current!==handoff)return;
+   if(resume){
+    if(value?.resumed!==true||typeof value.key!=='string'||!value.key.startsWith('new:')||
+       !Number.isSafeInteger(value.epoch)||value.epoch===previousEpoch||!Number.isSafeInteger(value.revision)||value.revision<1){
+     finish(unconfirmed);return;
+    }
+    retained={key:value.key,epoch:value.epoch,revision:value.revision};
+   }
    check();
    if(active.current===handoff)timer=window.setTimeout(()=>finish(unconfirmed),5000);
   },error=>finish(error instanceof Error?error.message:unconfirmed));

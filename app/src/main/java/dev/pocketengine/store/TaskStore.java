@@ -22152,6 +22152,7 @@ public final class TaskStore {
         JSONObject editorResume=result.optJSONObject(PRIVATE_DIRECT_VITE_EDITOR_RESUME);
         result.remove(PRIVATE_DIRECT_VITE_EDITOR_RESUME);result.remove(DIRECT_VITE_EDITOR_RESUME);
         result.remove(OWNER_SELECTED_TEAM_START);
+        result.remove("interruptedOwnerWorkRound");
         JSONObject workView=ownerWorkForUi(result);if(workView!=result)return workView;
         // Full cores derive the same navigation-only identity as summaries before any source gate
         // hides their body. Limited cores already carry the native header's verified projection.
@@ -22212,6 +22213,7 @@ public final class TaskStore {
         if(!limited){
             view.put(PhoneActionRecovery.INTERRUPTED,PhoneActionRecovery.interruptedAttempt(db,id,result));
             projectDirectViteEditorResumeForUi(result,view,editorResume);
+            view.putOpt("interruptedOwnerWorkRound",TaskRunDocumentReader.interruptedOwnerWorkRoundForUi(db,result));
         }
         return view;
     }

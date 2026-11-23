@@ -849,6 +849,22 @@ internal class PocketWebBridge(
         return SourceCheckpointProjectFence(::fast,::onMain)
     }
 
+    private data class OrdinaryNewDraftResumePin(val document:String,val window:PocketWebWindowTicket,val resume:Long,
+        val sourceKey:String,val sourceEpoch:Int,val sourceRevision:Long,
+        val target:dev.pocketengine.features.assistant.OwnerComposerState.OrdinaryNewDraftResume)
+    private data class PublishedOrdinaryNewDraftResume(val pin:OrdinaryNewDraftResumePin,val since:Long)
+    private var ordinaryNewDraftOffer:PublishedOrdinaryNewDraftResume?=null
+    private fun ordinaryNewDraftResumePin():OrdinaryNewDraftResumePin? {
+        val document=documentId?:return null
+        val conversation=controller.state.conversationId?:return null
+        val epoch=ordinaryDetachedHistoryEpoch(conversation)?:return null
+        if(taskReturnSection!=null||attachmentPages.hasOpenWorkspace||controller.state.attachmentImporting||
+            chatDefaultsVisit!=null||originalSavedPdfVisit!=null)return null
+        val source=controller.composerDraft?:return null
+        val target=controller.ordinaryNewDraftResume()?:return null
+        return OrdinaryNewDraftResumePin(document,captureWindow(),workspaceResumeRevision,source.key,epoch,source.revision,target)
+    }
+
     private fun ordinaryDetachedHistoryEpoch(conversation:String):Int? {
         if(closed||documentId==null||section!=null||taskViewId!=null||!controller.webPrivateOwnerVisible()||
             controller.hasChannelPhoneOrigin||phoneComposer.intent||controller.state.filePath!=null||
@@ -1015,6 +1031,7 @@ internal class PocketWebBridge(
         controller.retireInvalidOriginalReminderHistory()
         var projection: JSONObject? = null
         var firstVisit: OrdinaryFirstVisit? = null
+        var draftResume: OrdinaryNewDraftResumePin? = null
         snapshotObserver.observeReads {
             controller.modelSelectionRevision
             val exactPicker=currentReplyPicker()
@@ -1057,6 +1074,10 @@ internal class PocketWebBridge(
             if(section==null&&taskViewId==null) controller.adoptedFormalComparisonForWeb()?.let {
                 projection?.getJSONObject("state")?.put("adoptedFormalComparison",it)
             }
+            // No offscreen key, name, or body in the frame. Bind the bit to this
+            // publication before accepting an explicit resume of its exact local target.
+            if (!controller.composerSaving) draftResume = ordinaryNewDraftResumePin()
+            if (draftResume != null) projection?.getJSONObject("composer")?.put("ordinaryNewDraftRetained", true)
             val state = controller.state
             state.conversationId?.takeIf { ordinaryDetachedHistoryEpoch(it)!=null&&controller.savedDetachedHistory(it) }?.let {
                 projection?.getJSONObject("state")?.put("detachedHistoryResumeAvailable",true)
@@ -1143,10 +1164,13 @@ internal class PocketWebBridge(
             .put("phoneDraft", phoneComposer.snapshot())
         val bounds = phoneObservationExpiry.take(snapshot)
         val serialized = snapshot.toString()
-        val unchanged = !force && serialized == lastState
+        val sameDraftOffer = ordinaryNewDraftOffer?.pin == draftResume
+        val unchanged = !force && serialized == lastState && sameDraftOffer
         if (!unchanged) {
             lastState = serialized
-            emit(JSONObject().put("v", 1).put("kind", "state").put("revision", ++revision).put("snapshot", snapshot))
+            val publication = ++revision
+            if (!sameDraftOffer) ordinaryNewDraftOffer = draftResume?.let { PublishedOrdinaryNewDraftResume(it,publication) }
+            emit(JSONObject().put("v", 1).put("kind", "state").put("revision", publication).put("snapshot", snapshot))
         }
         // Even if two original observations have the same display label, use the last native deadline.
         phoneObservationExpiry.bind(revision, if (controller.webPrivateOwnerVisible()) bounds else emptyList())
@@ -3389,6 +3413,17 @@ internal class PocketWebBridge(
                     val code=if(action=="phone.stop" && error!=null && result?.optString("stopInput")=="not_submitted") "not_accepted" else "outcome_unknown"
                     complete(id,result,error,code);publishState()
                 }
+                return
+            }
+            if (action == "conversation.new" && args.has("retainedDraftProjection")) {
+                checkedPayload(args,setOf("retainedDraftProjection"))
+                val from = requiredLong(args,"retainedDraftProjection")
+                val recheck = "原未发草稿或输入已变化，请重新核对；没有切换到其他输入"
+                val offered = ordinaryNewDraftOffer ?: error(recheck)
+                check(from in offered.since..revision && ordinaryNewDraftResumePin()==offered.pin) { recheck }
+                val opened = controller.resumeOrdinaryNewDraft(offered.pin.target)
+                complete(id,opened,null,retainValue=false,replayHint="请在管家输入核对原未发草稿；没有重复切换或发送")
+                publishState()
                 return
             }
             val result = dispatch(action, args)

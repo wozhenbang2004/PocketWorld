@@ -17,7 +17,7 @@ type Props = {
   directoryOpen: boolean; setDirectoryOpen: (open: boolean) => void;
   searchOpen: boolean; openSearch: () => void; closeSearch: () => void; search: ReactNode; searchTrigger: Ref<HTMLButtonElement>;
   memory: OwnerNavigationMemory; navigate: (key: string) => void; openConversation?: (id: string) => void;
-  organizeConversation?: (id: string) => void; newConversation?: () => void; newPending: boolean;
+  organizeConversation?: (id: string) => void; newConversation?: () => void; newConversationLabel?: string; newPending: boolean;
   onResumeIndependentReportFollowUp?: () => void;
   profileName: string; avatar?: string; canProfile: boolean; openUnread?: () => void;
 };
@@ -51,7 +51,7 @@ const withoutUnreadBadge = (item: WorkNavItem): WorkNavItem =>
  * items and conversation IDs onto three faces of its existing drawer or desktop rail. */
 export function WorkspaceNavigator({items, selected, recent, selectedConversation, conversationFirst, conversationActivity, desktop, compact, onToggleCompact,
   directoryOpen, setDirectoryOpen, searchOpen, openSearch, closeSearch, search, searchTrigger, memory, navigate,
-  openConversation, organizeConversation, newConversation, newPending, onResumeIndependentReportFollowUp,
+  openConversation, organizeConversation, newConversation, newConversationLabel, newPending, onResumeIndependentReportFollowUp,
   profileName, avatar, canProfile, openUnread}: Props) {
   const face: Face = searchOpen ? 'records' : directoryOpen ? 'directory' : 'home';
   const mini = compact && face === 'home';
@@ -188,8 +188,10 @@ export function WorkspaceNavigator({items, selected, recent, selectedConversatio
         <div className="pw-owner-quick">
           <Button ref={searchTrigger} variant="ghost" className="pw-owner-search" data-owner-search-trigger leadingIcon={IconSearch}
             aria-label="搜索工作、对话、成果与项目" title="搜索记录" onClick={() => enter('records')}>搜索记录</Button>
-          {newConversation && <IconButton icon={IconNewChat} aria-label="新对话" title="新对话" disabled={newPending} onClick={() => { remember(); newConversation(); }}/>}
+          {newConversation && !newConversationLabel && <IconButton icon={IconNewChat} aria-label="新对话" title="新对话" disabled={newPending} onClick={() => { remember(); newConversation(); }}/>}
         </div>
+        {newConversation && newConversationLabel && <Button variant="ghost" className="pw-owner-all" leadingIcon={IconChat}
+          trailingIcon={IconChevronRight} disabled={newPending} onClick={() => { remember(); newConversation(); }}>{newConversationLabel}</Button>}
         {chatFirst ? [resumeFollowUp, conversations] : [workRoutes, resumeFollowUp, conversations]}
       </>}
     </div>

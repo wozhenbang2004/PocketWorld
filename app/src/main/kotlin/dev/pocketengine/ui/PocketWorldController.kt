@@ -41,6 +41,7 @@ import org.json.JSONObject
 /** One native owner UI for the existing engine; backend events remain the source of truth. */
 internal class PocketWorldController(private val activity: ComposeActivity, private val app: EngineApplication) {
     private companion object {
+        const val CHAT_DRAFT_ATTACHMENT_ADDED = "附件已加入这条草稿，尚未发送。"
         // One explicit saved-service diagnostic, even during Activity replacement.
         // No queued diagnostic may inherit a later editor or block local checkout I/O.
         val savedModelDiagnosticIo = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue<Runnable>())
@@ -1500,9 +1501,14 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         retainedSpanSender?.takeIf{it.model!==model||it.key!=draft.key||it.epoch!=chatViewEpoch||it.revision!=draft.revision||model.pending(it.client)==null}?.let {
             it.visit.retireWithoutClaim();retainedSpanSender=null
         }
+        // The OS receipt says "this draft", not the next topic. Preserve every
+        // other notice and keep this confirmation while editing the same draft.
+        val leftAttachmentDraft = state.notice == CHAT_DRAFT_ATTACHMENT_ADDED &&
+            composerDraft?.let { it.key != draft.key } == true
         composerDraft=draft;composerPending=model.pending()
         state=state.copy(selectedChatAttachments=draft.attachments().objects().mapNotNull(ChatInputRules::attachment),chatSendMode=draft.mode,
-            conversationId=if(select)draft.conversationId.takeIf(String::isNotBlank) else state.conversationId)
+            conversationId=if(select)draft.conversationId.takeIf(String::isNotBlank) else state.conversationId,
+            notice=if(leftAttachmentDraft)null else state.notice)
     }
     private fun loadOwnerComposer() {
         ownerComposerStore.load().whenComplete { restored,error -> main.post {
@@ -3821,7 +3827,7 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         if (next != previous) editComposerSelection(state.chatSendMode, next)
         if (state.selectedChatAttachments != next) { keepOnly("没有确认加入这条输入，可从清单重新勾选。"); return }
         closeChatAttachmentPicker(pick.picker)
-        state = state.copy(notice = "附件已加入这条草稿，尚未发送。")
+        state = state.copy(notice = CHAT_DRAFT_ATTACHMENT_ADDED)
     }
     internal fun attachmentImportContextUnavailable() { ordinaryLibraryImport=null; attachmentOutcomes.libraryImportContextUnavailable(); state = state.copy(error = "原文件选择上下文无法恢复；不会改用当前任务或项目，也不会自动重新选择。请先核对附件库和原入口") }
     internal fun attachmentImportSelectionEnded(cancelled: Boolean, original: OwnerAttachmentImport.Target? = null) { takeChatFilePick(original); takeOrdinaryLibraryPick(original); attachmentOutcomes.libraryImportSelectionEnded(original,cancelled); state = state.copy(notice = if (cancelled) "已取消文件选择，本次未开始导入" else null, error = if (cancelled) null else "文件选择已返回，但没有可接收的内容；本次未开始导入") }
@@ -4454,11 +4460,36 @@ internal class PocketWorldController(private val activity: ComposeActivity, priv
         }
         closeConversationReader()
     }
+    internal fun ordinaryNewDraftResume(): OwnerComposerState.OrdinaryNewDraftResume? {
+        val model=ownerComposer ?: return null
+        val current=composerDraft ?: return null
+        if(!webPrivateOwnerVisible() || hasChannelPhoneOrigin || state.conversationId==null ||
+            !ordinaryAttachmentDraft(current) || conversationReader!=null || compatibilityChat!=null ||
+            state.chatBusy || state.chatSubmitting || state.phoneSubmitting || state.listening ||
+            voiceInput.active() || voiceInput.leaseHeld() || quickPanelVoiceSession!=null ||
+            state.voiceInput.optBoolean("reviewAvailable") || current.voiceText.isNotEmpty() ||
+            firstHostSave!=null || independentReportDraftBusy) return null
+        return model.ordinaryNewDraftResume()
+    }
+    internal fun resumeOrdinaryNewDraft(exact: OwnerComposerState.OrdinaryNewDraftResume): JSONObject {
+        val model=ownerComposer ?: error("原私聊草稿尚未恢复")
+        check(ordinaryNewDraftResume()==exact) { "原未发草稿或输入已变化，没有切换到其他输入" }
+        val restored=model.resumeOrdinaryNewDraft(exact)
+        voiceInputModeChanged()
+        publishNewConversationDraft()
+        return JSONObject().put("resumed",true).put("key",restored.key)
+            .put("epoch",chatViewEpoch).put("revision",restored.revision)
+    }
+    private fun publishNewConversationDraft() {
+        chatViewEpoch++;publishComposer(true)
+        state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false)
+        refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer()
+    }
     fun newConversation() {
         compatibilityChat=null
         if(state.chatSubmitting)return
         val model=ownerComposer ?: return
-        try{voiceInputModeChanged();model.newConversation();chatViewEpoch++;publishComposer(true);state=state.copy(messages=emptyList(),chatActiveTurn=null,foregroundTurn=null,chatBusy=false);refreshCurrentConversationTurn();voiceInputViewChanged();persistOwnerComposer()}
+        try{voiceInputModeChanged();model.newConversation();publishNewConversationDraft()}
         catch(error:Exception){state=state.copy(error=message(error))}
     }
     /** Navigation and draft staging only. The ordinary native send/cancel controls remain authoritative. */

@@ -184,10 +184,28 @@ public final class OwnerComposerState {
         for(Draft draft:drafts.values())if(draft.key.startsWith(prefix)&&(draft.hasInput()||hasPending(draft.key)))result.add(draft);
         return Collections.unmodifiableList(result);
     }
+    private Draft firstPendingFreeNewDraft(){
+        for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!isIndependentReportFollowUp(draft.key)&&!hasPending(draft.key))return draft;
+        return null;
+    }
     public synchronized Draft newConversation()throws Exception {
         if(active().conversationId.isEmpty()&&!isIndependentReportFollowUp(activeKey))return active();
-        for(Draft draft:drafts.values())if(draft.conversationId.isEmpty()&&!isIndependentReportFollowUp(draft.key)&&!hasPending(draft.key)){activeKey=draft.key;revision=increment(revision);return draft;}
+        Draft retained=firstPendingFreeNewDraft();
+        if(retained!=null){activeKey=retained.key;revision=increment(revision);return retained;}
         makeRoom();activeKey="new:"+UUID.randomUUID();Draft draft=blank(activeKey,"");drafts.put(activeKey,draft);revision=increment(revision);return draft;
+    }
+    public record OrdinaryNewDraftResume(String key,long revision) {}
+    /** Only the offscreen, nonempty ordinary draft already chosen by the stock new-topic action. */
+    public synchronized OrdinaryNewDraftResume ordinaryNewDraftResume(){
+        if(revision==Long.MAX_VALUE||active().conversationId.isEmpty())return null;
+        Draft retained=firstPendingFreeNewDraft();
+        return retained!=null&&retained.key.startsWith("new:")&&(!retained.text.isEmpty()||!retained.attachments.equals("[]"))
+                ?new OrdinaryNewDraftResume(retained.key,retained.revision):null;
+    }
+    public synchronized Draft resumeOrdinaryNewDraft(OrdinaryNewDraftResume exact)throws Exception {
+        if(exact==null||!exact.equals(ordinaryNewDraftResume()))throw new IllegalStateException("原未发草稿已变化，没有切换到其他输入");
+        // Same lock, same stock selection; this branch cannot allocate a new draft.
+        return newConversation();
     }
     /** Receives an already verified native report pin and range, not a Web source claim. */
     public synchronized OwnerComposerState prepareIndependentReportFollowUp(String originFingerprint,JSONObject reference)throws Exception {

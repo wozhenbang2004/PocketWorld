@@ -188,6 +188,30 @@ function recordedWindowsReadWithDesktop(peer: Data, local: Data, snapshot: Data 
 function recordedHomeWindowsReadCandidate(peer: Data, local: Data, snapshot: Data | null, now: number) {
   return recordedWindowsReadCandidate(peer, local, snapshot, now) || recordedWindowsReadWithDesktop(peer, local, snapshot, now);
 }
+/** On the native peer row these are rechecked original signed grants, not capability ads.
+ * The positive receipt supports only a local preparation shortcut; it is not a screen or execution check. */
+function recordedManualPhoneGrant(peer: Data, localId: string, now: number) {
+  if (peer.revoked !== false || peer.connection?.state === 'REVOKED' || peer.hasMoreReceivedGrantScopes !== false ||
+      !Number.isSafeInteger(peer.authorizationEpoch) || peer.authorizationEpoch < 1) return;
+  const proven = rows(peer.receivedGrantScopes).filter(scope => {
+    const methods = strings(scope.capabilities), tools = strings(scope.toolNames), screens = rows(scope.resources);
+    const screen = screens[0], packages = screen?.packageNames;
+    return scope.receivedScope === true && typeof scope.grantId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(scope.grantId) &&
+      Number.isSafeInteger(scope.authorizationEpoch) && scope.authorizationEpoch > 0 &&
+      Number.isSafeInteger(scope.issuedAt) && scope.issuedAt > 0 && scope.issuedAt <= now &&
+      Number.isSafeInteger(scope.expiresAt) && scope.expiresAt > now &&
+      Array.isArray(scope.allowedOrigins) && scope.allowedOrigins.length === 1 && scope.allowedOrigins[0] === localId &&
+      scope.allowDelegation === false && scope.maxDelegationDepth === 0 && !('forwardingScope' in scope) &&
+      Number.isSafeInteger(scope.toolBudget) && scope.toolBudget >= 2 && scope.modelBudget === 0 && !methods.includes('task.submitGoal') &&
+      ['tool.invoke', 'artifact.describe', 'artifact.readChunk'].every(method => methods.includes(method)) &&
+      ['phone_observe', 'phone_tap', 'phone_swipe'].every(tool => tools.includes(tool)) &&
+      Array.isArray(scope.resources) && scope.resources.length === 1 && screens.length === 1 && ['main_screen', 'background'].includes(screen.screenMode) &&
+      screen.allowWholeDisplayInput === true && screen.allowWholeDisplayCapture === true &&
+      Array.isArray(packages) && packages.length === 1 && typeof packages[0] === 'string' && packages[0].length <= 255 &&
+      /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(packages[0]);
+  });
+  return proven.length === 1 ? `${proven[0].grantId}:${proven[0].authorizationEpoch}` : undefined;
+}
 type LastWindowsRead = { windowKey: string; receivedAt: number; metadata: Data };
 const originalHistoryKey = (review: Data) => JSON.stringify([review.viewHandle, review.view?.taskId, review.view?.operationId,
   review.view?.targetDeviceId, review.view?.instanceId, review.view?.argumentsDigest]);
@@ -305,7 +329,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const pairedWorkChoice = !sourceFocus && !modelReturn && !homeWindowsFile && reading?.pairedWorkChoice === true;
   const homeDeviceInbox = !sourceFocus && !modelReturn && !homeWindowsFile && !pairedWorkChoice ? reading?.homeDeviceInbox : undefined;
   const deviceInboxSection = useRef<HTMLElement>(null);
-  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown; window: string; arrival?: HomeDeviceInboxVisit }>();
+  const [localRead, setLocalRead] = useState<{ capturedAt: number; revision: unknown; window: string; originalWindow: boolean; arrival?: HomeDeviceInboxVisit }>();
   const peerPlace = useRef(!sourceFocus && !modelReturn ? reading?.selected : undefined);
   const addressRepair = useRef<AddressRepair | undefined>(undefined);
   const placeRead = useRef(!peerPlace.current);
@@ -392,11 +416,13 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const refreshLocal = (arrival?: HomeDeviceInboxVisit) => {
     if (!alive.current || document.visibilityState !== 'visible' || scope.current.hasPending()) { arrival?.retire(); return; }
     setLocalRead(undefined); // A failed reread must not mark the previous directory as current.
+    const startedWindow = waitingGoalWindow();
     let observed = false;
     const read = invoke('devices.snapshot', {}, (_value, actual) => {
       if (actual) {
         observed = true; placeRead.current = true;
-        setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision, window: waitingGoalWindow(), arrival });
+        const window = waitingGoalWindow();
+        setLocalRead({ capturedAt: actual.capturedAt, revision: state.deviceWorkspaceRevision, window, originalWindow: !!window && window === startedWindow, arrival });
       }
     });
     if (arrival) void read.then(() => { if (!observed) arrival.retire(); });
@@ -717,6 +743,31 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     }
     setWorkPhone({ deviceId: peer.deviceId, instanceId: peer.instanceId, certificateFingerprint: peer.certificateFingerprint, label: name(peer) });
     setForm(destination);
+  };
+  const manualPhoneProof = (at: number) => {
+    const live = bridge.getState(), window = waitingGoalWindow(), place = peerPlace.current;
+    if (!peer || !phonePeer || desktopPeer || identityOnlyHere || sourceFocus || modelReturn || homeWindowsFile || desktopOpen ||
+        live.host?.ready !== true || bridge.getDocumentEpoch() < 1 || !window || !localRead?.originalWindow || !localReadCurrent ||
+        localRead.window !== window || !Number.isSafeInteger(localRead.revision) || live.state.deviceWorkspaceRevision !== localRead.revision ||
+        snapshot?.capturedAt !== localRead.capturedAt || !place || peerId !== selectedPeer.current || peer.deviceId !== selectedPeer.current ||
+        place.here.deviceId === place.partner.deviceId || !sameDeviceReadingPlace(place, local, peer) ||
+        peers.filter(row => row.deviceId === peer.deviceId).length !== 1) return;
+    const manifest = peer.capabilitySnapshot;
+    if (manifest && (manifest.deviceId !== peer.deviceId || manifest.instanceId !== peer.instanceId)) return;
+    const grant = recordedManualPhoneGrant(peer, place.here.deviceId, at);
+    return grant ? { place, window, revision: localRead.revision, capturedAt: localRead.capturedAt, grant } : undefined;
+  };
+  const manualPhone = supported('phoneControl.prepare') ? manualPhoneProof(now) : undefined;
+  const openRecordedManualPhone = (original: NonNullable<ReturnType<typeof manualPhoneProof>>) => {
+    if (busy || preparingDeviceWork || form || review || scope.current.hasPending() || scope.current.hasPending('control')) return;
+    const current = manualPhoneProof(Date.now());
+    if (!supported('phoneControl.prepare') || !current || current.window !== original.window || current.revision !== original.revision ||
+        current.capturedAt !== original.capturedAt || current.grant !== original.grant ||
+        !sameDeviceReadingPlace(original.place, current.place.here, current.place.partner)) {
+      setError('原手机或手动查看范围已变化。请重读本机记录，没有准备手控或联系手机。'); return;
+    }
+    setError('');
+    openDirectedPhone('manual');
   };
   const prepareDeviceGoal = () => openDirectedPhone('work');
   const prepareWindowsWorkspace = (requireRecordedRange = false) => {
@@ -1584,6 +1635,7 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
         {!desktopOpen && <div className="pw-device-heading-actions">
           {peerEntry && <Button variant="primary" leadingIcon={peerEntry.icon} disabled={busy} onClick={peerEntry.open}>{peerEntry.label}</Button>}
           {mixedWindowsRead && <Button variant="secondary" leadingIcon={IconFolder} disabled={busy} onClick={() => prepareSavedWindowsRead(true)}>准备只读任务</Button>}
+          {manualPhone && <Button variant="secondary" leadingIcon={IconPhone} disabled={busy || preparingDeviceWork} onClick={() => openRecordedManualPhone(manualPhone)}>准备手动查看</Button>}
           <Button variant="ghost" iconOnly leadingIcon={IconRefresh} aria-label="重读这台设备的连接记录" title="重读这台设备的连接记录" disabled={busy} onClick={refresh} />
         </div>}
       </header>}
@@ -1895,11 +1947,12 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
                   <p>本机留存的授权：{[...phoneWork.labels].join('；')}。</p>
                   {phoneWork.textStatus && deviceChannelWasConnected(peer) && <p>{phoneWork.textStatus}</p>}
                   <p>准备只在本机保存目标。实际范围仍需从原工作核对，不会换设备。</p>
-                </> : <p>没有核对到对方给本机的新工作范围。配对或连接成功不等于可以交办。</p>}
+                </> : manualPhone ? <p>本机留存手动查看授权。准备时不读画面、不调用模型；开始前仍需核对原屏幕范围。</p>
+                  : <p>没有核对到对方给本机的新工作范围。配对或连接成功不等于可以交办。</p>}
               </div>}
               <div className="pw-form-actions">
               {desktopPeer && !windowsReadOnlyHere && !identityOnlyHere && peerEntry?.kind !== 'desktop' && <Button variant="secondary" disabled={busy} leadingIcon={IconMonitor} onClick={openDesktopPreparation}>核对桌面观看范围</Button>}
-              {phonePeer && !desktopPeer && !identityOnlyHere && !retired(peer) && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => openDirectedPhone('manual')}>手动查看这部手机的屏幕范围</Button>}
+              {phonePeer && !desktopPeer && !identityOnlyHere && !retired(peer) && !manualPhone && supported('phoneControl.prepare') && <Button disabled={busy} onClick={() => openDirectedPhone('manual')}>手动查看这部手机的屏幕范围</Button>}
               {windowsPeer && !identityOnlyHere && !mixedWindowsRead && peerEntry?.kind !== 'workspace' && supported('deviceTaskScope.prepare') &&
                 <Button variant="secondary" disabled={busy} onClick={() => prepareWindowsWorkspace()}>准备读取这台电脑的工作区</Button>}
               {!retired(peer) && (identityOnlyHere || !desktopPeer && !phonePeer) && <p>{identityOnlyHere

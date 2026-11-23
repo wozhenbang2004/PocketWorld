@@ -31,6 +31,33 @@ final class TaskRunDocumentReader {
         }catch(android.database.sqlite.SQLiteException|org.json.JSONException unavailable){return "unverified";}
     }
 
+    /** A later interrupted run must exist beside its immediate predecessor in
+     * this same original Work journal. This does not attest dispatch or completion. */
+    static JSONObject interruptedOwnerWorkRoundForUi(SQLiteDatabase db,JSONObject task) {
+        if(Thread.currentThread().isInterrupted()||!OwnerWorkTask.isOwnerWork(task)
+                ||!"owner".equals(task.opt("actorId"))||!"private".equals(task.opt("spaceId"))
+                ||!"assistant".equals(task.opt("kind"))||!"capabilities".equals(task.opt("executionMode"))
+                ||!"interrupted".equals(task.opt("status"))||!Boolean.TRUE.equals(task.opt("contextAvailable"))
+                ||!Boolean.FALSE.equals(task.opt("taskCoreReadLimited"))||task.optBoolean("metadataLimited")
+                ||task.optBoolean("contextWithdrawn")||task.optBoolean("sourceCurrentReadRequired"))return null;
+        for(String key:new String[]{"origin","parentTaskId","teamRunId","teamAssignment","teamWriteScope","memberId",
+                "developmentContext","ownerPhoneControl","ownerDeviceWork","deviceExecutionScope","workProfileRef","workProfileIntent",
+                "ownerWorkPreparation","ownerResultHandling","ownerWorkTakeover","projectMemoryRead","sourceLearningJob"})
+            if(!task.isNull(key))return null;
+        String id=task.optString("id"),run=task.optString("runId"),conversation=task.optString("conversationId");
+        JSONObject work=task.optJSONObject("ownerWork");
+        int epoch=task.optInt("coordinatorEpoch");
+        if(id.isBlank()||run.isBlank()||conversation.isBlank()||epoch<2||!id.equals(work.opt("workTaskId"))
+                ||!conversation.equals(work.opt("conversationId")))return null;
+        // UNIQUE(task_id, epoch) bounds both the predecessor and intervening-run checks.
+        String sql="SELECT 1 FROM runs live JOIN runs prior ON prior.task_id=live.task_id AND prior.epoch=live.epoch-1 "+
+                "WHERE live.task_id=? AND live.run_id=? AND live.epoch=? AND live.status='interrupted' AND prior.run_id<>live.run_id "+
+                "AND NOT EXISTS (SELECT 1 FROM runs later WHERE later.task_id=live.task_id AND later.epoch>live.epoch) LIMIT 1";
+        try(Cursor row=db.rawQuery(sql,new String[]{id,run,Integer.toString(epoch)})){
+            return row.moveToFirst()?new JSONObject().put("taskId",id).put("runId",run).put("epoch",epoch):null;
+        }catch(android.database.sqlite.SQLiteException|org.json.JSONException unavailable){return null;}
+    }
+
     /** Read a saved grant, never renew or authorize it. All original expiry,
      * principal, scope, epoch and remaining-budget checks stay with the caller. */
     static JSONObject grantForRun(SQLiteDatabase db,String runId)throws Exception {
