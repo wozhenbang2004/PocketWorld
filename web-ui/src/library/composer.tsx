@@ -2,7 +2,7 @@
 // Source controls retained; the host separates full-width editing from its toolbar.
 import {forwardRef,useContext,useEffect,useLayoutEffect,useRef,useState,type ReactElement,type ReactNode,type RefObject} from 'react';
 import {AnimatePresence,PresenceContext,animate,motion,useMotionValue,usePresence} from 'motion/react';
-import {IconCheck,IconCircle,IconClose,IconCode,IconImage,IconReply,IconStop} from '../icons';
+import {IconCheck,IconCircle,IconClose,IconCode,IconImage,IconInfo,IconReply,IconStop} from '../icons';
 import type {ChatComposerProps,ModelOption,DataPanelProps,Step} from './types';
 import {FrameA,FrameB,Card,Icon,ToolButton,statusLabel,records,textOf,useMotionAllowed} from './core';
 import {PressButton} from './press';
@@ -14,6 +14,10 @@ import {ComposerContextMeter} from '../ComposerContextMeter';
 import {SmoothComposerSurface} from './SmoothComposerSurface';
 import {createTextareaMeasure} from './adapted/textarea-measure';
 import {composerHasPayload} from '../composer-send-policy';
+import {exactFileTarget} from '../attachment-workspace';
+import {registerOverlayBack} from '../overlay-back';
+import {Button} from '../forms-library/boardui/components/base/buttons/button';
+import {Popover,PopoverHeader,PopoverTrigger} from '../shell-library/adapted/boardui/components/base/popover/popover';
 import {cssEase,motionDuration,motionEase,motionTransition} from './motion-tokens';
 
 // Each retained exit reads the live motion preference itself: its last parent
@@ -42,26 +46,67 @@ const ComposerControl=forwardRef<HTMLSpanElement,{children:ReactNode}>(function 
   onClickCapture={event=>{if(!present){event.preventDefault();event.stopPropagation()}}}>{children}</motion.span>;
 });
 
-function ComposerAttachment({file,onRemove}:{file:NonNullable<ChatComposerProps['attachments']>[number];onRemove?:ChatComposerProps['onRemoveAttachment']}){
+type ComposerFile = NonNullable<ChatComposerProps['attachments']>[number];
+type AttachmentInformation = {pin:string;kind:string;bytes:number;position?:number};
+function attachmentInformation(file:ComposerFile,scope:string|undefined,position:number|undefined):AttachmentInformation|undefined {
+ const target=exactFileTarget(file),bytes=file.size;
+ const kind=file.mimeType==='application/pdf'?'PDF':
+  file.mimeType==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'?'Word 文档':'';
+ if(!scope||!target||!kind||typeof file.name!=='string'||!file.name.trim()||typeof bytes!=='number'||!Number.isSafeInteger(bytes)||bytes<1)return;
+ return {pin:JSON.stringify([scope,target.fileId,target.sha256,file.name,kind,bytes,position]),kind,bytes,position};
+}
+
+function ComposerAttachment({file,onRemove,info,showInfo,onInfoChange}:{file:ComposerFile;onRemove?:ChatComposerProps['onRemoveAttachment'];
+ info?:AttachmentInformation;showInfo:boolean;onInfoChange:(open:boolean)=>void}){
  const {allowed,present,style}=useComposerPresence(6);
  const originalPreview=typeof file.thumbnailDataUrl==='string'?file.thumbnailDataUrl:typeof file.thumbnail==='string'?file.thumbnail:'';
  const thumbnail=/^(data:image\/(?:jpeg|png|webp|gif);base64,|blob:)/i.test(originalPreview)?originalPreview:'';
  const kind=String(file.mimeType||'').startsWith('image/')?'image':/\.(?:tsx?|jsx?|java|kt|py|go|rs|css|html|json|xml|yaml|yml|sh)$/i.test(file.name)?'code':'file';
  const progress=typeof file.progressPercent==='number'&&Number.isFinite(file.progressPercent)&&file.progressPercent>=0&&file.progressPercent<100?Math.round(file.progressPercent):null;
- return <motion.span role="listitem" className="pw-composer-attachment" data-kind={kind} layout={allowed?'position':false}
+ const information=present?info:undefined;
+ const position=information?.position===undefined?'':` · 草稿中第 ${information.position} 项`;
+ return <motion.span role="listitem" className="pw-composer-attachment" data-kind={kind} data-attachment-info={!!information||undefined} layout={allowed?'position':false}
   style={style} transition={allowed?motionTransition.layout:motionTransition.instant} inert={!present} aria-hidden={!present||undefined}>
   <span className="pw-composer-file-preview">{thumbnail?<img src={thumbnail} alt="" loading="lazy"/>:kind==='image'?<IconImage size={21} aria-hidden="true"/>:kind==='code'?<IconCode size={21} aria-hidden="true"/>:<Icon name="file" size={21}/>}
    {progress!==null&&<svg viewBox="0 0 48 48" className="pw-composer-file-progress" aria-label={'上传 '+progress+'%'}><circle cx="24" cy="24" r="21" className="pw-composer-file-track"/><circle cx="24" cy="24" r="21" className="pw-composer-file-value" strokeDasharray={String(2*Math.PI*21)} strokeDashoffset={String((1-progress/100)*2*Math.PI*21)}/></svg>}
   </span>
-  <span className="pw-composer-file-name" title={file.name}>{file.name}</span>
-  {onRemove&&<button type="button" disabled={!present} aria-label={'移除 '+file.name} onClick={()=>{if(present)onRemove(file.id)}}><IconClose size={12} aria-hidden="true"/></button>}
+  {information?<PopoverTrigger key={information.pin} isOpen={showInfo} onOpenChange={onInfoChange}>
+   <button type="button" className="pw-composer-file-info-trigger" aria-label={`附件信息：${file.name}${position}`}>
+    <span className="pw-composer-file-name">{file.name}</span><IconInfo size={13} aria-hidden="true"/>
+   </button>
+   <Popover placement="top" motionProfile="quick" dialogClassName="pw-composer-file-info-dialog">
+    {({close})=><>
+     <PopoverHeader title="附件信息"/>
+     <bdi className="pw-composer-file-info-name">{file.name}</bdi>
+     <p className="pw-composer-file-info-meta">{information.kind} · {information.bytes.toLocaleString('zh-CN')} 字节{position}</p>
+     <Button type="button" variant="ghost" size="small" className="self-end" onClick={close}>关闭</Button>
+    </>}
+   </Popover>
+  </PopoverTrigger>:<span className="pw-composer-file-name" title={file.name}>{file.name}</span>}
+  {information?.position!==undefined&&<span className="pw-composer-file-position" aria-hidden="true">{information.position}</span>}
+  {onRemove&&<button type="button" className="pw-composer-attachment-remove" disabled={!present} aria-label={'移除 '+file.name+position} onClick={()=>{if(present)onRemove(file.id)}}><IconClose size={12} aria-hidden="true"/></button>}
  </motion.span>;
 }
 
-function ComposerAttachments({files,onRemove}:{files:NonNullable<ChatComposerProps['attachments']>;onRemove?:ChatComposerProps['onRemoveAttachment']}){
+function ComposerAttachments({files,onRemove,informationScope}:{files:ComposerFile[];onRemove?:ChatComposerProps['onRemoveAttachment'];informationScope?:string}){
  const allowed=useMotionAllowed(),initial=useContext(PresenceContext)?.initial!==false;
  const [present,safeToRemove]=usePresence(),remove=useRef(safeToRemove),content=useRef<HTMLDivElement>(null);
  const [height,setHeight]=useState(0),animatedHeight=useMotionValue(0),opacity=useMotionValue(allowed&&initial?0:1);
+ const [reviewPin,setReviewPin]=useState<string|null>(null);
+ const rows=files.map((file,index)=>({file,info:attachmentInformation(file,present?informationScope:undefined,
+  files.some(other=>other.id!==file.id&&other.name===file.name)?index+1:undefined)}));
+ const shownPin=reviewPin&&rows.some(row=>row.info?.pin===reviewPin)?reviewPin:null;
+ useLayoutEffect(()=>{
+  if(reviewPin&&!shownPin)setReviewPin(current=>current===reviewPin?null:current);
+ },[reviewPin,shownPin]);
+ useLayoutEffect(()=>{
+  if(!shownPin)return;
+  const close=()=>setReviewPin(current=>current===shownPin?null:current);
+  const hidden=()=>{if(document.hidden)close();};
+  const releaseBack=registerOverlayBack(close);
+  document.addEventListener('visibilitychange',hidden);
+  return()=>{releaseBack();document.removeEventListener('visibilitychange',hidden);};
+ },[shownPin]);
  const measured=useRef(false);
  useLayoutEffect(()=>{remove.current=safeToRemove},[safeToRemove]);
  useLayoutEffect(()=>{
@@ -84,7 +129,10 @@ function ComposerAttachments({files,onRemove}:{files:NonNullable<ChatComposerPro
  },[height,present,allowed,animatedHeight,opacity]);
  return <motion.div className="pw-composer-attachments-reveal" inert={!present} aria-hidden={!present||undefined} style={{height:animatedHeight,opacity}}>
   <div ref={content} className="afa-filechips" aria-label="已附加文件" role="list"><AnimatePresence initial={false}>
-   {files.map(file=><ComposerAttachment key={file.id} file={file} onRemove={present?onRemove:undefined}/>)}
+   {rows.map(({file,info})=><ComposerAttachment key={file.id} file={file} onRemove={present?onRemove:undefined}
+    info={info} showInfo={!!info&&info.pin===shownPin} onInfoChange={open=>{
+     if(info)setReviewPin(current=>open&&!document.hidden?info.pin:current===info.pin?null:current);
+    }}/>)}
   </AnimatePresence></div>
  </motion.div>;
 }
@@ -106,7 +154,7 @@ function sizeComposerEditor(measurement:ReturnType<typeof createTextareaMeasure>
  next.onfinish=()=>{if(animation.current===next){animation.current=null;next.cancel()}};
 }
 
-export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,continuationMode,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel,visibleSendLabel,primaryInputAction,readOnly=false}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string;visibleSendLabel?:string;primaryInputAction?:ReactElement;readOnly?:boolean}){
+export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disabled,placeholder='输入目标，或补充上下文…',attachments=[],onRemoveAttachment,attachmentInformationScope,onAttach,onVoice,listening,voiceStatus,onDiscardVoice,modelName,onSelectModel,toolbar,controls,contextStatus,contextPercent,children,status,continuationMode,label='工作输入',composerKey,className='',sendDisabled=false,sendLabel,visibleSendLabel,primaryInputAction,readOnly=false}:ChatComposerProps&{sendDisabled?:boolean;sendLabel?:string;visibleSendLabel?:string;primaryInputAction?:ReactElement;readOnly?:boolean}){
  const editor=useRef<HTMLTextAreaElement>(null);
  const allowed=useMotionAllowed(),resizeAnimation=useRef<Animation|null>(null),editorHeight=useRef(0);
  const editorOwner=useRef(composerKey),measurement=useRef<ReturnType<typeof createTextareaMeasure>|null>(null);
@@ -148,7 +196,8 @@ export function ChatComposer({value,onChange,onSend,onStop,busy,submitting,disab
   <section className="afa-composer" aria-label={label} data-composer-key={composerKey}>
    <div className="afa-card pw-composer-card" data-has-text={hasText} data-has-attachments={attachments.length>0}>
     <SmoothComposerSurface radius={24}/>
-    <AnimatePresence key={`attachments:${composerKey}`} initial={false}>{attachments.length>0&&<ComposerAttachments key="attachments" files={attachments} onRemove={onRemoveAttachment}/>}</AnimatePresence>
+    <AnimatePresence key={`attachments:${composerKey}`} initial={false}>{attachments.length>0&&<ComposerAttachments key="attachments" files={attachments} onRemove={onRemoveAttachment}
+     informationScope={!disabled&&!submitting&&!readOnly?attachmentInformationScope:undefined}/>}</AnimatePresence>
     {onSelectModel&&<div className="pw-composer-model"><button type="button" className="afa-btn pw-model-trigger" onClick={onSelectModel}><Icon name="spark"/><span>{modelName||'选择模型'}</span><Icon name="chevron" size={12}/></button></div>}
     <div className="pw-composer-row">
      {listening?<div className="afa-recording" role="status"><i aria-hidden="true"/><span>{voiceStatus||'正在听写…'}</span>{onDiscardVoice&&<ToolButton label="取消本次听写" icon="close" onClick={onDiscardVoice}/>}</div>:<textarea key={composerKey} ref={editor} rows={1} aria-label={label} enterKeyHint="enter" placeholder={placeholder} value={value} disabled={disabled} readOnly={readOnly} onChange={e=>onChange(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&e.nativeEvent.keyCode!==229&&(!matchMedia('(pointer: coarse)').matches||e.ctrlKey||e.metaKey)){e.preventDefault();if(!e.repeat&&canSend)onSend()}}}/>}

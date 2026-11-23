@@ -42,6 +42,7 @@ type FileRead = { gitStatusOperation?: string; saved?: SavedEdit; position?: Che
 type OriginalDirectoryOpening = { current: () => boolean; finish: (reason?: string) => void; chosenSavedFile?:CheckoutSavedPosition };
 type Props = { projectId: string; checkoutId: string; viewHandle: string; run: (action: string, args?: Data) => Promise<any>;
   reopenedProjectDirectory?: boolean;
+  preferOfflinePagePreviewAfterSave?: boolean; // Presentation only, never file or preview authority.
   hostFile?: HostEditorFile; sourceMember?: SourceMember & { taskId: string; operationId: string };
   resumeSaved?: CheckoutSavedPosition; firstEntry?: CheckoutWebEntry; buildResume?: CheckoutBuildEditorResume; pythonResume?: OriginalPythonRun;
   pythonSetupResume?: CheckoutSavedPosition; originalDirectoryOpening?: OriginalDirectoryOpening;
@@ -100,7 +101,7 @@ const interfaceDrafts = new Map<string, string>();
 const failureText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 type CheckpointMoving = 'returning' | 'unknown' | 'leaving' | 'close_unknown';
-export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, reopenedProjectDirectory, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening, checkpointArrival, checkpointHandoff }: Props) {
+export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, reopenedProjectDirectory, preferOfflinePagePreviewAfterSave, onClose, onOpenPythonWork, onPrepareBuild, onPreparePythonTools, preparePythonToolsLabel, prepareBuildAfterPath, prepareBuildLabel, registerBack, sourceMember, hostFile, resumeSaved, firstEntry, buildResume, pythonResume, pythonSetupResume, originalDirectoryOpening, checkpointArrival, checkpointHandoff }: Props) {
   const checkpoints = useSourceCheckpointFiles();
   const [checkpointMove, setCheckpointMove] = useState<CheckpointMoving>();
   const moving = useRef<CheckpointMoving | undefined>(undefined), departed = useRef(false), arrivalUsed = useRef(false);
@@ -1057,6 +1058,10 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
     editing ? '正在保留编辑文字，未写入副本' : file?.dirty ?
     file.draftDurable===true && !file.draftError ? '手机草稿已保留，未写入副本' : '草稿仍在当前会话，尚未确认写入手机' : '没有未保存修改';
   const locked = busy || editing || !!adoption || !!pythonRunReview || !!choosingPackage, nativeText = file?.text || '';
+  const offlinePreviewFirst = preferOfflinePagePreviewAfterSave && showingSavedFile && staticEligible &&
+    file?.path==='index.html' && file.canPreviewSavedStatic===true;
+  const staticPreviewAction=staticEligible&&<Button ref={staticPreviewTrigger} variant={offlinePreviewFirst?'primary':'secondary'}
+    disabled={locked} onClick={showStaticPreview}>{staticCompanion?'预览网页（带上本次保存）':'预览已保存网页'}</Button>;
   const canDraftBeforeSave = !sourceMember && !hostFile && !!recentSave && !!file && showingSavedFile &&
     !locked && !choice && !file.draftError && fileHash(recentSave.beforeHash) && recentSave.before!==recentSave.after &&
     file.dirty===false && file.conflict===false && file.saveUnknown===false &&
@@ -1326,15 +1331,15 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
             <Button variant="ghost" disabled={locked} onClick={()=>readPythonReview('directory')}>核对同目录 Python 程序…</Button>}
           {(packageDirectory||packageFolders.length>0)&&!pythonRunReview&&
             <Button ref={packageTrigger} variant="ghost" disabled={locked} onClick={openPythonPackage}>选择 Python 包源码…</Button>}
+          {offlinePreviewFirst&&staticPreviewAction}
           {showingSavedFile ? <>
-            <Button variant={canReviewPython?'ghost':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
+            <Button variant={canReviewPython?'ghost':offlinePreviewFirst?'secondary':undefined} disabled={locked} onClick={() => close(!canReviewPython && canCheckSavedBuild ? 'prepare-build' : undefined)}>
             {checkingSavedSource ? '正在核对这次保存…' : !canReviewPython && canCheckSavedBuild ? prepareBuildLabel||'接下来：核对构建条件' :
               returnsToCheckpoint ? (fromCheckpointComparison ? '已保存，返回原比较' : '已保存，返回原副本的文件') : '已保存，回到项目工作区'}
           </Button></> : !canReviewPython&&!pythonRunReview&&
             <Button disabled={locked || orphan !== null || blockedEdit.current || (!file.dirty && !canCreateEmpty) || file.conflict || file.saveUnknown}
               onClick={()=>saveFile(canCreateEmpty)}>{canCreateEmpty?'创建空文件':'保存到这个副本'}</Button>}
-          {staticEligible&&<Button ref={staticPreviewTrigger} variant="secondary" disabled={locked} onClick={showStaticPreview}>
-            {staticCompanion?'预览网页（带上本次保存）':'预览已保存网页'}</Button>}
+          {!offlinePreviewFirst&&staticPreviewAction}
         </div>}
         {choosingPackage&&pythonSource&&<section className="pw-checkout-adoption" aria-label="选择 Python 包源码">
           <h3 ref={packageHeading} tabIndex={-1}>入口：<bdi>{pythonSource.path}</bdi></h3>

@@ -231,7 +231,26 @@
   font: 400 .6875rem/1.35 var(--pw-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   text-align: center;
 }
-.pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > button {
+.pw-composer-host.pw-squircle-composer .pw-composer-attachment[data-attachment-info] .pw-composer-file-preview {
+  width: 34px; height: 34px; flex: none;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-info-trigger {
+  display: grid; align-content: center; justify-items: center; gap: 3px;
+  width: 100%; min-width: 0; min-height: var(--pw-composer-hit); padding: 2px;
+  border: 0; border-radius: 10px; background: transparent; color: inherit;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-info-trigger:focus-visible {
+  outline: 2px solid var(--pw-copy); outline-offset: -2px;
+}
+.pw-composer-host.pw-squircle-composer .pw-composer-file-info-trigger > svg { color: var(--pw-muted); }
+.pw-composer-host.pw-squircle-composer .pw-composer-file-position {
+  position: absolute; inset-block-start: 4px; inset-inline-start: 5px;
+  color: var(--pw-muted); font: 500 .6875rem/1.2 var(--pw-font); pointer-events: none;
+}
+.pw-composer-file-info-dialog { max-block-size: min(48dvh, 18rem); overflow: auto; }
+.pw-composer-file-info-name { overflow-wrap: anywhere; white-space: pre-wrap; }
+.pw-composer-file-info-meta { color: var(--pw-muted); font-size: .8125rem; }
+.pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > .pw-composer-attachment-remove {
   position: absolute; top: -8px; right: -8px; z-index: 2; isolation: isolate;
   display: grid; place-items: center;
   width: var(--pw-composer-hit); height: var(--pw-composer-hit); min-width: var(--pw-composer-hit); min-height: var(--pw-composer-hit);
@@ -239,7 +258,7 @@
   background: transparent; color: var(--pw-surface);
   font: 500 14px/1 var(--pw-font); box-shadow: none;
 }
-.pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > button::before {
+.pw-composer-host.pw-squircle-composer .afa-filechips .pw-composer-attachment > .pw-composer-attachment-remove::before {
   content: ''; position: absolute; inset: 12px; z-index: -1; border-radius: 50%;
   background: var(--pw-copy);
 }

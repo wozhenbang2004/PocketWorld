@@ -333,7 +333,9 @@ internal class PocketWebProjectDevelopment(
             val recovery = runCatching { controller.projectPackages.pendingWebSourceForProject(original.project) }.getOrNull()
             actual.putOpt("phoneSourceRecovery", recovery)
         }
-        val selectedModel = model()
+        // This optional model observation must not block the original local file view.
+        // Unavailable is distinct from a positively observed unconfigured default.
+        val selectedModel = try { model() } catch (_: Exception) { null }
         val draft=shownDraft(original)
         val selected=draft.optString("checkoutId").ifEmpty { original.shownSoleCheckout.orEmpty() }
         if(selected.isNotEmpty()){
@@ -341,7 +343,9 @@ internal class PocketWebProjectDevelopment(
             if(row?.opt("draftWorkingCopy")==true&&observeRetainedLink(original,selected,allowSole=true))
                 row.put("retainedOriginalLinked",true) // Only a live local link, no original task ID or text.
         }
-        return actual.put("viewHandle", original.handle).put("model", selectedModel.value()).put("modelRevision", selectedModel.revision())
+        return actual.put("viewHandle", original.handle)
+            .put("model", selectedModel?.value() ?: JSONObject().put("availability", "unavailable"))
+            .putOpt("modelRevision", selectedModel?.revision())
             .put("draft", draft).put("commandsAuthorized", false)
             .also { out -> original.requested?.let { out.put("openedDraftReturn",it.handle) } }
             .put("draftRecoveryRequired", restoreFailure != null).put("draftRecoveryMessage", restoreFailure ?: "")

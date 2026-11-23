@@ -126,6 +126,36 @@ function pinnedPhonePreparationRow(state: Data, focus: SentPhoneGoalFocus | unde
     (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => work.directPhone?.[key] === focus[key]) ? raw : undefined;
 }
 const matchesPinnedPhonePreparation = (state: Data, focus: SentPhoneGoalFocus | undefined) => !!pinnedPhonePreparationRow(state, focus);
+function pinnedManualPhonePreparation(state: Data, focus: SentPhoneGoalFocus | undefined) {
+  if (focus?.purpose !== 'partner_connection') return;
+  const matches = rows(state.tasks).filter(row => row.id === focus.taskId), task = matches[0];
+  if (matches.length !== 1 || !task || task.status !== 'paused' || unreadSource(task) || task.raw?.contextWithdrawn === true) return;
+  const original = deviceOriginalManualPhonePreparation(task);
+  if (original && (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => original.target[key] === focus[key])) return original;
+}
+/** The existing native snapshot has already checked these received grants against the original pairing.
+ * Summarize one unambiguous local receipt, not a live capability check or a route selection. */
+function recordedOriginalManualScreen(peer: Data, localId: string, now: number) {
+  if (peer.hasMoreReceivedGrantScopes !== false || peer.revoked !== false || peer.connection?.state === 'REVOKED' ||
+      !Number.isSafeInteger(peer.authorizationEpoch) || peer.authorizationEpoch < 1) return;
+  const matches = rows(peer.receivedGrantScopes).flatMap(scope => {
+    const methods = strings(scope.capabilities), tools = strings(scope.toolNames), resources = rows(scope.resources), screen = resources[0];
+    if (scope.receivedScope !== true || typeof scope.grantId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(scope.grantId) ||
+        !Number.isSafeInteger(scope.authorizationEpoch) || scope.authorizationEpoch < 1 ||
+        !Number.isSafeInteger(scope.issuedAt) || scope.issuedAt < 1 || scope.issuedAt > now ||
+        !Number.isSafeInteger(scope.expiresAt) || scope.expiresAt <= now || !methods.includes('tool.invoke') || methods.includes('task.submitGoal') ||
+        scope.modelBudget !== 0 || scope.allowDelegation !== false || scope.maxDelegationDepth !== 0 || 'forwardingScope' in scope ||
+        !Array.isArray(scope.allowedOrigins) || scope.allowedOrigins.length !== 1 || scope.allowedOrigins[0] !== localId ||
+        !Array.isArray(scope.resources) || scope.resources.length !== 1 || resources.length !== 1 ||
+        !['main_screen', 'background'].includes(screen.screenMode)) return [];
+    const listed = (flag: unknown, required: boolean) => flag === false ? false : flag === true && required ? true : undefined;
+    return [{ mode: screen.screenMode, input: listed(screen.allowWholeDisplayInput, tools.includes('phone_tap') && tools.includes('phone_swipe')),
+      capture: listed(screen.allowWholeDisplayCapture, tools.includes('phone_observe') && methods.includes('artifact.describe') && methods.includes('artifact.readChunk')) }];
+  });
+  const original = matches[0];
+  return matches.length === 1 && original && (original.input !== undefined || original.capture !== undefined) ? original : undefined;
+}
+const manualScreenFact = (value: boolean | undefined) => value === true ? '这份回执列明允许' : value === false ? '这份回执未列明允许' : '未核对';
 function originalPhoneAddressWork(state: Data, focus: SentPhoneGoalFocus | undefined, now = Date.now()) {
   const row = pinnedPhonePreparationRow(state, focus), scope = row?.executionScope;
   return row && scope?.format === 'pocketworld.task-execution-scope.v1' && scope.taskId === focus?.taskId &&
@@ -696,7 +726,11 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
   const addressDeadline = addressRepair.current?.originalPhone;
   const homeWindowsExpiries = homeWindowsFile ? peers.filter(windowsDevice).flatMap(row =>
     [row.capabilitySnapshot?.validUntil, ...rows(row.receivedGrantScopes).map(scope => scope.expiresAt)]) : [];
-  const nextExpiry = Math.min(...[validUntil, ...homeWindowsExpiries, addressDeadline?.until,
+  const manualParent = pinnedManualPhonePreparation(state, sourceFocus);
+  const originalManualPeer = manualParent && peers.find(row => row.deviceId === manualParent.target.deviceId &&
+    row.instanceId === manualParent.target.instanceId && row.certificateFingerprint === manualParent.target.certificateFingerprint);
+  const nextExpiry = Math.min(...[validUntil, ...homeWindowsExpiries, addressDeadline?.until, manualParent?.deadlineAt,
+    ...rows(originalManualPeer?.receivedGrantScopes).map(scope => scope.expiresAt),
     addressDeadline && review?.kind === 'connection' ? review.view.expiresAt : undefined, ...actionExpiries, ...tasks.map(task=>unreadSource(task) ? undefined : (peerId ? manualPreparationForPeer(task) : deviceOriginalManualPhonePreparation(task))?.deadlineAt), ...rows(waitingPhones?.rows).flatMap(row=>[row.sourceIdentity?.expiresAt,row.pickupBy]), ...rows(snapshot?.pendingPairings).filter(row => row.localOwnerWindow).map(row => row.expiresAt), ...rows(peer?.receivedGrantScopes).map(row => row.expiresAt), ...rows(peer?.grantScopes).map(row => row.expiresAt)]
     .filter(t => Number.isSafeInteger(t) && t > now));
   const [clockRevision, tickClock] = useState(0);
@@ -968,6 +1002,17 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
     && (!peerPlace.current || placeRead.current && sameDeviceReadingPlace(peerPlace.current, local, it))):undefined;
   const pinnedWorkspace = matchesPinnedWorkspaceWork(state, sourceFocus);
   const pinnedPhonePreparation = matchesPinnedPhonePreparation(state, sourceFocus);
+  const manualScreen = (() => {
+    if (!manualParent || !focusedPeer || focusedPeer !== originalManualPeer || manualParent.deadlineAt <= now ||
+        !snapshot || !localRead || !localReadCurrent || !Number.isSafeInteger(localRead.revision) || localRead.capturedAt !== snapshot.capturedAt ||
+        snapshot.hasMoreOutgoingGrants !== false || focusedPeer.capabilitySnapshot?.metadata?.grantReceiptsTruncated === true ||
+        peers.filter(row => row.deviceId === focusedPeer.deviceId).length !== 1) return;
+    const live = bridge.getState(), window = waitingGoalWindow(), place = deviceReadingPlace(local, focusedPeer);
+    if (!window || localRead.window !== window || !place || place.here.deviceId === place.partner.deviceId ||
+        live.host?.ready !== true || live.state.deviceWorkspaceRevision !== localRead.revision ||
+        pinnedManualPhonePreparation(live.state, sourceFocus)?.deadlineAt !== manualParent.deadlineAt) return;
+    return recordedOriginalManualScreen(focusedPeer, place.here.deviceId, now);
+  })();
   const phoneAddressBasis = originalPhoneAddressBasis(focusedPeer);
   const canUpdateOriginalPhoneAddress = !!sourceFocus && !!focusedPeer && localReadCurrent && !!phoneAddressBasis &&
     state.webWorkspaceSection === 'devices' && !state.webWorkspaceTaskOpen && Number.isSafeInteger(state.deviceWorkspaceRevision) &&
@@ -1655,6 +1700,14 @@ export function DevicesWorkspace({ state, data, supported, run, registerTransien
             : <><p>上次连接检查：{deviceConnectionLabel(focusedPeer)} · {time(focusedPeer.connection?.observedAt)}</p>
                 {!deviceChannelWasConnected(focusedPeer) && <p>{connectionRecoveryLine(focusedPeer)}</p>}
                 {deviceChannelWasConnected(focusedPeer) && !pinnedScopePlace && <p>连接记录不代表现在可执行。回到这份原工作后再核对设备范围。</p>}
+                {manualParent && <div>
+                  <h3>本机留存的手控范围</h3>
+                  {manualScreen ? <><p>{manualScreen.mode === 'background' ? '独立后台屏' : '主屏'}</p>
+                    <dl className="pw-facts"><div><dt>整屏输入</dt><dd>{manualScreenFact(manualScreen.input)}</dd></div>
+                      <div><dt>整屏截图</dt><dd>{manualScreenFact(manualScreen.capture)}</dd></div></dl></>
+                    : <p role="status">未核对到这部手机的整屏输入与截图范围。</p>}
+                  <p className="pw-field-hint">只看本机留存的回执，不读取画面；是否可开始仍在原准备中核对。</p>
+                </div>}
                 {pinnedScopePlace && <>
                   {pinnedPhonePreparation ? <>
                     <h3>这部手机能接手吗？</h3>

@@ -1212,6 +1212,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   // The pre-editor missing-lock observation may be repaired by saving that exact root path.
   // Recheck the saved source before deciding what comes next; saving a lock is not dependency readiness.
   const originalImportForSave=fileWindow?.originalImport;
+  const offlinePageEditor=originalImportForSave??fileWindow?.staticFilesVisit?.source;
+  const preferOfflinePagePreviewAfterSave=offlinePageEditor?.exactSavedPageStarter===true&&offlinePageEditor.checkoutId===fileCheckout&&
+    sameImportedEditor(offlinePageEditor,originalSavedStaticFolder(projectId));
   const directImportedSave=!source&&!!originalImportForSave&&originalImportForSave.sourceKind!=='task_source_package'&&
     originalImportForSave.checkoutId===checkout&&selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&
     sameImportedEditor(originalImportForSave,originalImportedEditor(projectId));
@@ -1319,6 +1322,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const showReactLock=buildStepVisible&&nativeDirectBuild&&!directWorkAtTop&&!versionWorkAtTop&&!acceptedWorkAtTop&&!showMissingLock&&
     reactLock?.verifiedVersion==='6.0.3'&&typeof reactLock.lockedVersion==='string'&&/^7[.](?:0|[1-9][0-9]{0,3})[.](?:0|[1-9][0-9]{0,3})$/.test(reactLock.lockedVersion);
   const exactBuildNext = !!(firstBuildAction || directWorkAtTop || versionWorkAtTop || acceptedWorkAtTop || showMissingLock || showReactLock);
+  const modelUnavailable = view?.model?.availability === 'unavailable';
+  const showModelConnection = !exactBuildNext || !['model','preview'].includes(firstBuildAction) && !!goal.trim();
   // Recognizing Python and its tools only brings the existing scope review closer.
   // The terminal's native review still reads the current copy and execution conditions.
   const savedScriptTooling=source?.checkoutTooling, terminalRuntime=view?.runtime;
@@ -1724,13 +1729,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
               builtInSetupUnavailable?' 当前安装包不能准备本机运行环境；文件仍可编辑。':
               showToolSetupByBuild?' 请先审阅手机工具的准备内容。返回后重新核对，不会自动构建。':' 这个窗口不能开始内置准备；仍可编辑文件。'}</>:
           firstBuildAction==='preview'?localViteReview?'先核对这版的本机网页构建与依赖，不调用模型。':`已核对 Node.js 和 ${nodeTools.manager}。先查看这版的命令与依赖；不用先连接模型。`:
-          firstBuildAction==='model'?`已核对 Node.js 和 ${nodeTools.manager}。构建任务还需要连接默认模型；连接不会开始构建。`:
+          firstBuildAction==='model'?`已核对 Node.js 和 ${nodeTools.manager}。${modelUnavailable?'暂不能核对默认模型，尚未开始构建。':'构建任务还需要连接默认模型；连接不会开始构建。'}`:
           `已核对 Node.js 和 ${nodeTools.manager}，已有默认模型配置。下一步只看构建方案，依赖和运行仍要分别确认。`}</p>
         <div className="pw-form-actions">
           {firstBuildAction==='tools'&&<Button ref={buildNextAction} disabled={disabled} onClick={prepareTools}>{view?.runtime?.installed===true?'检查与修复手机工具':'打开手机工具准备'}</Button>}
           {firstBuildAction==='refresh'&&<Button ref={buildNextAction} variant="secondary" disabled={disabled} onClick={()=>void read()}>重新核对手机工具</Button>}
           {firstBuildAction==='preview'&&<Button ref={buildNextAction} disabled={disabled} onClick={previewNodeBuild}>{localViteReview?'核对网页构建与依赖':nativeDirectDependencies?'核对本机构建与依赖':'查看本机构建方案'}</Button>}
-          {firstBuildAction==='model'&&<Button ref={buildNextAction} disabled={disabled||!can('projects.development.draft')} onClick={connectBuildModel}>连接默认模型</Button>}
+          {firstBuildAction==='model'&&<Button ref={buildNextAction} disabled={disabled||!can('projects.development.draft')} onClick={connectBuildModel}>
+            {modelUnavailable?'核对默认模型':'连接默认模型'}</Button>}
           {firstBuildAction==='review'&&<Button ref={buildNextAction} disabled={disabled} onClick={reviewNodeBuild}>{checkedSave?.matches===false?'核对当前版本的构建方案':'核对这个副本的构建方案'}</Button>}
         </div>
       </>}
@@ -1875,10 +1881,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         <ProjectTaskPackageOrigin key={view.viewHandle+':'+checkout} project={projectId} checkout={checkout} view={view.viewHandle}
           disabled={busy||!!review||filesOpen} invoke={invoke} can={can} open={onOpenPackageOriginal}/>}
       {!terminalBySave&&terminalAction}
-      {view.model?.configured !== true && (!exactBuildNext || !['model','preview'].includes(firstBuildAction)&&!!goal.trim()) &&
-        <p className="pw-local-inline-notice">交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。<Button variant={exactBuildNext?'ghost':'secondary'}
-          disabled={exactBuildNext||protectModelDraft?disabled||!can('projects.development.draft'):busy||pending||!!review||filesOpen}
-          onClick={exactBuildNext?connectBuildModel:connectProjectModel}>连接模型</Button></p>}
+      {view.model?.configured !== true && (modelUnavailable || showModelConnection) &&
+        <p className="pw-local-inline-notice" role={modelUnavailable?'status':undefined}>
+          {modelUnavailable?'暂不能核对默认模型。仍可编辑本机文件；模型交办暂不可用。':'交办目标需要默认模型；直接编辑文件、找回已保存的网页不需要。'}
+          {showModelConnection&&<Button variant={exactBuildNext?'ghost':'secondary'}
+            disabled={exactBuildNext||protectModelDraft?disabled||!can('projects.development.draft'):busy||pending||!!review||filesOpen}
+            onClick={exactBuildNext?connectBuildModel:connectProjectModel}>{modelUnavailable?'核对默认模型':'连接模型'}</Button>}
+        </p>}
       <Accordion><AccordionItem id="development-conditions" title="运行位置与开发条件" description={androidWrapper ? '检测到 Android 配置；本机 APK 构建条件未核验' : checkoutKindSummary(source, projectId, checkout) || '可先编辑文件；运行命令前核对工具'}>
         <p>本次只绑定这台手机与所选副本，不会自动切换到远程设备。Linux 工具不是聊天引擎，不需要为本机开发开启手机操控权限。</p>
         {androidWrapper ? <AndroidBuildConditions wrapper={androidWrapper} runtime={view.runtime} /> : <p>安装依赖、构建或启动仍须核对具体方案；不会因为发现项目类型就运行脚本。</p>}
@@ -1896,7 +1905,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     {active && view && fileWindow && <ProjectCheckoutFiles key={`${view.viewHandle}|${fileCheckout}`} projectId={projectId} checkoutId={fileCheckout} viewHandle={view.viewHandle} run={fileWindow.reopenedFiles?runReopenedFiles:run} hostFile={hostEditor || undefined}
       reopenedProjectDirectory={fileWindow.reopenedFiles===true || fileWindow.originalImport?.openDirectory===true && fileWindow.originalImport.exactPhoneSource===true}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
-      pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit} onClose={closeFiles}
+      pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit}
+      preferOfflinePagePreviewAfterSave={preferOfflinePagePreviewAfterSave} onClose={closeFiles}
       checkpointArrival={fileWindow.checkpointArrival} checkpointHandoff={checkpointFilesHandoff()}
       onPreparePythonTools={fileWindow.checkpointArrival?.side!=='sibling'&&pythonToolSetup?prepareSavedPythonTools:undefined}
       preparePythonToolsLabel={pythonRepair?'查看手机工具修复':undefined}

@@ -11,6 +11,7 @@ export type ChatComposerProps = {
  value:string; onChange:(text:string)=>void; onSend:()=>void; onStop?:()=>void;
  busy?:boolean; submitting?:boolean; disabled?:boolean; placeholder?:string;
  attachments?:Attachment[]; onRemoveAttachment?:(id:string)=>void; onAttach?:()=>void;
+ attachmentInformationScope?:string;
  onVoice?:()=>void; listening?:boolean; voiceStatus?:string; onDiscardVoice?:()=>void;
  modelName?:string; onSelectModel?:()=>void; toolbar?:ReactNode; controls?:ReactNode; contextStatus?:ReactNode; contextPercent?:number|null; children?:ReactNode;
  status?:ReactNode; continuationMode?:'queue'|'steer'; label?:string; composerKey?:string; className?:string;

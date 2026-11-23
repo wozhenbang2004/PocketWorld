@@ -2184,14 +2184,21 @@ export default function App(){
  },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation,retireConfirmedHistoryWord]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
  const captureChatDefaultPresets=():ChatDefaultOrigin|null=>{
-  if(route!=='chat'||intent!=='chat'||!conversationMemoryOpen||taskOpen||taskOpening||workOpen||commandOpen||
+  if(!isChatSurface||intent!=='chat'||!conversationMemoryOpen||taskOpen||taskOpening||workOpen||commandOpen||
      !can(chatDefaultPresetsCommand)||document.hidden)return null;
   const live=bridge.getState(),draft=live.composer,conversationId=live.state.conversationId;
   if(typeof conversationId!=='string'||!conversationId||draft?.ready!==true||
      !Number.isSafeInteger(draft.epoch)||!Number.isSafeInteger(draft.revision)||draft.revision<1)return null;
+  const fromButler=route==='butler',resume=obj(live.view).resumeRevision;
+  // The Home continuation must still show the exact active topic and draft that opened this pane.
+  if(fromButler&&(!ordinaryButlerContinuation||draftSwitchPending()||navigationRevision!==navigationWindow.current||
+     state.conversationId!==conversationId||composer.key!==draft.key||composer.epoch!==draft.epoch||
+     composer.revision!==draft.revision||!Number.isSafeInteger(resume)))return null;
   const draftEpoch=Number(draft.epoch),draftRevision=Number(draft.revision),documentEpoch=bridge.getDocumentEpoch(),navigation=navigationWindow.current;
   const current=()=>{
    const now=bridge.getState(),view=obj(now.view),owner=now.state,editor=now.composer,phone=obj(now.phoneDraft);
+   if(fromButler&&(view.resumeRevision!==resume||owner.loadingFirstConversationMessages||owner.chatBusy||
+      owner.chatSubmitting||owner.phoneSubmitting||owner.attachmentImporting||foregroundConversationTurn(owner)))return false;
    return !document.hidden&&bridge.getDocumentEpoch()===documentEpoch&&navigationWindow.current===navigation&&
     now.host?.ready===true&&view.section===null&&view.taskId===null&&owner.conversationId===conversationId&&
     !owner.conversationReader&&!owner.queuedInputsPage&&!owner.filePath&&!owner.chatAttachmentPickerOpen&&!owner.attachmentWorkspace?.open&&
@@ -9522,13 +9529,14 @@ export default function App(){
  const setupUse=setupFeedback&&(state.modelSelectionRevision===setupFeedback.modelRevision
   ?modelSetupUse(setupFeedback.input,setupFeedback.choice,state,setupFeedback.matchesDefault)
   :state.modelSelectionRevision>setupFeedback.modelRevision?'changed':'unknown');
- // Keep the topic choice next to the verified editor, not alongside an input receipt.
- const homeNewTopic=route==='butler'&&ready&&intent==='chat'&&!!state.conversationId&&
+ // Only a verified ordinary continuation is a topic-specific entry in Home.
+ const ordinaryButlerContinuation=route==='butler'&&ready&&intent==='chat'&&!!state.conversationId&&
   composer.ready===true&&composer.conversationId===state.conversationId&&draftKey===`conversation:${state.conversationId}`&&
   !state.conversationReader&&!state.loadingFirstConversationMessages&&!homeHostMessage&&!foregroundTurn&&!pendingHere&&
-  !state.chatSubmitting&&!state.phoneSubmitting&&!draftSwitching&&!registration.waiting&&can('conversation.new')&&
+  !state.chatSubmitting&&!state.phoneSubmitting&&!draftSwitching&&!registration.waiting&&
   messages.some(message=>message.role==='user'&&!!message.id&&message.quoteAvailable===true&&!message.firstHostRequestLocal&&
    Number.isSafeInteger(message.sourceRevision)&&Number(message.sourceRevision)>0);
+ const homeNewTopic=ordinaryButlerContinuation&&can('conversation.new');
  const newTopicInComposer=homeNewTopic||resumeOrdinaryDraft;
  const homeCurrentConversation=route==='butler'&&ready&&(messages.length>0&&!!state.conversationId||!!foregroundTurn||pendingHere);
  const abandonEmptyReportDraft=async()=>{
@@ -9634,6 +9642,14 @@ export default function App(){
  const firstHomePhoneOriginal=route==='butler'&&intent==='main_screen'&&!composerModelName&&blankPhoneOriginalEnabled&&
   !taskOpening&&!document.hidden&&[localMainReadAction,'phone.start','conversation.select'].every(can)&&
   !!blankPhoneOriginalInput(snapshot,text,intent);
+ // Only identify files already displayed in the same ordinary editor, never open a file or the Library.
+ const attachmentInformationScope=canChooseFileForDraft&&!taskOpening&&!draftSwitching&&!reportDraftSwitching&&
+  !workOpen&&!commandOpen&&!preparationTarget&&!voiceReview&&!isListening&&!state.filePath&&!state.queuedInputsPage&&
+  !state.chatAttachmentPickerOpen&&state.attachmentWorkspace?.open===false&&fileDraftTarget&&
+  ordinaryDraftRevision===fileDraftTarget.revision&&filePickerDraftCurrent(fileDraftTarget,personalDocumentEpoch,navigationRevision)&&
+  (fileDraftTarget.conversationId?fileDraftTarget.key===`conversation:${fileDraftTarget.conversationId}`:
+   ordinaryNewAttachmentDraftCurrent(fileDraftTarget,snapshot))?
+  JSON.stringify([personalDocumentEpoch,navigationRevision,route,fileDraftTarget.key,fileDraftTarget.epoch,fileDraftTarget.revision]):undefined;
  const composerRegion=<div className="pw-composer-region">
    {(homeCurrentConversation||newTopicInComposer)&&<div className="pw-butler-conversation-context">
     {homeCurrentConversation&&<>
@@ -9679,6 +9695,7 @@ export default function App(){
      navigationCurrent={value=>navigationWindow.current===value}
      arrived={same=>{if(route==='butler')void navigate('chat',undefined,{stillCurrent:same})}}>
      {(primaryAction,originalDetail)=><ChatComposer primaryInputAction={primaryAction} readOnly={!!heldFirstChat}
+       attachmentInformationScope={attachmentInformationScope}
        continuationMode={intent==='chat'&&(state.chatSendMode==='queue'||state.chatSendMode==='steer')?state.chatSendMode:undefined}
        contextStatus={<IconChat size={15} aria-label="当前对话"/>} controls={primaryAction||shownLocalMainRead?undefined:firstDraftConnect?
        <Button variant="secondary" size="small" className="min-h-11" leadingIcon={IconModel} data-workspace-entry="connect-model"
@@ -10922,6 +10939,36 @@ export default function App(){
       <div className="pw-project-list-caption"><MotionFeedback as="span" identity={`${projectListBusy}:${fileQuery}:${shownFiles.length}`} initial={false} role="status">{projectListBusy?'正在刷新 · ':''}{fileQuery?`匹配 ${shownFiles.length} 个文件`:`${files.length} 个文件`}</MotionFeedback>{fileQuery&&<Button variant="ghost" size="small" onClick={()=>setFileQuery('')}>清空搜索</Button>}{can('projects.refresh')&&<IconButton icon={IconRefresh} size="small" aria-label="重新读取项目文件" onClick={()=>run('projects.refresh')}/>}</div>
       </>}<div className="pw-project-objects" aria-busy={projectListBusy||undefined}>{!ready||packageOpening||projectListBusy&&!files.length?<p className="pw-muted" role="status">正在读取项目文件…</p>:projectListError?<div className="pw-empty pw-project-empty" role="alert"><h3>无法读取文件</h3><p>{projectListError}</p>{can('projects.refresh')&&<Button variant="secondary" leadingIcon={IconRefresh} onClick={()=>run('projects.refresh')}>重新读取</Button>}</div>:!shownFiles.length?projectFilesEmpty:fileView==='tree'?<TreeView aria-label="项目文件" key={state.projectId} className="pw-file-tree" data={treeData(shownFiles)} selectedItemId={projectView.selected||undefined} expandedIds={projectView.expanded} onExpandedChange={expanded=>updateProjectView({expanded})} onSelectChange={file=>{if(file&&!file.children)openProjectFile(file.id)}}/>:<FilesBrowser identity={JSON.stringify([state.projectId,fileQuery.trim().toLocaleLowerCase()])} files={shownFiles as any} showToolbar={false} view={fileView==='grid'?'Grid':'List'} onViewChange={view=>setFileView(view==='Grid'?'grid':'files')} onCopyPath={path=>{void copyText(path).catch(()=>{})}} selectedPath={projectView.selected} onOpen={file=>openProjectFile(file.path)}/>}</div>
       {currentProject&&route==='projects'&&projectSection==='files'&&!projectPreview.expanded&&!taskOpen&&can('projects.removedFiles.list')&&<ProjectRemovedFiles key={currentProject.id} project={currentProject.id}/>}</>;
+ // A cold, ordinary Home can offer the already-published local catalogue.
+ // Keep its draft and leave project/file choice to the existing directory.
+ const coldHomeProjectsCurrent=(live:ReturnType<typeof bridge.getState>)=>{
+  const owner=live.state,view=obj(live.view),phone=obj(live.phoneDraft),draft=live.composer;
+  return live.host?.ready===true&&view.section===null&&view.taskId===null&&Number.isSafeInteger(view.resumeRevision)&&
+   owner.projectId===null&&owner.filePath===null&&owner.fileLoading===false&&owner.fileSaving===false&&owner.conversationId===null&&
+   owner.conversationReader===null&&owner.queuedInputsPage===null&&owner.chatAttachmentPickerOpen===false&&
+   owner.attachmentWorkspace?.open===false&&owner.attachmentImporting===false&&owner.chatSubmitting===false&&owner.phoneSubmitting===false&&
+   phone.phone===false&&phone.channelOrigin===false&&draft?.ready===true&&draft.conversationId===''&&
+   typeof draft.key==='string'&&draft.key.startsWith('new:')&&Number.isSafeInteger(draft.epoch)&&
+   !draft.primaryDisplayGate&&draft.independentReportSourceIndex==null&&draft.independentReportDiscardEmpty!==true&&
+   !conversationModelName(owner)&&asArray<Project>(owner.projects).some(row=>typeof row?.id==='string'&&!!row.id.trim())&&
+   live.capabilities.commands.includes('projects.select');
+ };
+ const openHomeProjects=route==='butler'&&intent==='chat'&&ready&&!composerModelName&&!taskOpen&&!taskOpening&&!phoneReview&&
+  !workOpen&&!commandOpen&&!preparationTarget&&!searchReturn&&!searchOriginal&&!relatedOrigin.current&&coldHomeProjectsCurrent(snapshot)?
+  (trigger:HTMLButtonElement)=>{
+   const navigation=navigationRevision,documentEpoch=personalDocumentEpoch,resume=obj(snapshot.view).resumeRevision;
+   const current=()=>{
+    const live=bridge.getState();
+    return !document.hidden&&trigger.isConnected&&!trigger.closest('[hidden],[inert],[aria-hidden="true"]')&&
+     navigationWindow.current===navigation&&bridge.getDocumentEpoch()===documentEpoch&&openedTaskId.current===null&&
+     !draftSwitchPending()&&!relatedOrigin.current&&coldHomeProjectsCurrent(live)&&obj(live.view).resumeRevision===resume&&
+     live.composer?.key===composer.key&&live.composer?.epoch===composer.epoch;
+   };
+   if(!current())return;
+   const origin:WorkspaceOrigin={route:'butler',label:'返回管家',focus:trigger,focusKey:'home-local-projects',
+    drawerChat:{id:'',draftKey:composer.key,documentEpoch,ordinaryDraftEpoch:composer.epoch}};
+   void navigate('projects',()=>{relatedOrigin.current=origin},{keepOrigin:true,stillCurrent:current});
+  }:undefined;
  const canImportLocalProject=ready&&can('projects.localSource.open');
  const canCreateLocalStarter=canImportLocalProject&&can('projects.localSource.starter');
  const localProjectSourceLabel=canCreateLocalStarter?'新建小网页或导入':'从手机导入';
@@ -11231,7 +11278,7 @@ export default function App(){
    {workspaceNotices}
    {route==='chat'&&<>{chatNavigation}{phoneActivity}{replyActivity}</>}
   </NavigationChrome>:workspaceNotices}
-  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onReadPairedWindowsFile={openHomeWindowsFile} onOpenDeviceInbox={openHomeDeviceInbox} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstDraftConnect={firstDraftConnect} firstPhoneOriginal={firstHomePhoneOriginal} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')}
+  {isPrimaryRoute?<div className="pw-workspace pw-route-workspace">{route==='butler'?<ButlerHome ready={ready} modelReady={!!composerModelName} localDisplayDraft={!!composer.primaryDisplayGate} onTryLocal={stageLocalDisplayExample} onReadLocalFiles={openHomeFiles} onReadPairedWindowsFile={openHomeWindowsFile} onOpenDeviceInbox={openHomeDeviceInbox} onOpenProjects={openHomeProjects} onImportProject={canImportLocalProject&&projects.length===0&&!state.projectId?openLocalProjectSource:undefined} stagingLocal={displayStagePending} modelSetup={firstDraftConnect?null:modelSetupAction} firstDraftConnect={firstDraftConnect} firstPhoneOriginal={firstHomePhoneOriginal} firstHostSave={firstHostSave} composer={composerRegion} phoneActivity={phoneActivity} phoneAttention={homePhoneAttention} active={!taskOpen&&!workOpen&&!commandOpen&&!preparationTarget} moreWork={!!state.taskListNextCursor&&can('work.tasks.list')} preparations={rows=>preparationEntries('',rows)} hasPreparations={homeHasPreparations} tasks={butlerWorkRows} canOpen={can('tasks.open')} canReadReports={can('ownerWork.report.read')}
    onOpenSchedule={can('connections.enter')&&can('connections.leave')&&can('automation.list')&&can('plans.snapshot')?trigger=>{
     if(!document.hidden)void openRelatedWorkspace('automation',{...captureWorkspaceOrigin(),focus:trigger,focusKey:trigger.dataset.workspaceEntry});
    }:undefined}
@@ -11478,7 +11525,7 @@ export default function App(){
  {!preparationInline&&preparationDetail}
  {isChatSurface&&newMemoryScope&&<NewConversationMemory key={draftKey+':'+draftEpoch} composer={composer} allowSingle={singleLearningScope} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} registerBack={registerConversationMemoryBack}/>}
  {conversationMemoryReadable&&<ConversationMemorySettings key={String(state.conversationId)} conversationId={String(state.conversationId)} controls={memoryControls} composer={singleLearningScope?composer:undefined} showReferenceShelf={!referenceInput} isOpen={conversationMemoryOpen} onClose={()=>setConversationMemoryOpen(false)} onChanged={setConversationMemoryControls} onManage={()=>openPersonalMemory({view:'memories'})} registerBack={registerConversationMemoryBack}
-  defaults={{holder:chatDefaultPresets,capture:route==='chat'&&intent==='chat'&&can(chatDefaultPresetsCommand)?captureChatDefaultPresets:undefined}}/>}
+  defaults={{holder:chatDefaultPresets,capture:(route==='chat'||ordinaryButlerContinuation)&&intent==='chat'&&can(chatDefaultPresetsCommand)?captureChatDefaultPresets:undefined}}/>}
  {shownChatReference&&<ConversationReferenceShelf key={shownChatReference.input.key+':'+shownChatReference.input.epoch}
    conversationId={shownChatReference.input.conversation} draftKey={shownChatReference.input.key} epoch={shownChatReference.input.epoch}
    closeLabel="关闭备忘" onClose={()=>closeChatReference(shownChatReference,'menu')}
