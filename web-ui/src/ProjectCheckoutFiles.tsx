@@ -672,7 +672,7 @@ export function ProjectCheckoutFiles({ projectId, checkoutId, viewHandle, run, r
         currentFile.current||entered.current||edits.current||!live(sequence))return;
     // Native can open the hit even if the reply is lost. Its earlier cold
     // save locator is usable only with no file opened in this same window.
-    retireListedSave();
+    retireListChoices();
     const opened=await invoke('readFound',{searchHandle:page.searchHandle,hit:hit.hit},value=>{
       if(value.path!==hit.path||value.matchedFileSha256!==hit.sha256||value.latest?.expectedHash!==hit.sha256||
           value.filesHandle!==filesHandle||value.projectId!==projectId||value.checkoutId!==checkoutId)
