@@ -197,6 +197,43 @@ export function getLoadedFixedDraftGoalDecision(task: unknown): FixedDraftGoalDe
   if (fact) return {taskId: fact.taskId, runId: fact.runId, epoch: fact.epoch, draftId, completed: fact.completed};
 }
 
+/** The owner's accepted verdict qualifies the exact visible runner result, not its original status. */
+export function getLoadedOrdinaryWorkGoalAcceptance(task: unknown, resultText: string): string | undefined {
+  const {header, raw, id, runId} = taskParts(task), work = row(raw.ownerWork);
+  const decision = row(raw.resultConfirmation), conversation = text(raw.conversationId);
+  if (!resultText.trim() || !conversation.trim() || header.executionMode !== 'capabilities' ||
+      raw.kind !== 'assistant' || raw.executionMode !== 'capabilities' || raw.executionRole !== 'owner_work' ||
+      raw.taskId !== id || raw.epoch !== raw.coordinatorEpoch || raw.contextAvailable !== true || raw.metadataLimited === true ||
+      raw.cancelRequested !== false || raw.hasUnresolvedOperations !== false || decision?.teamReportEvidence != null ||
+      work?.format !== 'pocketworld.owner-work.v1' || work.workTaskId !== id || work.conversationId !== conversation ||
+      !Array.isArray(raw.ownerWorkTeams) || raw.ownerWorkTeams.length !== 0 || raw.ownerWorkTeamsUnavailable === true ||
+      work.relatedSourcesUnavailable === true || rows(raw.relatedTasks).length || (number(work.relatedTaskCount) ?? 0) > 0 ||
+      ['teamAssignment', 'developmentContext', 'ownerWorkPreparation', 'ownerResultHandling', 'ownerWorkTakeover',
+        'workProfileRef', 'workProfileIntent', 'projectMemoryRead', 'teamWriteScope', 'sourceLearningJob',
+        'sshSelection', 'extensionSelection'].some(key => raw[key] != null)) return;
+  const page = pageFor(raw, 'historyEventPage', id, 'events');
+  const accepted = currentOwnerGoalReview(header, raw, runId, page, true);
+  if (!accepted?.completed || !page) return;
+  const entries = rows(page.entries);
+  const verdict = entries.find(entry => entry.eventKey === accepted.eventId);
+  const results = entries.filter(entry => {
+    const event = row(entry.event);
+    return event?.type === 'result' && event.runId === runId;
+  });
+  // An approved native tool may finish the same run again after an earlier waiting result.
+  if (results.some(entry => !positiveInt(entry.position))) return;
+  const latest = results.reduce((position, entry) => Math.max(position, number(entry.position) ?? 0), 0);
+  const matches = results.filter(entry => entry.position === latest);
+  if (matches.length !== 1) return;
+  const result = matches[0], event = row(result.event), position = result.position, decisionPosition = verdict?.position;
+  if (!event || result.type !== 'result' || event.taskId !== id || event.coordinatorEpoch !== accepted.epoch ||
+      (result.taskId != null && result.taskId !== id) || event.memorySourceSnapshotForgotten === true ||
+      event.message !== resultText || event.status !== 'needs_confirmation' || !positiveInt(position) ||
+      event.seq !== position || result.eventKey !== `task:${id}:event-order:${position}` ||
+      !positiveInt(decisionPosition) || position >= decisionPosition) return;
+  return JSON.stringify([accepted.eventId, result.eventKey, runId, accepted.epoch, raw.resultRevision, decision?.resultReviewDigest]);
+}
+
 /** Original task events are an activity history, not generated execution steps. */
 export function getTaskEventHistory(task: unknown, originalOwnerWindow = false): TaskEventHistory {
   const {header, raw, id, runId} = taskParts(task);

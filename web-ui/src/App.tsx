@@ -112,7 +112,7 @@ import type {ReturnToAdoptedSource} from './ProjectFormalFileDelivery';
 import {ProjectRemovedFiles} from './ProjectRemovedFiles';
 import {ProjectKeptDraftIndex} from './ProjectKeptDrafts';
 import {ProjectWorkspaceOverview,type ProjectWorkCollectionView,type ProjectWorkEntry} from './ProjectWorkspaceOverview';
-import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
+import {ProjectDevelopmentWorkspace,canEditImportedCheckout,originalAdoptedSafFolder,originalImportedEditor,originalPreparedLocalCopy,originalSavedStaticFolder,projectBuildEditorResume,sameImportedEditor,type ProjectBuildCopy,type ProjectDependencyBuildReturn,type ProjectImportedEditor,type ProjectLocalFilesIntent,type ProjectPreparedLocalCopy,type ModelSettingsWorkDraft,type ModelSettingsWorkDraftRead,type ProjectTerminalSavedFileReturn,type CheckoutPythonSetupReturn,type ProjectViteToolsPosition,type ProjectViteToolsReturn,type ProjectViteResultLookup} from './ProjectDevelopmentWorkspace';
 import type {CheckoutSavedPosition} from './ProjectCheckoutFiles';
 import {ProjectSavedBuildWeb} from './ProjectSavedBuildWeb';
 import {ProjectKeptStaticPages,supportsKeptStaticPages,type KeptStaticShelfNavigation} from './ProjectKeptStaticPages';
@@ -340,6 +340,18 @@ type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigg
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type TerminalSavedFileOrigin={position:CheckoutSavedPosition;navigation:number;current:(section:'local'|null)=>boolean};
 type FormalFileModelVisit={document:number;navigation:number;key:string;version:number;fileBinding:string;editRevision:number};
+type ModelWorkVisit={proof:ModelSettingsWorkDraft;document:number;navigation:number;owner:string};
+type ModelWorkArrival={projectId:string;navigation:number;read?:ModelSettingsWorkDraftRead;failed?:true};
+const modelWorkSettingsSection=(section:unknown)=>section===null||section==='models'||section==='accounts'||section==='proxy';
+function modelWorkOwner(live:ReturnType<typeof bridge.getState>,projectId:string){
+ const owner=live.state,view=obj(live.view);
+ if(live.host?.ready!==true||view.taskId!==null||owner.projectId!==projectId||owner.filePath!==null||
+    owner.fileLoading!==false||owner.fileSaving!==false||owner.conversationReader!==null||owner.queuedInputsPage!==null||
+    owner.attachmentWorkspace?.open!==false||owner.chatAttachmentPickerOpen!==false||owner.localSourceIntake?.window||owner.projectGitImport?.open||
+    asArray<Json>(owner.projects).filter(row=>row?.id===projectId).length!==1||
+    ![view.resumeRevision,owner.requestedProjectRevision,owner.requestedConnectionRevision,owner.requestedTaskRevision].every(Number.isSafeInteger))return;
+ return JSON.stringify([view.resumeRevision,owner.requestedProjectRevision,owner.requestedConnectionRevision,owner.requestedTaskRevision]);
+}
 function formalFileModelBinding(live:ReturnType<typeof bridge.getState>){
  const owner=live.state,view=obj(live.view),read=obj(owner.fileObservation);
  const key=fileWorkspaceKey(owner.projectId,owner.filePath),version=owner.fileVersion;
@@ -364,7 +376,7 @@ type PlanSettingsOrigin={anchor:PlanSettingsAnchor;navigation:number;document:nu
 const samePlanSettingsRequests=(origin:PlanSettingsOrigin,{state}:ReturnType<typeof bridge.getState>)=>
  state.requestedConnectionRevision===origin.connection&&state.requestedExecutionPlanRevision===origin.planRequest&&
  state.requestedExecutionPlanId===origin.planNotice&&state.requestedTaskRevision===origin.taskRequest&&state.requestedProjectRevision===origin.projectRequest;
-type WorkspaceOrigin={route:string;label:string;formalFileModel?:FormalFileModelVisit;planSettings?:PlanSettingsOrigin;localPhoneModel?:LocalPhoneModelVisit;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number;ordinaryDraftEpoch?:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;formalFileModel?:FormalFileModelVisit;modelWork?:ModelWorkVisit;planSettings?:PlanSettingsOrigin;localPhoneModel?:LocalPhoneModelVisit;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number;ordinaryDraftEpoch?:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type BackgroundPhoneDraftVisit={origin:WorkspaceOrigin;pin:PhonePlaceReturn;navigation:number;document:number;afterRevision:number;
  first:{generation:number;setupRevision:number}|null;seenAuthentication:boolean;retired:boolean};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -1072,6 +1084,18 @@ export default function App(){
   return ()=>{if(planSettingsAnchor.current===read)planSettingsAnchor.current=null;};
  },[]);
  const terminalSavedFileArrival=useRef<ProjectTerminalSavedFileReturn|null>(null);
+ const modelWorkArrivalNavigation=useRef(-1);
+ const modelWorkArrivalOwner=useRef<ModelWorkArrival|null>(null);
+ const [modelWorkArrival,setModelWorkArrival]=useState<ModelWorkArrival|null>(null);
+ const publishModelWorkArrival=useCallback((value:ModelWorkArrival|null)=>{modelWorkArrivalOwner.current=value;setModelWorkArrival(value)},[]);
+ useEffect(()=>{
+  const read=modelWorkArrival?.read;
+  if(!read)return;
+  const check=()=>{if(!read.current())read.finish(false);};
+  const off=bridge.subscribe(check),offDoc=bridge.subscribeDocumentEpoch(check);
+  document.addEventListener('visibilitychange',check);check();
+  return()=>{off();offDoc();document.removeEventListener('visibilitychange',check);};
+ },[modelWorkArrival]);
  const [pythonSetupReturn,setPythonSetupReturn]=useState<CheckoutPythonSetupReturn>();
  const [viteToolsReturn,setViteToolsReturn]=useState<ProjectViteToolsReturn>();
  const [localWorkspaceDraft,setLocalWorkspaceDraft]=useState<LocalWorkspaceDraft|undefined>();
@@ -2189,6 +2213,7 @@ export default function App(){
     }
    }
    planSettingsReturn.current=null;terminalSavedFileArrival.current=null;setPythonSetupReturn(undefined);setViteToolsReturn(undefined);
+   if(modelWorkArrivalOwner.current)publishModelWorkArrival(null);
    navigationWindow.current++;setNavigationRevision(navigationWindow.current);setRoute(next);afterNavigate?.();return true;
   };
   if(guardTaskLeave(()=>{void navigate(requested,afterNavigate,options)}))return Promise.resolve(false);
@@ -2198,7 +2223,7 @@ export default function App(){
    if(profileBeforeLeave.current?.(()=>{void commit()}))return Promise.resolve(false);
   }
   return commit();
- },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation,retireConfirmedHistoryWord]);
+ },[route,secondaryPage,workOpen,taskOpen,closeTask,rememberChatPosition,can,act,leaveInlinePreparation,retireConfirmedHistoryWord,publishModelWorkArrival]);
  const openPersonalMemory=(target:PersonalTarget)=>{void navigate('profile',()=>{setPersonalTarget(target);setPersonalTargetKey(key=>key+1)})};
  const captureChatDefaultPresets=(requireDefaults=true):ChatDefaultOrigin|null=>{
   if(!isChatSurface||intent!=='chat'||!conversationMemoryOpen||taskOpen||taskOpening||workOpen||commandOpen||
@@ -2945,6 +2970,40 @@ export default function App(){
   const origin=relatedOrigin.current;
   if(origin){
    if(returnFromPlanSettings(origin)||returnOriginalArchiveChat(origin))return;
+   if(route==='model-settings'&&origin.modelWork){
+    const visit=origin.modelWork,projectId=visit.proof.projectId,navigation=navigationWindow.current;
+    const ownerCurrent=(live:ReturnType<typeof bridge.getState>)=>!document.hidden&&bridge.getDocumentEpoch()===visit.document&&
+     modelWorkOwner(live,projectId)===visit.owner&&modelWorkSettingsSection(obj(live.view).section);
+    const sameSettings=()=>!document.hidden&&relatedOrigin.current===origin&&navigationWindow.current===navigation;
+    const canReturn=()=>sameSettings()&&navigation===visit.navigation&&ownerCurrent(bridge.getState());
+    if(!canReturn()){
+     void navigate('butler',()=>setLocalError('暂无法核对原工作草稿，没有打开其他草稿。请从项目目录核对。'),{stillCurrent:sameSettings});
+     return;
+    }
+    void navigate('projects',()=>{
+     relatedOrigin.current=origin.parent||null;
+     const destination=navigation+1;
+     modelWorkArrivalNavigation.current=destination;
+     let landing:ModelWorkArrival={projectId,navigation:destination};
+     let tried=false;
+     const current=()=>modelWorkArrivalOwner.current===landing&&navigationWindow.current===destination&&ownerCurrent(bridge.getState());
+     const privateWork=()=>current()&&obj(bridge.getState().view).section===null;
+     const finish=(opened:boolean)=>{
+      if(modelWorkArrivalOwner.current!==landing||navigationWindow.current!==destination)return;
+      publishModelWorkArrival(opened?null:{projectId,navigation:destination,failed:true});
+     };
+     publishModelWorkArrival(landing);
+     void awaitPickerProjection(current,()=>privateWork()?true:undefined).then(left=>{
+      if(!left||!privateWork()){finish(false);return;}
+      const read:ModelSettingsWorkDraftRead={proof:visit.proof,current:privateWork,take:()=>{
+       if(tried||!privateWork())return false;
+       tried=true;return true;
+      },finish};
+      landing={...landing,read};publishModelWorkArrival(landing);
+     });
+    },{keepOrigin:true,stillCurrent:canReturn});
+    return;
+   }
    if(route==='model-settings'&&origin.formalFileModel){
     const visit=origin.formalFileModel,navigation=navigationWindow.current;
     const sameVisit=()=>!document.hidden&&relatedOrigin.current===origin&&navigationWindow.current===navigation;
@@ -4814,6 +4873,8 @@ export default function App(){
  useEffect(()=>{if(phoneDraft.phone===true)setIntent(phoneDraft.mode==='main_screen'?'main_screen':'background');else if(phoneDraft.phone===false)setIntent('chat');},[phoneDraft.phone,phoneDraft.mode]);
  useEffect(()=>{
   if(route!=='projects'||!can('projects.refresh'))return;
+  // Returning to the verified Work form never reselects a project.
+  if(modelWorkArrivalNavigation.current===navigationWindow.current)return;
   const live=bridge.getState(),view=obj(live.view),current=live.state;
   // Refresh reselects the project, retiring the editor and its exact readback.
   // Keep a known original text/held draft so the owner can choose to read it again.
@@ -7312,6 +7373,25 @@ export default function App(){
   if(!stillCurrent())return false;
   // Carry metadata only, never the editor text or authority to reopen a file.
   const origin:WorkspaceOrigin={route:'projects',label:'返回原文件',formalFileModel:visit,parent:relatedOrigin.current};
+  void navigate('model-settings',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent});
+  return true;
+ };
+ const openWorkModelSettings=(proof:ModelSettingsWorkDraft)=>{
+  if(route!=='projects'||projectSection!=='work'||taskOpen||taskOpening||workOpen||commandOpen||preparationTarget||
+     projectPreview.expanded||projectWorkReviewOpen||projectDraftReturn||projectBuildReturn||projectImportedEditor||
+     projectLocalFilesIntent||projectWorkDrafts[proof.projectId]?.operation||!['connections.enter','connections.leave','projects.development.read'].every(can))return false;
+  const presentation=projectWorkPresentations[proof.projectId];
+  if(presentation?.open!==true||presentation.mode!=='default')return false;
+  const live=bridge.getState(),doc=bridge.getDocumentEpoch(),navigation=navigationWindow.current,owner=modelWorkOwner(live,proof.projectId);
+  if(!owner||doc<1||obj(live.view).section!==null)return false;
+  const stillCurrent=()=>{
+   const now=bridge.getState();
+   return !document.hidden&&navigationWindow.current===navigation&&bridge.getDocumentEpoch()===doc&&openedTaskId.current===null&&
+    obj(now.view).section===null&&modelWorkOwner(now,proof.projectId)===owner;
+  };
+  if(!stillCurrent())return false;
+  const origin:WorkspaceOrigin={route:'projects',label:'返回原工作草稿',parent:relatedOrigin.current,
+   modelWork:{proof,document:doc,navigation:navigation+1,owner}};
   void navigate('model-settings',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent});
   return true;
  };
@@ -10807,7 +10887,14 @@ export default function App(){
   scope={filter as WorkCollectionFilter} query={taskQuery} selectScope={selectWorkScope} clearQuery={()=>setTaskQuery('')} drillEnded={drillEndedWork}
   start={()=>{void navigate('butler')}} history={()=>{void openRelatedWorkspace('history')}} open={openDirectoryWork}
   registerReturn={registerWorkReturn} extra={can('remoteSessions.read')&&<Accordion variant="divided"><AccordionItem id="remote-sessions" title="电脑端托管会话"><RemoteManagedSessionsWorkspace/></AccordionItem></Accordion>}/>;
+ const dismissModelWorkArrival=()=>{
+  const original=modelWorkArrivalOwner.current;
+  if(!original||original.navigation!==navigationWindow.current)return;
+  publishModelWorkArrival(null);
+  setProjectWorkPresentations(previous=>({...previous,[original.projectId]:{open:false,mode:'default'}}));
+ };
  const showProjectSection=(section:'work'|'files'|'preview')=>{
+  if(section!=='work')dismissModelWorkArrival();
   const commit=()=>{
    if(section==='work'&&projectPreview.expanded&&projectPreview.fromSavedWebShelf){projectPreview.returnToSavedWebShelf();return}
    const visit=viteResultLookupNow.current;
@@ -11169,6 +11256,7 @@ export default function App(){
     active={ready&&route==='projects'&&!projectPreview.expanded&&!previewBlocked&&!taskOpening&&
       !packageOpening&&!choosingSavedStaticFile&&!projectStartDraft?.expanded}
     registerNavigation={registerKeptStaticShelf}/>:null;
+ const shownModelWorkArrival=route==='projects'&&modelWorkArrival?.navigation===navigationRevision?modelWorkArrival:null;
  const projectsPage=<motion.main layoutScroll ref={projectScroll} className={`pw-page pw-projects-page ${state.filePath?'pw-project-file-open':''}`} data-preview-open={projectPreview.expanded&&!state.filePath||undefined} onScroll={event=>{if(!state.filePath&&!projectPreview.expanded){if(state.projectId&&projectSection==='work')projectDirectory.rememberScroll(event.currentTarget.scrollTop);else projectListTop.current.set(projectPositionKey,event.currentTarget.scrollTop)}}}>
   {packageOpening&&<ProgressBar label="正在读取这次任务的固定包" isIndeterminate showValueLabel={false} size="sm"/>}
   {state.filePath?<ProjectFileEditor key={currentFileKey} path={state.filePath} version={Number(state.fileVersion||0)} draft={fileDraft} state={state} conflict={fileConflict} mode={fileMode} setMode={setFileMode} can={can} edit={editFile} save={saveFile} readHistory={()=>run('projects.history',fileIdentity)} readRevision={revision=>run('projects.revision',{...fileIdentity,revision})} retry={()=>run('projects.retry',{projectId:state.projectId,path:state.filePath})} copy={()=>{if(fileDraft)void copyText(fileDraft.text).catch(()=>{})}} copyRevision={value=>{void copyText(value).catch(()=>{})}} adoption={fileAdoption} continueAdopted={continueAdopted} returnToAdoptedSource={returnToAdoptedSource} registerBack={registerProjectFileBack}/>:currentProject?<section className="pw-project-work" aria-label="当前项目工作区">
@@ -11198,13 +11286,24 @@ export default function App(){
            }
            return shown;
           }}/>}
-        startContent={can('projects.development.read')||can('projectWork.open')&&can('projectWork.confirm')?<ProjectWorkLauncher key={currentProject.id}
+        startContent={shownModelWorkArrival&&(!shownModelWorkArrival.read||shownModelWorkArrival.projectId!==currentProject.id||
+         !projectStartPresentation.open||projectStartPresentation.mode!=='default'||!can('projects.development.read'))?
+         <section className="pw-form-flow" aria-label="核对原工作草稿">
+          <p role="status">{shownModelWorkArrival.failed||shownModelWorkArrival.projectId!==currentProject.id||
+           !projectStartPresentation.open||projectStartPresentation.mode!=='default'||!can('projects.development.read')?
+           '未核对到原工作草稿，没有打开其他草稿。':'正在核对原工作草稿…'}</p>
+          <Button variant="ghost" size="small" onClick={dismissModelWorkArrival}>返回项目概览</Button>
+         </section>:can('projects.development.read')||can('projectWork.open')&&can('projectWork.confirm')?<ProjectWorkLauncher key={currentProject.id}
           active={route==='projects'&&!taskOpen&&!state.filePath&&projectSection==='work'&&!projectPreview.expanded&&!projectPickerOpen&&!newProjectOpen&&!newFileOpen&&!workOpen&&!commandOpen}
           resumeProfile={!!projectWorkDrafts[currentProject.id]?.operation}
           retainedDraftCopy={retainedCopyFirst}
           presentation={projectStartPresentation}
-          onPresentationChange={presentation=>setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}))}
+          onPresentationChange={presentation=>{
+           if(!presentation.open||presentation.mode!=='default')dismissModelWorkArrival();
+           setProjectWorkPresentations(previous=>({...previous,[currentProject.id]:presentation}));
+          }}
           defaultStart={can('projects.development.read')?(active,onBusy)=><ProjectDevelopmentWorkspace key={currentProject.id}
+            modelSettingsReturn={shownModelWorkArrival?.read} onOpenWorkModelSettings={openWorkModelSettings}
             retainedOriginalVisit={retainedCopyFirst?state.openedRetainedDraftCopy:undefined} returnTarget={projectDraftReturn?.projectId===currentProject.id?projectDraftReturn:undefined}
             importedEditor={projectImportedEditor?.projectId===currentProject.id?projectImportedEditor:undefined} onImportedEditorHandled={handledImportedEditor}
             localFilesIntent={projectLocalFilesIntent?.projectId===currentProject.id?projectLocalFilesIntent:undefined} onLocalFilesIntentHandled={handledLocalFilesIntent}

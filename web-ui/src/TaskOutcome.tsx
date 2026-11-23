@@ -2,7 +2,7 @@ import { AIAnswer } from './library';
 import { Button, Accordion, AccordionItem } from './forms-library';
 import { IconChevronRight, IconFile } from './icons';
 import { getTaskOutcome } from './task-outcome';
-import { observedLateProjectDependency, observedProjectDependencyHold, taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
+import { getLoadedOrdinaryWorkGoalAcceptance, observedLateProjectDependency, observedProjectDependencyHold, taskNeedsReconciliation, type FixedDraftGoalDecision } from './task-presentation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollectionMotion, MotionFeedback } from './library/journey-motion';
 import { ownerWorkPresentation } from './owner-work-presentation';
@@ -250,7 +250,23 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const resultText = settlementTitle && (outcome.text.trim() === settlementDetail || outcome.text.trim() === settlementTitle)
     ? '' : outcome.text;
   const readyForConfirmation = status === 'needs_confirmation' && outcome.resultStatus === 'needs_confirmation';
-  const progress = !settlementTitle && outcome.source === 'result-event' && outcome.resultStatus !== 'completed' && !readyForConfirmation;
+  const ownerAcceptance = active && !projectDraftSourceRetired && !settlementTitle &&
+    outcome.source === 'result-event' && outcome.resultStatus === 'needs_confirmation'
+    ? getLoadedOrdinaryWorkGoalAcceptance(task, resultText) : undefined;
+  const acceptanceWindow = ownerAcceptance ? packageReadWindow() : '';
+  const currentAcceptance = () => {
+    if (!ownerAcceptance || document.hidden || !packageWindowOwns(record.id) || packageReadWindow() !== acceptanceWindow) return false;
+    const live = bridge.getState();
+    const tasks = Array.isArray(live.state.tasks) ? live.state.tasks.filter(row => row?.id === record.id) : [];
+    return live.host?.ready === true && tasks.length === 1 &&
+      getLoadedOrdinaryWorkGoalAcceptance(tasks[0], resultText) === ownerAcceptance;
+  };
+  const ownerAccepted = currentAcceptance();
+  const progress = !settlementTitle && outcome.source === 'result-event' && outcome.resultStatus !== 'completed' && !readyForConfirmation && !ownerAccepted;
+  const copyResult = progress ? undefined : () => {
+    if (ownerAccepted && !currentAcceptance()) return Promise.reject(new Error('原结果已不在当前读取窗口，未复制。'));
+    return onCopy(resultText);
+  };
   const originalBuildAnswer = beforeGoalAcceptance && !!resultText;
   const title = outcome.source === 'evidence' && !outcome.evidenceRunBound ? '任务保留的结果'
     : originalBuildAnswer ? '原答复' : settlementTitle ? '原执行记录' : progress ? '当前进展' : outcome.source === 'task-summary' ? '当前摘要' : work ? '执行结果' : '结果内容';
@@ -288,7 +304,8 @@ export function TaskOutcome({ task, messages, active, canReadReport, readIdentit
   const executionResult = (hasExecutionRecord || canShowEmptyBody && !filesOwnEmpty) && <div className="pw-outcome-document">
       <header className="pw-outcome-heading"><h3 data-original-phone-outcome={phoneOutcome} tabIndex={phoneOutcome?-1:undefined}>{phoneOutcome?'本轮手机回执':hasExecutionRecord ? title : outcome.projectPackages.length ? '结果正文' : '暂无可读取的结果正文'}</h3></header>
       {originalBuildAnswer && <p className="pw-reading-note">构建和网页归档以本机回执为准。</p>}
-      {hasResultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={progress ? undefined : () => onCopy(resultText)} onCopyCode={onCopy}/></div>
+      {ownerAccepted && <p className="pw-reading-note">本轮执行结束时待验收。你已确认达到目标。</p>}
+      {hasResultText ? <div data-motion-key="result-body"><AIAnswer text={resultText} showActions={!progress} onCopy={copyResult} onCopyCode={onCopy}/></div>
         : !settlementTitle && !outcome.partial && <p className="pw-reading-note">{files.length ? '可先查看下方关联答复中的附件。' : '当前记录未提供可读取的结果正文。'}</p>}
       {outcome.image && <RetainedPhoneImage task={record} src={outcome.image} label={imageLabel} active={active} readIdentity={readIdentity} motionKey={`image:${screenshot?.imageId || 'retained'}`}/>}
       {remotePhone && <figure className="pw-outcome-image" data-motion-key={`phone:${screenshot?.imageId}`}>

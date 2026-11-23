@@ -21,6 +21,7 @@ import './project-workspace-manga.css';
 type Data = Record<string, any>;
 type DeliveryRequirements = { constraints: string; deliverable: string; completionCriteria: string };
 type DevelopmentDraft = DeliveryRequirements & { goal: string; checkoutId: string };
+type WorkDraftSave = {viewHandle:string;window:string;checkoutId:string;revision:number};
 const deliveryFields = ['constraints', 'deliverable', 'completionCriteria'] as const;
 const deliveryRequirements = (value: Data = {}): DeliveryRequirements => ({
   constraints: typeof value.constraints === 'string' ? value.constraints : '',
@@ -46,7 +47,11 @@ type ProjectStoredWebResultLookup = {kind:'built';projectId:string;current:()=>b
 type ProjectPhoneFolderVisit = {kind:'phone-source';projectId:string;source:ProjectImportedEditor;current:()=>boolean;finish:(reason?:string)=>void;
   chosenSavedFile?:CheckoutSavedPosition; awaitingFormalClose?:()=>boolean};
 export type ProjectViteResultLookup = ProjectStoredWebResultLookup | ProjectPhoneFolderVisit;
+export const modelSettingsWorkDraftPurpose='model_settings_work_draft';
+export type ModelSettingsWorkDraft={purpose:typeof modelSettingsWorkDraftPurpose;handle:string;projectId:string;checkoutId:string};
+export type ModelSettingsWorkDraftRead={proof:ModelSettingsWorkDraft;current:()=>boolean;take:()=>boolean;finish:(opened:boolean)=>void};
 type Props = { returnTarget?:ProjectDraftReturn; onDismissReturn?:()=>void;
+  modelSettingsReturn?:ModelSettingsWorkDraftRead; onOpenWorkModelSettings?:(proof:ModelSettingsWorkDraft)=>boolean;
   buildReturn?:ProjectBuildCopy; onBuildReturnHandled?:(target:ProjectBuildCopy)=>void;
   importedEditor?:ProjectImportedEditor; onImportedEditorHandled?:(target:ProjectImportedEditor)=>void;
   localFilesIntent?:ProjectLocalFilesIntent; onLocalFilesIntentHandled?:(target:ProjectLocalFilesIntent)=>void;
@@ -68,6 +73,15 @@ const scopedBuildReceipt = (receipt: Data) => receipt.independentNodeBuild === t
 const copyIdentity = (value: unknown): value is string =>
   typeof value==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const sourceHash = (value: unknown): value is string => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+function modelSettingsWorkDraft(value:Data|undefined):ModelSettingsWorkDraft|undefined {
+  if(!value||value.purpose!==modelSettingsWorkDraftPurpose||!copyIdentity(value.handle)||!copyIdentity(value.checkoutId)||
+     typeof value.projectId!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(value.projectId))return;
+  return {purpose:modelSettingsWorkDraftPurpose,handle:value.handle,projectId:value.projectId,checkoutId:value.checkoutId};
+}
+function modelSettingsWorkCopy(value:unknown,project:string,checkout:string){
+  const chosen=rows(value).filter(row=>row?.projectId===project&&row.checkoutId===checkout);
+  return chosen.length===1&&chosen[0].draftWorkingCopy===false&&chosen[0].taskPackageSource===false&&chosen[0].hostSource===false;
+}
 export function projectBuildEditorResume(value:unknown, copy:ProjectBuildCopy):ProjectBuildEditorResume|undefined {
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==9)return;
   const pin=value as Partial<ProjectBuildEditorResume>, {taskId,runId,epoch,projectId,checkoutId,sourceDigest}=copy;
@@ -413,7 +427,7 @@ function AndroidBuildConditions({ wrapper, runtime }: { wrapper: Data; runtime: 
 
 /** Existing project checkout + original Assistant admission. No command is
  * approved here, and reopening never repeats a submission or copy creation. */
-export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, viteToolsReturn, viteResultLookup, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
+export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, modelSettingsReturn, onOpenWorkModelSettings, buildReturn, onBuildReturnHandled, importedEditor, onImportedEditorHandled, localFilesIntent, onLocalFilesIntentHandled, terminalSavedFile, pythonSetupReturn, dependencyBuildReturn, viteToolsReturn, viteResultLookup, onPreparePythonTools, retainedOriginalVisit, projectId, name, active, run, can, onOpenTask, onOpenHostOriginal, onOpenPackageOriginal, onTaskRegistered, onPrepareTools, onConnectModel, onOpenTerminal, registerBack, onInteractionBusyChange }: Props) {
   const savedWebLink = useContext(ProjectSavedWebLink);
   const [view, setView] = useState<Data | null>(null), [goal, setGoal] = useState(''), [checkout, setCheckout] = useState('');
   const returned=useRef(''),focusReturned=useRef(false),deliverySummary=useRef<HTMLSpanElement>(null);
@@ -455,8 +469,10 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const attemptedStaticFiles=useRef<ProjectPhoneFolderVisit|null>(null);
   const staticFilesPage=useRef('');
   const sourceAttempt = useRef(''), readAttempt = useRef(''), touched = useRef(false), draft = useRef<DevelopmentDraft>({ goal: '', checkoutId: '', ...deliveryRequirements() });
-  const latest = useRef({ run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup });
-  latest.current = { run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup }; activeReview.current = review;
+  const draftRevision=useRef(0), [modelWorkSave,setModelWorkSave]=useState<WorkDraftSave|null>(null);
+  const stageDisplayedDraft=(value:DevelopmentDraft)=>{draft.current=value;draftRevision.current++;};
+  const latest = useRef({ run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup, modelSettingsReturn });
+  latest.current = { run, can, active, localFilesIntent, importedEditor, onLocalFilesIntentHandled, terminalSavedFile, onPreparePythonTools, viteResultLookup, modelSettingsReturn }; activeReview.current = review;
   const runReopenedFiles=useCallback((action:string,args:Data={})=>
     action==='projects.development.files.open'?bridge.command(action,args):run(action,args),[run]);
   const attemptedLocalFiles = useRef<ProjectLocalFilesIntent|null>(null);
@@ -484,7 +500,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   useEffect(()=>{if(retainedRead&&!originalDifference)setRetainedRead(null);},[retainedRead,originalDifference]);
   const clearSubmittedDraft = (receipt: Data) => {
     if (receipt.status !== 'accepted' || scopedBuildReceipt(receipt) || receipt.draftSourceNeedsReview===true || !sameDraft(draft.current, receipt)) return;
-    keptNativePick.current=false;draft.current = { ...draft.current, goal: '', ...deliveryRequirements() }; setGoal(''); setRequirements(deliveryRequirements());
+    keptNativePick.current=false;stageDisplayedDraft({ ...draft.current, goal: '', ...deliveryRequirements() }); setGoal(''); setRequirements(deliveryRequirements());
   };
   const applySubmission = (receipt: Data, expected: Data) => {
     if (receipt.projectId !== projectId || receipt.clientMessageId !== expected.clientMessageId ||
@@ -527,6 +543,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const staticVisit=previewVisit?.kind==='phone-source'?previewVisit:null;
     const request=latest.current.localFilesIntent;
     const pinned=returnTarget&&returned.current!==returnTarget.handle?returnTarget:null;
+    const modelReturn=latest.current.modelSettingsReturn;
+    if(modelReturn){
+      if(!readableNow||!modelReturn.current())return Promise.resolve(undefined);
+      if(pinned||request||previewVisit||buildReturn||importedEditor||fileCheckout||activeReview.current||previewOpen.current){
+        modelReturn.finish(false);return Promise.resolve(undefined);
+      }
+      if(!modelReturn.take())return Promise.resolve(undefined);
+    }
     if(staticVisit){
       if(!readableNow||attemptedStaticFiles.current===staticVisit||staticVisit.projectId!==projectId||!staticVisit.current())return Promise.resolve(undefined);
       if(pinned||request||buildReturn||importedEditor||fileCheckout||activeReview.current||previewOpen.current){
@@ -538,12 +562,25 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const openLocalFiles=readableNow&&request&&request!==attemptedLocalFiles.current&&request.projectId===projectId&&request.current()?request:null;
     if(openLocalFiles)attemptedLocalFiles.current=openLocalFiles;
     const starter=importedEditor?.openDirectory&&importedEditor.exactStarterSource===true?importedEditor:null;
-    const scopedOwner=previewVisit?.projectId===projectId&&previewVisit.current()?previewVisit.current:
+    const scopedOwner=modelReturn?modelReturn.current:previewVisit?.projectId===projectId&&previewVisit.current()?previewVisit.current:
       openLocalFiles?.originalCopy?()=>latest.current.localFilesIntent===openLocalFiles&&openLocalFiles.current():
       starter?()=>latest.current.importedEditor===starter&&sameImportedEditor(starter,originalImportedEditor(projectId)):undefined;
-    const reading=invoke('projects.development.read', {projectId,...(pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
+    const reading=invoke('projects.development.read', {projectId,...(modelReturn?
+      {draftReturnHandle:modelReturn.proof.handle,returnPurpose:modelSettingsWorkDraftPurpose}:pinned?{draftReturnHandle:pinned.handle}:{})}, value => {
     if (value.projectId !== projectId || typeof value.viewHandle !== 'string' || staticVisit&&!copyIdentity(value.viewHandle))
       throw new Error('没有取得这个原项目的页面，请重新读取。');
+    if(modelReturn){
+      const expected=modelReturn.proof,actual=modelSettingsWorkDraft(value.openedModelSettingsWorkDraft);
+      const draft=value.draft;
+      if(!actual||actual.handle!==expected.handle||actual.projectId!==projectId||actual.checkoutId!==expected.checkoutId||
+         value.executionAuthorized!==false||value.commandsAuthorized!==false||value.draftRecoveryRequired!==false||
+         draft?.projectId!==projectId||draft?.checkoutId!==expected.checkoutId||draft?.submission!=null||draft?.ownerPickedConvention!=null||
+         typeof draft?.goal!=='string'||!draft.goal.trim()||!modelSettingsWorkCopy(value.checkouts,projectId,expected.checkoutId)){
+        void bridge.command('projects.development.close',{viewHandle:value.viewHandle}).catch(()=>{});
+        throw new Error('未核对到原工作草稿，没有打开其他草稿。');
+      }
+      delete value.openedModelSettingsWorkDraft; // Do not retain the spent handle in the normal page.
+    }
     if(pinned){
       if(value.openedDraftReturn!==pinned.handle||value.draft?.projectId!==pinned.projectId||value.draft?.checkoutId!==pinned.checkoutId||
           value.draft?.ownerPickedConvention?.checkoutId!==pinned.checkoutId||!Number.isSafeInteger(value.draft?.ownerPickedConvention?.revision)){
@@ -562,12 +599,12 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (!touched.current || selectedCopy) {
       const retained = incoming, available = rows(value.checkouts);
       const selected = retained.checkoutId || (!openLocalFiles && available.length === 1 ? available[0].checkoutId : '');
-      draft.current = { goal: retained.goal || '', checkoutId: selected, ...deliveryRequirements(retained) };
+      stageDisplayedDraft({ goal: retained.goal || '', checkoutId: selected, ...deliveryRequirements(retained) });
       keptNativePick.current=!!incoming.ownerPickedConvention;
       setGoal(draft.current.goal); setCheckout(selected); setRequirements(deliveryRequirements(retained));
     } else if(keptNativePick.current && here.checkoutId===incoming.checkoutId){
       // The owner only edited other fields. Refresh the picked field without dropping those local edits.
-      const constraints=deliveryRequirements(incoming).constraints;draft.current={...here,constraints};
+      const constraints=deliveryRequirements(incoming).constraints;stageDisplayedDraft({...here,constraints});
       setRequirements(deliveryRequirements(draft.current));keptNativePick.current=!!incoming.ownerPickedConvention;
     } else if(incoming.ownerPickedConvention){
       // Equal text is not identity: neither a changed source nor an unsaved local paragraph wins silently.
@@ -575,6 +612,14 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     }
     setSubmission(value.draft?.submission || null);
     if (value.draft?.submission) clearSubmittedDraft(value.draft.submission);
+    // Trust the existing native read only for the actual retained selection,
+    // not the implicit sole-copy display or different locally retained text.
+    const savedCheckout=incoming.checkoutId;
+    setModelWorkSave(value.executionAuthorized===false&&value.commandsAuthorized===false&&value.draftRecoveryRequired===false&&
+      incoming.projectId===projectId&&copyIdentity(savedCheckout)&&typeof incoming.goal==='string'&&!!incoming.goal.trim()&&
+      incoming.submission==null&&incoming.ownerPickedConvention==null&&(!incoming.copyRequestId||incoming.copyStatus==='ready')&&
+      modelSettingsWorkCopy(value.checkouts,projectId,savedCheckout)&&sameDraft(draft.current,incoming)?
+      {viewHandle:value.viewHandle,window:ownerWindow(),checkoutId:savedCheckout,revision:draftRevision.current}:null);
     if(staticVisit){
       const target=staticVisit.source, available=rows(value.checkouts), copy=available[0];
       const chosen=staticVisit.chosenSavedFile;
@@ -638,15 +683,23 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
         setLocalFilesDraftNotice({viewHandle:value.viewHandle,window:ownerWindow()});
     }
     },staticVisit?failure=>staticVisit.finish(failureText(failure)):undefined,scopedOwner);
+    if(modelReturn)return reading.then(value=>{modelReturn.finish(!!value);return value;});
     return openLocalFiles?reading.finally(()=>latest.current.onLocalFilesIntentHandled?.(openLocalFiles)):reading;
   };
   const readRef = useRef(read); readRef.current = read;
   const retain = (next: DevelopmentDraft) => {
     firstFilesPreparation.current=null;
     if(next.constraints!==draft.current.constraints||next.checkoutId!==draft.current.checkoutId)keptNativePick.current=false;
-    touched.current = true; draft.current = next;
-    const original = handle.current, sequence = generation.current;
-    if (original) void latest.current.run('projects.development.draft', { viewHandle: original, ...next }).catch(failure => {
+    touched.current = true; stageDisplayedDraft(next);
+    const original = handle.current, sequence = generation.current, window=ownerWindow(), revision=draftRevision.current;
+    if (original) void latest.current.run('projects.development.draft', { viewHandle: original, ...next }).then(value=>{
+      if(!alive.current||!latest.current.active||document.hidden||sequence!==generation.current||handle.current!==original||
+         ownerWindow()!==window||draftRevision.current!==revision||bridge.getState().state.projectId!==projectId||
+         bridge.getState().state.filePath!==null)return;
+      if(value?.saved===true&&value.projectId===projectId&&value.removedSelectedSource===false&&copyIdentity(value.savedModelWorkCheckoutId)&&
+         value.savedModelWorkCheckoutId===next.checkoutId)
+        setModelWorkSave({viewHandle:original,window,checkoutId:value.savedModelWorkCheckoutId,revision});
+    }).catch(failure => {
       if (alive.current && sequence === generation.current && handle.current === original) setError(`草稿未保存：${failureText(failure)}`);
     });
   };
@@ -677,7 +730,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if (value.deliveryContract?.format !== 'pocketworld.owner-work-contract.v1' || value.deliveryContract.revision !== 1 || value.deliveryContract.goal !== value.goal)
       throw new Error('项目交付约定没有完整载入，请重新核对。');
     if (draftBuild) { setReview(value); return; }
-    draft.current = { goal: value.goal, checkoutId: value.checkoutId, ...deliveryRequirements(value.deliveryContract) };
+    stageDisplayedDraft({ goal: value.goal, checkoutId: value.checkoutId, ...deliveryRequirements(value.deliveryContract) });
     setGoal(draft.current.goal); setRequirements(deliveryRequirements(value.deliveryContract)); setReview(value);
   };
   const dismiss = () => {
@@ -696,7 +749,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const retire = () => {
       generation.current++; entered.current = null; buildAfterSave.current=null; sourceRecoveryReturn.current=null; firstFilesPreparation.current=null;
       const original = handle.current; handle.current = ''; sourceAttempt.current = ''; readAttempt.current = ''; activeReview.current = null; previewOpen.current=false; retainedOriginalOpen.current=false; activeRetainedVisit.current=null;
-      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); setLocalFilesDraftNotice(null); }
+      if (alive.current) { closeHostDiff(); setHostEditor(null); setHostFiles(null); setHostOrigin(null); setView(null); setReview(null); setBuildPreview(null); setRetainedRead(null); setSource(null); setBusy(false); setFileWindow(null); setImportEditorNotice(''); setLocalFilesDraftNotice(null); setModelWorkSave(null); }
       const closeHere=original===staticFilesPage.current?bridge.command:latest.current.run;
       staticFilesPage.current='';
       if (original) void closeHere('projects.development.close', { viewHandle: original }).catch(() => {});
@@ -783,12 +836,13 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const pending = unresolved(submission), disabled = !active || busy || pending || sourceConflict || !!review || filesOpen || !view || view.draftRecoveryRequired === true;
   const displayedSavedDraft = (displayed:DevelopmentDraft) => !touched.current && !view?.draft?.checkoutId
     ? { ...displayed, checkoutId: '' } : displayed; // A sole default copy is not a saved selection.
-  const verifyDeparture = (displayed:DevelopmentDraft, expected:DevelopmentDraft, open:()=>void) =>
-    invoke('projects.development.draft', { viewHandle: handle.current, ...expected, verifySavedForTools: true }, result => {
+  const verifyDeparture = (displayed:DevelopmentDraft, expected:DevelopmentDraft, open:(result:Data)=>void, forModelSettings=false) =>
+    invoke('projects.development.draft', { viewHandle: handle.current, ...expected, verifySavedForTools: true,
+      ...(forModelSettings?{returnPurpose:modelSettingsWorkDraftPurpose}:{}) }, result => {
       if (result.projectId !== projectId || result.checkoutId !== expected.checkoutId ||
           result.draftVerifiedForTools !== true || result.taskStarted !== false || !sameDraft(draft.current, displayed))
         throw new Error('没有核对到本页同一份草稿，文字仍留在这里。');
-      open();
+      open(result);
     });
   const preserveSelectionBeforeDeparture = async (displayed:DevelopmentDraft,open:()=>void) => {
     // An explicit departure from the displayed sole copy retains that exact
@@ -836,7 +890,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     const remote=view.draft,here=draft.current,scope=String(remote.checkoutId||'');
     if(!scope||here.checkoutId!==scope){setError('这两份输入属于不同副本，没有替换。请复制需保留的本页文字后，退出并打开原项目副本。');return;}
     if(useProject){
-      const next={...here,constraints:deliveryRequirements(remote).constraints};draft.current=next;
+      const next={...here,constraints:deliveryRequirements(remote).constraints};stageDisplayedDraft(next);
       setRequirements(deliveryRequirements(next));keptNativePick.current=true;setSourceConflict(false);return;
     }
     void invoke('projects.development.draft',{viewHandle:handle.current,...here,dropSelectedSource:true},value=>{
@@ -993,12 +1047,29 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     // different editor value or turn a displayed sole copy into a selection.
     void verifyDeparture(displayed,displayedSavedDraft(displayed),onConnectModel);
   };
+  const currentModelWorkSave=()=>modelWorkSave&&modelWorkSave.revision===draftRevision.current&&
+    modelWorkSave.viewHandle===handle.current&&modelWorkSave.viewHandle===view?.viewHandle&&modelWorkSave.window===ownerWindow()&&
+    modelWorkSave.checkoutId===checkout&&draft.current.checkoutId===checkout;
+  const canVisitWorkModelSettings=!!onOpenWorkModelSettings&&view?.model?.configured===true&&!disabled&&!modelSettingsReturn&&
+    ['projects.development.draft','connections.enter','connections.leave'].every(can)&&!!goal.trim()&&!submission&&currentModelWorkSave()&&
+    !returnTarget&&!buildReturn&&!importedEditor&&!localFilesIntent&&!terminalSavedFile&&!pythonSetupReturn&&!dependencyBuildReturn&&
+    !viteToolsReturn&&!viteResultLookup&&!retainedOriginalVisit&&!preview&&!hostDiff&&!copyUnconfirmed;
+  const visitWorkModelSettings=()=>{
+    if(!canVisitWorkModelSettings||!currentModelWorkSave()||entered.current||!onOpenWorkModelSettings||document.hidden)return;
+    const displayed={...draft.current}, revision=draftRevision.current;
+    void verifyDeparture(displayed,displayed,result=>{
+      const proof=modelSettingsWorkDraft(result.modelSettingsWorkDraft);
+      if(draftRevision.current!==revision||!currentModelWorkSave()||!proof||proof.projectId!==projectId||
+         proof.checkoutId!==displayed.checkoutId||!onOpenWorkModelSettings(proof))
+        throw new Error('未核对到原工作草稿，没有离开这份项目。');
+    },true);
+  };
   const selectBuildCopy=()=>{
     if(!differentBuildCopy||unfinishedInput||disabled||!can('projects.development.draft'))return;
     const next={...draft.current,checkoutId:buildCheckout};
     void invoke('projects.development.draft',{viewHandle:handle.current,...next},value=>{
       if(value.saved!==true||value.projectId!==projectId)throw Error('原副本选择未确认，未开始工作。');
-      touched.current=true;draft.current=next;setCheckout(next.checkoutId);
+      touched.current=true;stageDisplayedDraft(next);setCheckout(next.checkoutId);
       setView(page=>keepOnlySelectedRetainedLink(page,next.checkoutId));
       setHostOrigin(null);setHostFiles(null);sourceAttempt.current='';setSource(null);
     });
@@ -1214,6 +1285,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
   const originalImportForSave=fileWindow?.originalImport;
   const offlinePageEditor=originalImportForSave??fileWindow?.staticFilesVisit?.source;
   const preferOfflinePagePreviewAfterSave=offlinePageEditor?.exactSavedPageStarter===true&&offlinePageEditor.checkoutId===fileCheckout&&
+    sameImportedEditor(offlinePageEditor,originalSavedStaticFolder(projectId));
+  const originalOfflinePageEditorCurrent=()=>offlinePageEditor?.exactSavedPageStarter===true&&offlinePageEditor.checkoutId===fileCheckout&&
+    alive.current&&latest.current.active&&!!view&&handle.current===view.viewHandle&&currentFileWindow.current===fileWindow&&
     sameImportedEditor(offlinePageEditor,originalSavedStaticFolder(projectId));
   const directImportedSave=!source&&!!originalImportForSave&&originalImportForSave.sourceKind!=='task_source_package'&&
     originalImportForSave.checkoutId===checkout&&selectedCopy?.draftWorkingCopy===false&&view?.executionAuthorized===false&&view.commandsAuthorized===false&&
@@ -1658,6 +1732,9 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
     if(!savedWebLink?.current?.({kind:'checkout',projectId,checkoutId:selectedCopy.checkoutId}))
       setError('原副本的网页版本区暂不可用，没有读取其他副本。');
   };
+  if(modelSettingsReturn&&!view)return <section hidden={!active} className="pw-project-development pw-settings-section" aria-label="核对原工作草稿">
+    <p role="status">正在核对原工作草稿…</p>
+  </section>;
   if(returnTarget&&returned.current!==returnTarget.handle)return <section hidden={!active} className="pw-project-development pw-settings-section" aria-label="核对原项目草稿">
     <p role="status">{error||'正在核对刚才写入的原项目草稿…'}</p>
     {error&&<Button variant="ghost" onClick={onDismissReturn}>收起定位，返回项目概览</Button>}
@@ -1858,6 +1935,7 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
           onChange={value => { if (value.length <= 4000) { setRequirements(previous => ({ ...previous, completionCriteria: value })); retain({ ...draft.current, completionCriteria: value }); } }} />
       </AccordionItem></Accordion>
       <div className="pw-form-actions"><Button disabled={disabled || !goal.trim() || !checkout || !source || view.model?.configured !== true} onClick={() => void invoke('projects.development.review', { viewHandle: handle.current, checkoutId: checkout, goal, ...requirements }, acceptReview)}>核对并开始</Button>
+        {canVisitWorkModelSettings&&<Button variant="ghost" size="small" onClick={visitWorkModelSettings}>账号与模型</Button>}
         <Button variant="ghost" disabled={busy || pending || !!review || filesOpen} onClick={() => void read()}>重新读取项目条件</Button>
         {checkout && !source && <Button variant="ghost" disabled={disabled} onClick={() => { sourceAttempt.current = ''; setView(previous => previous ? { ...previous } : previous); }}>重新读取副本版本</Button>}
       </div>
@@ -1906,7 +1984,8 @@ export function ProjectDevelopmentWorkspace({ returnTarget, onDismissReturn, bui
       reopenedProjectDirectory={fileWindow.reopenedFiles===true || fileWindow.originalImport?.openDirectory===true && fileWindow.originalImport.exactPhoneSource===true}
       resumeSaved={fileWindow.resumeSaved} firstEntry={fileWindow.firstEntry} buildResume={fileWindow.buildResume} pythonResume={fileWindow.pythonResume}
       pythonSetupResume={fileWindow.pythonSetupResume} originalDirectoryOpening={fileWindow.staticFilesVisit}
-      preferOfflinePagePreviewAfterSave={preferOfflinePagePreviewAfterSave} onClose={closeFiles}
+      preferOfflinePagePreviewAfterSave={preferOfflinePagePreviewAfterSave}
+      originalOfflinePageEditorCurrent={preferOfflinePagePreviewAfterSave?originalOfflinePageEditorCurrent:undefined} onClose={closeFiles}
       checkpointArrival={fileWindow.checkpointArrival} checkpointHandoff={checkpointFilesHandoff()}
       onPreparePythonTools={fileWindow.checkpointArrival?.side!=='sibling'&&pythonToolSetup?prepareSavedPythonTools:undefined}
       preparePythonToolsLabel={pythonRepair?'查看手机工具修复':undefined}

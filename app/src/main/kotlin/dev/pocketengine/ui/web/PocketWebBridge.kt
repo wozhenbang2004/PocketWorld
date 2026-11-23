@@ -676,6 +676,7 @@ internal class PocketWebBridge(
         reviews.clear()
         taskPackagePreparation.clear()
         taskHistory.clear(); workSearch.clear()
+        projectDevelopment.retireModelWorkReturn()
         phoneComposer.clearReviews()
         voiceInput.clear()
         modelReviews.clear(); automation.clear(); mcpImports.clear(); executionReviews.clear(); sourceReader.clear(); messageQuotes.clear(); inference.clear(); trajectory.clear(); skillDrafts.clear(); memoryDrafts.clear(); knowledge.clear(); personal.clear(); memoryHistory.clear(); conversationOrganization.clear(); taskCapabilities.clear(); deviceTaskScope.clear(); phoneControl.clear(); projectRuntime.clear(); projectLivePreview?.clear(); modelDiagnostics.clear(); attachmentPages.clear(); remoteTasks.clear(); teamEvidence.clear(); experience.clear(); routeReferences.clear(); connectionPages.clear(); teamPages.clear(); groupPages.clear(); mediaPages.clear(); realtimePages.clear(); proxyPages.clear(); planPages.clear(); commitmentPages.clear(); tokenBudgets.clear(); profilePages.clear(); projectWorkPages.clear(); devicePages.clear(); pluginPages.clear(); localPages.clear(); projectDevelopment.clear(); butlerPreparations.clear(); setupPages.clear(); accountWorkspace.close(); composerModels.close(); aiSources.close(); conversationModels.close(); controller.webChannels.clear(); controller.webSkills.clear()
@@ -1467,7 +1468,8 @@ internal class PocketWebBridge(
             if (action in PocketWebProjectDevelopment.COMMANDS) {
                 val previous=if (action=="projects.development.localBuild.review" && args.has("dependencyComparisonHandle"))
                     takeNodeDependencyComparison(args) else null
-                projectDevelopment.dispatch(action, args, previous) { result, error -> complete(id, result, error, retainValue = action !in PocketWebCheckoutFiles.COMMANDS && action !in PocketWebProjectDevelopment.LOCK_COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
+                val modelWorkDeparture=action=="projects.development.draft" && args.opt("returnPurpose")==PocketWebProjectDevelopment.MODEL_SETTINGS_WORK_DRAFT
+                projectDevelopment.dispatch(action, args, previous) { result, error -> complete(id, result, error, retainValue = !modelWorkDeparture && action !in PocketWebCheckoutFiles.COMMANDS && action !in PocketWebProjectDevelopment.LOCK_COMMANDS && action !in setOf("projects.development.readHostDiff", "projects.development.read", "projects.development.reviewDraftBuild", "projects.development.localBuild.review", "projects.development.localDependencies.confirm", "projects.development.review", "projects.development.start", "projects.development.query")); publishState() }; return
             }
             if (action in PocketWebButlerPreparations.COMMANDS) {
                 butlerPreparations.dispatch(action, args, section == null && taskViewId == null) { result, error -> complete(id, result, error, "outcome_unknown", retainValue=action !in setOf("butler.preparation.project.savedRevisions","butler.preparation.project.followup") && !(action=="butler.preparation.project.review" && args.has("ownerRevision"))); publishState() }; return
@@ -4982,6 +4984,7 @@ internal class PocketWebBridge(
     }
     private fun enterConnection(next: String) {
         leaveTask(); leaveConnection(); reviews.clear(); section = next
+        projectDevelopment.modelSettingsSectionEntered(next)
         // Reuse the original owner entry after a task sheet; no previous review survives it.
         controller.prepareConnectionEntry()
         if (next == "memory") controller.enterOwnerDomain("memoryReview") else if (next in ownerDomains) controller.enterOwnerDomain(next) else controller.refresh()

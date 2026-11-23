@@ -41,10 +41,19 @@ internal class PocketWebProjectDevelopment(
 ) {
     private data class ReturnToDraft(val handle:String,val project:String,val checkout:String,val draftDigest:String,val until:Long)
     private data class RetainedCopyLink(val checkout:String,val sealedIdentity:String)
-    private class Page(val handle: String, val project: String, val window: PocketWebWindowTicket, val generation: Long, val requested:ReturnToDraft?=null) {
+    private class ModelWorkReturn(val issuer:Any,val handle:String,val project:String,val checkout:String,
+        val requests:Triple<Int,Int,Int>,val until:Long) {
+        var enteredModels=false // Access only under the original owner-draft monitor.
+        var taken=false
+        fun receipt()=JSONObject().put("purpose",MODEL_SETTINGS_WORK_DRAFT).put("handle",handle)
+            .put("projectId",project).put("checkoutId",checkout)
+    }
+    private class Page(val handle: String, val project: String, val window: PocketWebWindowTicket, val generation: Long,
+        val requested:ReturnToDraft?=null,@Volatile var modelReturn:ModelWorkReturn?=null) {
         // Set only when this specific page actually reads the native draft. Guarded by the shared draft monitor.
         var shownSeal:String?=null
         @Volatile var shownSoleCheckout:String?=null
+        @Volatile var shownModelCheckouts:Set<String> = emptySet()
         @Volatile var retainedCopy:RetainedCopyLink?=null
     }
     private data class Review(val handle: String, val page: Page, val input: String, val picked:ProjectConventionDraft.Bound, val modelRevision: Long, val expires: Long, val heldBuildDraftDigest:String?=null)
@@ -73,6 +82,9 @@ internal class PocketWebProjectDevelopment(
         // Multiple Activities must not overwrite each other's pending original
         // input references with an older presentation snapshot.
         private val ownerDrafts = linkedMapOf<String, JSONObject>()
+        const val MODEL_SETTINGS_WORK_DRAFT = "model_settings_work_draft"
+        // One temporary owner route, no text, digest, durable receipt or review grant.
+        @Volatile private var modelWorkReturn: ModelWorkReturn? = null
         private val deliveryFields = arrayOf("constraints", "deliverable", "completionCriteria")
         private const val LOCAL_BUILD_REVIEW = "projects.development.localBuild.review"
         private const val LOCAL_BUILD_CONFIRM = "projects.development.localBuild.confirm"
@@ -91,7 +103,56 @@ internal class PocketWebProjectDevelopment(
     }
     // Only a transient comparison guard for the already-authorized ordinary project reader. No Book, body or grant.
     @Volatile private var stagedReturn: ReturnToDraft? = null
-    fun invalidateDraftReturn() { synchronized(drafts){ stagedReturn=null } }
+    private val modelReturnIssuer=Any()
+    fun retireModelWorkReturn(){
+        if(modelWorkReturn?.issuer!==modelReturnIssuer)return
+        synchronized(drafts){ if(modelWorkReturn?.issuer===modelReturnIssuer)modelWorkReturn=null }
+    }
+    fun invalidateDraftReturn() { synchronized(drafts){
+        stagedReturn=null
+        if(modelWorkReturn?.issuer===modelReturnIssuer)modelWorkReturn=null
+    } }
+    private fun modelWorkRequests()=controller.state.let {
+        Triple(it.requestedProjectRevision,it.requestedTaskRevision,it.requestedConnectionRevision)
+    }
+    private fun modelWorkOwner(project:String)=controller.state.let {
+        it.projectId==project && it.projects.count { row->row.id==project }==1 &&
+            it.filePath==null && !it.fileLoading && !it.fileSaving && !it.chatAttachmentPickerOpen &&
+            controller.conversationReader==null && controller.queuedInputsPage==null &&
+            !controller.attachmentOutcomes.state.open
+    }
+    private fun unstartedModelWorkDraft(saved:JSONObject?,project:String,checkout:String)=
+        saved!=null && checkout.isNotBlank() && saved.opt("projectId")==project && saved.opt("checkoutId")==checkout &&
+            saved.optString("goal").isNotBlank() && !saved.has("submission") && !saved.has(ProjectConventionDraft.KEY) &&
+            (!saved.has("copyRequestId") || saved.opt("copyStatus")=="ready")
+    private fun validModelWorkReturn(held:ModelWorkReturn)=synchronized(drafts){
+        modelWorkReturn===held && held.issuer===modelReturnIssuer && SystemClock.elapsedRealtime()<held.until &&
+            controller.webPrivateOwnerVisible() && modelWorkOwner(held.project) && modelWorkRequests()==held.requests &&
+            restoreFailure==null && unstartedModelWorkDraft(drafts[held.project],held.project,held.checkout)
+    }
+    fun modelSettingsSectionEntered(section:String) {
+        if(modelWorkReturn?.issuer!==modelReturnIssuer)return
+        synchronized(drafts){
+            val held=modelWorkReturn?.takeIf { it.issuer===modelReturnIssuer } ?: return
+            if(!validModelWorkReturn(held)||held.taken||section !in setOf("models","accounts","proxy")||
+                !held.enteredModels&&section!="models")modelWorkReturn=null
+            else held.enteredModels=true
+        }
+    }
+    private fun takeModelWorkReturn(project:String,handle:String):ModelWorkReturn=synchronized(drafts){
+        val held=modelWorkReturn
+        check(held!=null && held.project==project && held.handle==handle && held.enteredModels &&
+            !held.taken && validModelWorkReturn(held)) { "原工作草稿尚未核对，没有打开其他草稿。" }
+        held.taken=true
+        held
+    }
+    private fun modelWorkCopies(checkouts:JSONArray,project:String)=
+        (0 until checkouts.length()).map(checkouts::getJSONObject).filter { it.opt("projectId")==project }
+            .groupBy { it.optString("checkoutId") }.filter { (checkout, matches) ->
+                checkout.isNotBlank() && matches.singleOrNull()?.let {
+                    it.opt("draftWorkingCopy")==false && it.opt("taskPackageSource")==false && it.opt("hostSource")==false
+                }==true
+            }.keys.toSet()
     private fun requireReturn(project:String,handle:String):ReturnToDraft = synchronized(drafts){
         val held=stagedReturn
         check(held!=null && held.project==project && held.handle==handle && SystemClock.elapsedRealtime()<held.until &&
@@ -153,13 +214,20 @@ internal class PocketWebProjectDevelopment(
             }?.key
             check(disposable != null) { "有 40 个项目保留输入或未决准备，请先核对已有请求；没有丢弃草稿或未决记录" }
             drafts.remove(disposable) // Only presentation; original tasks and files stay in their stores.
+            if(modelWorkReturn?.project==disposable)modelWorkReturn=null
         }
-        val value = draft(project); change(value); drafts[project] = copy(value)
+        val value = draft(project); change(value)
+        // Even a write back to the same words retires this visit, across Activities.
+        if(modelWorkReturn?.project==project)modelWorkReturn=null
+        drafts[project] = copy(value)
         val editor = presentation.edit().putString("drafts", savePresentation().toString())
         if (durable) check(editor.commit()) { "原请求引用没有确认保存，没有开始执行；请核对本机存储空间" } else editor.apply()
     }
     private fun shownDraft(original:Page):JSONObject = synchronized(drafts){
         val value=draft(original.project)
+        original.modelReturn?.let { guard ->
+            check(guard.taken && validModelWorkReturn(guard)) { "原工作草稿已变化，没有读取其他草稿。" }
+        }
         original.requested?.let { guard ->
             check(requireReturn(original.project,guard.handle)===guard && guard.checkout==value.optString("checkoutId")) { "原项目草稿定位已失效" }
             stagedReturn=null // Successful native snapshot consumes the hint. No second, less restricted read on failure.
@@ -327,6 +395,10 @@ internal class PocketWebProjectDevelopment(
     private fun metadata(original: Page): JSONObject {
         val actual = controller.projectDevelopmentForWeb().inspectForOwner(original.project)
         val checkouts = actual.getJSONArray("checkouts")
+        original.shownModelCheckouts=modelWorkCopies(checkouts,original.project)
+        original.modelReturn?.let { held ->
+            check(held.checkout in original.shownModelCheckouts) { "原私人副本暂不可用，没有打开其他草稿。" }
+        }
         original.shownSoleCheckout = if (checkouts.length() == 1) checkouts.getJSONObject(0).optString("checkoutId").ifEmpty { null } else null
         if (checkouts.length() == 0) {
             // No guessed absence from the catalog snapshot; only the phone import's original durable locator can prove this.
@@ -337,7 +409,8 @@ internal class PocketWebProjectDevelopment(
         // Unavailable is distinct from a positively observed unconfigured default.
         val selectedModel = try { model() } catch (_: Exception) { null }
         val draft=shownDraft(original)
-        val selected=draft.optString("checkoutId").ifEmpty { original.shownSoleCheckout.orEmpty() }
+        val savedCheckout=draft.optString("checkoutId")
+        val selected=savedCheckout.ifEmpty { original.shownSoleCheckout.orEmpty() }
         if(selected.isNotEmpty()){
             val row=(0 until checkouts.length()).map(checkouts::getJSONObject).singleOrNull { it.opt("checkoutId")==selected }
             if(row?.opt("draftWorkingCopy")==true&&observeRetainedLink(original,selected,allowSole=true))
@@ -347,7 +420,10 @@ internal class PocketWebProjectDevelopment(
             .put("model", selectedModel?.value() ?: JSONObject().put("availability", "unavailable"))
             .putOpt("modelRevision", selectedModel?.revision())
             .put("draft", draft).put("commandsAuthorized", false)
-            .also { out -> original.requested?.let { out.put("openedDraftReturn",it.handle) } }
+            .also { out ->
+                original.requested?.let { out.put("openedDraftReturn",it.handle) }
+                original.modelReturn?.let { out.put("openedModelSettingsWorkDraft",it.receipt()) }
+            }
             .put("draftRecoveryRequired", restoreFailure != null).put("draftRecoveryMessage", restoreFailure ?: "")
     }
     private fun recordSubmission(original: JSONObject, result: JSONObject?, error: String?, viewer:Page): JSONObject {
@@ -391,12 +467,32 @@ internal class PocketWebProjectDevelopment(
             done(JSONObject().put("viewClosed", true).put("taskStopped", false), null); return
         }
         if (action == "projects.development.read") {
-            fields(args, "projectId", "draftReturnHandle"); val project = text(args, "projectId")
+            fields(args, "projectId", "draftReturnHandle", "returnPurpose"); val project = text(args, "projectId")
             check(ownerCurrent() && controller.webPrivateOwnerVisible() && controller.state.projectId == project &&
                 controller.state.projects.any { it.id == project }) { "请打开当前私人项目后再读取" }
-            val target=if(args.has("draftReturnHandle"))requireReturn(project,text(args,"draftReturnHandle")) else null
-            clear(); val original = Page(UUID.randomUUID().toString(), project, captureWindow(), generation,target); page = original
-            working(original, done) { metadata(original) }; return
+            val modelReturn=if(args.has("returnPurpose")){
+                require(args.opt("returnPurpose")==MODEL_SETTINGS_WORK_DRAFT)
+                takeModelWorkReturn(project,text(args,"draftReturnHandle",36))
+            }else null
+            val target=if(modelReturn==null&&args.has("draftReturnHandle"))requireReturn(project,text(args,"draftReturnHandle")) else null
+            clear(); val original = Page(UUID.randomUUID().toString(), project, captureWindow(), generation,target,modelReturn); page = original
+            if(modelReturn==null)working(original,done){ metadata(original) }
+            else {
+                fun retire(){
+                    if(modelWorkReturn===modelReturn)modelWorkReturn=null
+                    original.modelReturn=null
+                }
+                try {
+                    working(original,{ result,error->
+                        synchronized(drafts) {
+                            val valid=validModelWorkReturn(modelReturn)
+                            retire()
+                            if(valid)done(result,error) else done(null,"原工作草稿已变化，没有打开其他草稿。")
+                        }
+                    },extraCurrent={ validModelWorkReturn(modelReturn) }){ metadata(original) }
+                }catch(failure:Exception){synchronized(drafts){retire()};throw failure}
+            }
+            return
         }
         val original = selected(args)
         files.retireSourceCheckpointPin()
@@ -460,9 +556,11 @@ internal class PocketWebProjectDevelopment(
                 done(JSONObject().put("dismissed", true).put("taskStopped", false), null)
             }
             "projects.development.draft" -> {
-                fields(args, "viewHandle", "goal", "checkoutId", "dropSelectedSource", "verifySavedForTools", *deliveryFields)
+                fields(args, "viewHandle", "goal", "checkoutId", "dropSelectedSource", "verifySavedForTools", "returnPurpose", *deliveryFields)
                 require(!args.has("dropSelectedSource") || args.opt("dropSelectedSource")==true)
                 require(!args.has("verifySavedForTools") || args.opt("verifySavedForTools")==true && !args.has("dropSelectedSource"))
+                val forModels=args.has("returnPurpose")
+                require(!forModels || args.opt("returnPurpose")==MODEL_SETTINGS_WORK_DRAFT && args.opt("verifySavedForTools")==true)
                 val drop=args.opt("dropSelectedSource")==true
                 val goal = text(args, "goal", 12000, true); val checkout = text(args, "checkoutId", 80, true)
                 val retainedFields = copyDeliveryFields(args, JSONObject())
@@ -470,12 +568,24 @@ internal class PocketWebProjectDevelopment(
                 if (args.opt("verifySavedForTools") == true) {
                     check(review == null) { "请先返回原项目草稿" }
                     val shown = retainedFields.put("goal", goal).put("checkoutId", checkout)
-                    working(original, done) {
+                    val modelRequests=modelWorkRequests()
+                    fun modelDepartureCurrent()=!forModels || modelWorkOwner(original.project) && modelWorkRequests()==modelRequests &&
+                        restoreFailure==null && checkout in original.shownModelCheckouts && files.closedForOriginalDraftRead() &&
+                        directReview==null && dependencyReview==null && dependencyCopyReview==null
+                    var issued:ModelWorkReturn?=null
+                    val finished:(JSONObject?,String?)->Unit=if(!forModels)done else { result,error->
+                        if(result==null||error!=null)synchronized(drafts){ if(issued!=null&&modelWorkReturn===issued)modelWorkReturn=null }
+                        done(result,error)
+                    }
+                    working(original,finished,extraCurrent={ modelDepartureCurrent() && (issued?.let(::validModelWorkReturn) ?: true) }) {
                         synchronized(drafts) {
                             val saved = draft(original.project)
                             check(!pending(original.project) && saved.optString("projectId") == original.project &&
                                 sameDraft(saved, shown) && ProjectConventionDraft.bind(saved).seal == original.shownSeal) {
                                 "本页目标、要求或副本与已保存的原稿还没核对一致。文字仍在这里，没有离开、覆盖或提交。"
+                            }
+                            check(!forModels || unstartedModelWorkDraft(saved,original.project,checkout)) {
+                                "该草稿已有原工作或副本状态待处理，没有离开原项目。"
                             }
                             // Finish persisting the exact existing native draft. The verification path
                             // must never write caller text back or replay a previously submitted action.
@@ -483,24 +593,42 @@ internal class PocketWebProjectDevelopment(
                                 "尚未确认草稿已写入手机存储。请保留本页文字后再核对；没有打开工具准备。"
                             }
                             JSONObject().put("projectId", original.project).put("checkoutId", checkout)
-                                .put("draftVerifiedForTools", true).put("taskStarted", false)
+                                .put("draftVerifiedForTools", true).put("taskStarted", false).also { result->
+                                    if(forModels){
+                                        val held=ModelWorkReturn(modelReturnIssuer,UUID.randomUUID().toString(),original.project,
+                                            checkout,modelRequests,SystemClock.elapsedRealtime()+600_000L)
+                                        modelWorkReturn=held
+                                        issued=held
+                                        result.put("modelSettingsWorkDraft",held.receipt())
+                                    }
+                                }
                         }
                     }
                     return
                 }
-                editShownDraft(original,drop) { stored ->
-                    val selected = ProjectConventionDraft.present(stored)
-                    check(selected == null || selected.getString("checkoutId") == checkout ||
-                        retainedFields.getString("constraints") != stored.getString("constraints")) { "更换副本前请先移除这个副本的约定" }
-                    if(drop) {
-                        check(selected!=null && selected.getString("checkoutId")==checkout) { "所选来源已经变化，未覆盖原草稿。" }
-                        // Explicit conflict resolution replaces only the source field, not other pending owner edits.
-                        stored.put("constraints",retainedFields.getString("constraints")).remove(ProjectConventionDraft.KEY)
-                    } else copyDeliveryFields(retainedFields, stored.put("goal", goal).put("checkoutId", checkout))
-                    if (ProjectConventionDraft.present(stored) == null) stored.remove(ProjectConventionDraft.KEY)
-                }; review = null; clearDirectReview()
+                val savedModelCheckout=synchronized(drafts) {
+                    editShownDraft(original,drop) { stored ->
+                        val selected = ProjectConventionDraft.present(stored)
+                        check(selected == null || selected.getString("checkoutId") == checkout ||
+                            retainedFields.getString("constraints") != stored.getString("constraints")) { "更换副本前请先移除这个副本的约定" }
+                        if(drop) {
+                            check(selected!=null && selected.getString("checkoutId")==checkout) { "所选来源已经变化，未覆盖原草稿。" }
+                            // Explicit conflict resolution replaces only the source field, not other pending owner edits.
+                            stored.put("constraints",retainedFields.getString("constraints")).remove(ProjectConventionDraft.KEY)
+                        } else copyDeliveryFields(retainedFields, stored.put("goal", goal).put("checkoutId", checkout))
+                        if (ProjectConventionDraft.present(stored) == null) stored.remove(ProjectConventionDraft.KEY)
+                    }
+                    // A hint for this exact existing save ACK, not a departure receipt.
+                    // The deliberate departure still checks/commits all the already-saved fields.
+                    checkout.takeIf { !drop && it in original.shownModelCheckouts && current(original) &&
+                        modelWorkOwner(original.project) && files.closedForOriginalDraftRead() && review==null &&
+                        directReview==null && dependencyReview==null && dependencyCopyReview==null &&
+                        unstartedModelWorkDraft(drafts[original.project],original.project,it) }
+                }
+                review = null; clearDirectReview()
                 original.retainedCopy?.let { if(!shownCheckout(original,it.checkout,allowSole=true))original.retainedCopy=null }
-                done(JSONObject().put("saved", true).put("projectId", original.project).put("removedSelectedSource",drop), null)
+                done(JSONObject().put("saved", true).put("projectId", original.project).put("removedSelectedSource",drop)
+                    .putOpt("savedModelWorkCheckoutId",savedModelCheckout), null)
             }
             "projects.development.readHostDiff" -> {
                 fields(args, "viewHandle", "checkoutId", "evidenceDigest", "path", "originalSha256", "phoneSha256")
@@ -587,7 +715,15 @@ internal class PocketWebProjectDevelopment(
                     if(reservedHere && sameRequest && observed.opt("found")==true && observed.opt("partial")==false &&
                         observed.opt("projectId")==original.project && observed.opt("requestId")==request && copy!=null &&
                         copy.opt("ownerDevelopmentRequestId")==request && copy.opt("projectId")==original.project &&
-                        copy.opt("id")==observed.opt("checkoutId")) observed.put("freshPrepareViewHandle",original.handle)
+                        copy.opt("id")==observed.opt("checkoutId")) {
+                        observed.put("freshPrepareViewHandle",original.handle)
+                        // Exact initial owner preparation writes only this registration shape.
+                        // A reused/archive/host/import offer cannot extend this page's choices.
+                        val checkout=copy.optString("id")
+                        if(current(original) && checkout.matches(Regex("[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}")) &&
+                            copy.keys().asSequence().toSet()==setOf("id","projectId","name","files","createdAt","ownerDevelopmentRequestId"))
+                            original.shownModelCheckouts=original.shownModelCheckouts+checkout
+                    }
                     observed
                 }
             }
