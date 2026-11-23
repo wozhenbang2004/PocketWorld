@@ -75,7 +75,7 @@ public final class NativeOriginalFileSession implements AutoCloseable {
                 if(!sameHistoryScratch(created,Os.fstat(writer),1,0)||!sameHistoryScratch(created,Os.fstat(readOnly),1,0)||
                         !sameHistoryScratch(created,Os.lstat(scratch),1,0))
                     throw new SecurityException("原 PDF 查看副本已变化");
-                Os.unlink(scratch);unlinked=true;
+                Os.remove(scratch);unlinked=true;
                 // The two held descriptors must now both be nameless; never write to a linked object.
                 if(!sameHistoryScratch(created,Os.fstat(writer),0,0)||!sameHistoryScratch(created,Os.fstat(readOnly),0,0))
                     throw new SecurityException("原 PDF 查看副本未分离");
@@ -90,7 +90,7 @@ public final class NativeOriginalFileSession implements AutoCloseable {
                 try{
                     // Retire only our still-empty original name, never a replacement at it.
                     if(!unlinked&&created!=null){
-                        try{if(sameHistoryScratch(created,Os.lstat(scratch),1,0))Os.unlink(scratch);}
+                        try{if(sameHistoryScratch(created,Os.lstat(scratch),1,0))Os.remove(scratch);}
                         catch(ErrnoException missing){if(missing.errno!=OsConstants.ENOENT)throw missing;}
                     }
                 }finally{Os.close(writer);}
