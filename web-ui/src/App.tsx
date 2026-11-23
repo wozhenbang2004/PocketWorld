@@ -339,6 +339,22 @@ const deliveredSourceMessage=(rows:unknown,source:DeliveredFileSource)=>source.k
 type WorkRequestVisit={work:WorkIdentity;document:number;navigation:number;trigger:HTMLButtonElement;window?:number};
 type PhonePreparationReturn={target:ButlerPreparationTarget;pin:PhonePreparationSetupPin;owner:string};
 type TerminalSavedFileOrigin={position:CheckoutSavedPosition;navigation:number;current:(section:'local'|null)=>boolean};
+type FormalFileModelVisit={document:number;navigation:number;key:string;version:number;fileBinding:string;editRevision:number};
+function formalFileModelBinding(live:ReturnType<typeof bridge.getState>){
+ const owner=live.state,view=obj(live.view),read=obj(owner.fileObservation);
+ const key=fileWorkspaceKey(owner.projectId,owner.filePath),version=owner.fileVersion;
+ if(live.host?.ready!==true||view.taskId!==null||!Number.isSafeInteger(view.resumeRevision)||view.resumeRevision<0||
+    !key||!Number.isSafeInteger(version)||version<1||owner.fileReady!==true||owner.fileLoading!==false||
+    owner.fileSaving!==false||owner.fileError!==null||owner.conversationReader!==null||owner.queuedInputsPage!==null||
+    owner.attachmentWorkspace?.open!==false||owner.chatAttachmentPickerOpen!==false||owner.localSourceIntake?.window||owner.projectGitImport?.open||
+    asArray<Json>(owner.projects).filter(row=>row?.id===owner.projectId).length!==1||
+    read.projectId!==owner.projectId||read.path!==owner.filePath||read.version!==version||read.kind!=='text'||read.representation!=='text'||
+    typeof read.revisionId!=='string'||!read.revisionId||typeof read.sha256!=='string'||!/^[a-f0-9]{64}$/.test(read.sha256)||
+    !Number.isSafeInteger(owner.requestedProjectRevision)||!Number.isSafeInteger(owner.requestedConnectionRevision)||
+    !Number.isSafeInteger(owner.requestedTaskRevision))return;
+ return {key,version,fileBinding:JSON.stringify([read.revisionId,read.sha256,view.resumeRevision,
+  owner.requestedProjectRevision,owner.requestedConnectionRevision,owner.requestedTaskRevision])};
+}
 type PythonSetupSource={position:CheckoutSavedPosition;navigation:number;ownerCurrent:(section:'setup'|null,foregroundEpoch?:number)=>boolean;repair?:OwnerPythonRepairObservation};
 type ViteToolsSource={position:ProjectViteToolsPosition;navigation:number;ownerCurrent:(section:'setup'|null,foregroundEpoch?:number)=>boolean};
 type OriginalPhoneModelInput={conversationId:string;key:string;epoch:number;revision:number;phoneEpoch:number;phoneRevision:number;sourceEditTicket:number;resumeRevision:number;preferenceRevision:number;mode:'main_screen'|'background'};
@@ -348,7 +364,7 @@ type PlanSettingsOrigin={anchor:PlanSettingsAnchor;navigation:number;document:nu
 const samePlanSettingsRequests=(origin:PlanSettingsOrigin,{state}:ReturnType<typeof bridge.getState>)=>
  state.requestedConnectionRevision===origin.connection&&state.requestedExecutionPlanRevision===origin.planRequest&&
  state.requestedExecutionPlanId===origin.planNotice&&state.requestedTaskRevision===origin.taskRequest&&state.requestedProjectRevision===origin.projectRequest;
-type WorkspaceOrigin={route:string;label:string;planSettings?:PlanSettingsOrigin;localPhoneModel?:LocalPhoneModelVisit;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number;ordinaryDraftEpoch?:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
+type WorkspaceOrigin={route:string;label:string;formalFileModel?:FormalFileModelVisit;planSettings?:PlanSettingsOrigin;localPhoneModel?:LocalPhoneModelVisit;teamDraft?:TeamDraftVisit;chatWork?:ChatWorkReturn;savedHostPreparation?:true;reviewedSkill?:ReviewedSkillTarget;phonePlace?:PhonePlaceReturn;phonePreparation?:PhonePreparationReturn;phoneModelInput?:OriginalPhoneModelVisit;modelInput?:ModelSetupInput;firstHomeModel?:{navigation:number;draftRevision:number;inline?:true};originalChatModel?:{navigation:number;draftRevision:number;resumeRevision:number};projectModelInput?:ModelSetupInput;drawerChat?:{id:string;draftKey:string;documentEpoch:number;ordinaryDraftEpoch?:number};settingsDirectory?:SettingsDirectoryOrigin;goal?:string;projectId?:string;contextProjectId?:string;pairedDevicesProject?:true;terminalCheckout?:LocalTerminalCheckout;terminalSavedFile?:TerminalSavedFileOrigin;pythonSetupSource?:PythonSetupSource;viteToolsSource?:ViteToolsSource;task?:{id:string;layer:TaskLayer;expected?:{runId:string;epoch:number};fixedArchive?:{projectId:string;checkoutId:string};teamResult?:WorkTeamResultReturn;teamModelReturn?:{documentEpoch:number;conversation:string}};focus?:HTMLElement|null;focusKey?:string;modelPicker?:boolean;parent?:WorkspaceOrigin|null};
 type BackgroundPhoneDraftVisit={origin:WorkspaceOrigin;pin:PhonePlaceReturn;navigation:number;document:number;afterRevision:number;
  first:{generation:number;setupRevision:number}|null;seenAuthentication:boolean;retired:boolean};
 type FileDraft={text:string;baseline:string;version:number;dirty:boolean;submitted?:string};
@@ -2829,6 +2845,14 @@ export default function App(){
   },{keepOrigin:true,stillCurrent:current});
   return true;
  };
+ const formalModelDraftVersion=fileDraft&&fileDraft.submitted===undefined?fileDraft.version:null;
+ const formalFileModelCurrent=(visit:FormalFileModelVisit,live:ReturnType<typeof bridge.getState>)=>{
+  const formal=formalFileModelBinding(live);
+  return !document.hidden&&visit.document===bridge.getDocumentEpoch()&&!!formal&&formal.key===visit.key&&
+   formal.version===visit.version&&formal.fileBinding===visit.fileBinding&&currentFileKey===visit.key&&
+   projectSection==='files'&&fileMode==='edit'&&formalModelDraftVersion===visit.version&&
+   !fileAdoption.holdsDraft()&&(fileEditRevisions.current.get(visit.key)||0)===visit.editRevision;
+ };
  const returnFromSecondary=()=>{
   if(route==='profile'){returnFromProfile();return;}
   if(setupReturnPending.current){void navigate('setup',undefined,{keepOrigin:true});return;}
@@ -2840,6 +2864,24 @@ export default function App(){
   const origin=relatedOrigin.current;
   if(origin){
    if(returnFromPlanSettings(origin)||returnOriginalArchiveChat(origin))return;
+   if(route==='model-settings'&&origin.formalFileModel){
+    const visit=origin.formalFileModel,navigation=navigationWindow.current;
+    const sameVisit=()=>!document.hidden&&relatedOrigin.current===origin&&navigationWindow.current===navigation;
+    const sameFile=()=>{
+     const live=bridge.getState(),section=obj(live.view).section;
+     return sameVisit()&&navigation===visit.navigation&&(section===null||['models','accounts','proxy'].includes(section))&&
+      !!formalFileModelCurrent(visit,live);
+    };
+    const unavailable='暂无法核对原项目文件，没有打开其他文件。可从项目目录手动核对。';
+    if(!sameFile()){
+     void navigate('butler',()=>setLocalError(unavailable),{stillCurrent:sameVisit});return;
+    }
+    // Keep the already-mounted native file identity. Never select or reopen by name.
+    void navigate('projects',()=>{relatedOrigin.current=origin.parent||null;},{keepOrigin:true,stillCurrent:sameFile}).then(returned=>{
+     if(!returned&&sameVisit()&&!sameFile())setLocalError(unavailable);
+    });
+    return;
+   }
    if(route==='model-settings'&&origin.localPhoneModel?.navigation===navigationWindow.current){
     const visit=origin.localPhoneModel;
     const current=(live:ReturnType<typeof bridge.getState>,arrived:boolean)=>{
@@ -7175,6 +7217,23 @@ export default function App(){
   void navigate('settings',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent:current});
   return true;
  };
+ const openFormalFileModelSettings=()=>{
+  if(route!=='projects'||taskOpen||taskOpening||commandOpen||preparationTarget||
+     !['connections.enter','connections.leave'].every(can))return false;
+  const live=bridge.getState(),formal=formalFileModelBinding(live),navigation=navigationWindow.current,doc=bridge.getDocumentEpoch();
+  if(!formal||doc<1||obj(live.view).section!==null)return false;
+  const visit:FormalFileModelVisit={...formal,document:doc,navigation:navigation+1,editRevision:fileEditRevisions.current.get(formal.key)||0};
+  const stillCurrent=()=>{
+   const now=bridge.getState();
+   return navigationWindow.current===navigation&&openedTaskId.current===null&&obj(now.view).section===null&&
+    !!formalFileModelCurrent(visit,now);
+  };
+  if(!stillCurrent())return false;
+  // Carry metadata only, never the editor text or authority to reopen a file.
+  const origin:WorkspaceOrigin={route:'projects',label:'返回原文件',formalFileModel:visit,parent:relatedOrigin.current};
+  void navigate('model-settings',()=>{relatedOrigin.current=origin;},{keepOrigin:true,stillCurrent});
+  return true;
+ };
  const selectNavigation=useCallback((key:string)=>{
   setNavigationMoreOpen(false);setSearchReturn(false);
   if(key==='artifacts'){
@@ -7187,7 +7246,7 @@ export default function App(){
    void openRelatedWorkspace('tasks',captureNavigationOrigin());
   }else if((key==='projects'||key==='devices')&&openDrawerWorkspaceFromChat(key)){
    return;
-  }else if(key==='model-settings'&&openOriginalChatModelSettings(true)){
+  }else if(key==='model-settings'&&(openOriginalChatModelSettings(true)||openFormalFileModelSettings())){
    return;
   }else if(key==='remoteInbox'){
    void openNotifications(()=>{notificationMemory.current.attentionRequest=(notificationMemory.current.attentionRequest||0)+1});
@@ -7201,7 +7260,7 @@ export default function App(){
    else void openSetup();
   }
   else navigate(key);
- },[can,route,intent,taskOpen,taskOpening,preparationTarget,pickTeamForCurrentDraft,desktopNavigation,captureWorkspaceOrigin,captureNavigationOrigin,openDrawerWorkspaceFromChat,openNavigationBook,openRelatedWorkspace,openNotifications,openSetup,homePhoneSetupInput,openPlanSettings,openOriginalChatModelSettings,navigate]);
+ },[can,route,intent,taskOpen,taskOpening,preparationTarget,pickTeamForCurrentDraft,desktopNavigation,captureWorkspaceOrigin,captureNavigationOrigin,openDrawerWorkspaceFromChat,openNavigationBook,openRelatedWorkspace,openNotifications,openSetup,homePhoneSetupInput,openPlanSettings,openOriginalChatModelSettings,openFormalFileModelSettings,navigate]);
  const homeFilesOpening=useRef(false), homeWindowsFileNavigation=useRef(-1);
  const pairedWorkChoiceNavigation=useRef(-1);
  const homeDeviceInboxNavigation=useRef<{navigation:number;visit:HomeDeviceInboxVisit}|undefined>(undefined);
@@ -10364,6 +10423,7 @@ export default function App(){
     const openQueuedReceipt=m.role==='user'&&m.submission?.status==='queued'&&!!m.submission?.taskId&&can('queued.open');
     const verifiedQueueLabel=openQueuedReceipt&&delivery?.status==='queued';
     const savedTrace=!phoneResult&&!taskResult&&m.id&&Number(m.sourceRevision)>0?replyContext:null;
+    const workTraceCaption=route==='chat'&&intent==='chat'&&!phoneResult&&taskResult?.kind==='owner_work'&&!taskResult.noticeKind?'查看所属工作的执行记录':undefined;
     const memoryReceiptShortcut=route==='chat'&&intent==='chat'&&!taskOpen&&!taskOpening&&row.lastOfRole&&
       !phoneResult&&!taskResult&&!chatReport&&!m.originalHostFinal&&!m.hostGoalTaskId&&can('taskMemory.answer')&&
       snapshot?.view?.taskId===null&&!state.chatAttachmentPickerOpen&&ordinaryMessageWorkChat(snapshot,conversation,draftEpoch)&&
@@ -10524,11 +10584,11 @@ export default function App(){
           setMessageMenu(null);if(trigger)void openOriginalChatWork(m,olderProjectDraft.row,{action:'draft',label:olderProjectDraft.label,
            target:olderProjectDraft.target,draftId:olderProjectDraft.draftId},trigger);}}>{olderProjectDraft.label}</Button>}
         {m.role==='user'&&m.automaticLearningExcluded===true&&<p className="pw-muted">这条原话已排除自动记忆整理，后来开启也不会补提炼。它仍是对话原文；这不代表类似内容从未另行保存。{m.originalDefaultWritesBlocked===true&&' 原任务也不能更改六项默认偏好。'}</p>}
-        {m.role==='assistant'&&traceTaskId&&can('tasks.open')&&<Button variant="ghost" leadingIcon={IconTool} aria-label={savedTrace||taskResult&&!phoneResult?'查看这条回复的执行轨迹':phoneResult?'查看这份手机任务的当前进展':'查看所属工作的当前进展'} onClick={()=>{
+        {m.role==='assistant'&&traceTaskId&&can('tasks.open')&&<Button variant="ghost" leadingIcon={IconTool} aria-label={workTraceCaption??(savedTrace||taskResult&&!phoneResult?'查看这条回复的执行轨迹':phoneResult?'查看这份手机任务的当前进展':'查看所属工作的当前进展')} onClick={()=>{
          const article=Array.from(chatMessageList.current?.children||[]).find(node=>(node as HTMLElement).dataset.messageId===id);
          const trigger=article?.querySelector<HTMLButtonElement>('button[aria-label="消息操作与来源"]');
          setMessageMenu(null);if(savedTrace)openTurnNotes(savedTrace,'process',m,trigger);else openTask(traceTaskId,'process');
-        }}>{savedTrace?'这条回复的执行轨迹':taskResult&&!phoneResult?'执行轨迹':'所属工作当前进展'}</Button>}
+        }}>{workTraceCaption??(savedTrace?'这条回复的执行轨迹':taskResult&&!phoneResult?'执行轨迹':'所属工作当前进展')}</Button>}
         {reminderReply&&<Button variant="ghost" leadingIcon={IconClock} onClick={()=>{
           const current=bridge.getState(),resume=obj(current.view).resumeRevision;
           if(!Number.isSafeInteger(resume)||!m.id||!reminderReply.replyId)return;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import { Accordion, AccordionItem, Button, CheckboxField, SearchField, SettingsDialog, TextField } from './forms-library';
 import { bridge, type PocketSnapshot } from './bridge';
 import { deviceChoiceCode, materialPath, phoneTextOnly, routeDraft, routeTitle, routeUseSummary, scopeRows as rows, scopeSelection, type RouteDraft, type ScopeData as Data } from './device-task-scope';
+import { deviceOriginalManualPhonePreparation } from './devices-workspace';
 import { OriginalPhoneDispatchStatus } from './OriginalPhoneDispatchStatus';
 import { originalWindowsWorkspacePickerAt, validWindowsWorkspaceFilePath as validWorkspaceFilePath } from './OriginalWindowsTextRead';
 import { usePocketSnapshot } from './usePocketSnapshot';
@@ -467,8 +468,28 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const registerResultBack = useCallback((next: (() => boolean) | null) => { resultBack.current = next; }, []);
   const [discard, setDiscard] = useState<'close' | 'reload' | 'devices' | null>(null);
   const dirty = !!view && (JSON.stringify(drafts) !== initialDraft.current || removeUnavailable);
+  const manualTarget = !directed && !directedWorkspace ? directedManual : undefined;
+  const noManualRange = !!manualTarget && view?.humanInputOnly === true && !rows(view.options).length;
+  const originalManualConnection = () => {
+    if (!manualTarget || !onOpenDevices || document.hidden || !mounted.current) return false;
+    const live = bridge.getState(), native = record(live.view);
+    if (live.host?.ready !== true || bridge.getDocumentEpoch() < 1 || !native || native.section !== null || native.taskId !== taskId) return false;
+    const matches = rows(live.state.tasks).filter(row => row.id === taskId), task = matches[0];
+    if (matches.length !== 1 || !task || task.summaryOnly === true || task.status !== 'paused' ||
+        task.raw?.taskProjection !== 'detail_window' || task.raw.taskCoreReadLimited !== false ||
+        task.raw.contextAvailable === false || task.raw.contextWithdrawn === true || task.raw.sourceCurrentReadRequired === true) return false;
+    const original = deviceOriginalManualPhonePreparation(task);
+    return !!original && original.deadlineAt > Date.now() &&
+      (['deviceId', 'instanceId', 'certificateFingerprint'] as const).every(key => original.target[key] === manualTarget[key]);
+  };
   const requestExit = (next: 'close' | 'reload' | 'devices') => { if (working.current) return; if (dirty) setDiscard(next); else exit(next); };
-  const exit = (next: 'close' | 'reload' | 'devices') => { setDiscard(null); if (next === 'reload') doRead(); else { close(); if (next === 'devices') onOpenDevices?.(); } };
+  const exit = (next: 'close' | 'reload' | 'devices') => {
+    setDiscard(null);
+    if (next === 'devices' && manualTarget && (!view || noManualRange) && !originalManualConnection()) {
+      setError('原手控准备已变化或到期，没有打开其他设备。'); return;
+    }
+    if (next === 'reload') doRead(); else { close(); if (next === 'devices') onOpenDevices?.(); }
+  };
   const dismissReview = () => { const handle = reviewHandle.current; reviewHandle.current = ''; setReview(null); setAck(false); if (handle) void run('deviceTaskScope.dismissReview', { reviewHandle: handle }).catch(() => {}); };
   const close = () => {
     generation.current++; working.current = false; setBusy(false); setDiscard(null);
@@ -547,7 +568,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
     if (!view || unavailable.length && !removeUnavailable) return;
     try {
       const routes = scopeSelection(view, drafts);
-      if (firstDirectedScope && !routes.length) return;
+      if ((firstDirectedScope && !routes.length) || (manualTarget && view.humanInputOnly === true && routes.length !== 1)) return;
       void invoke('deviceTaskScope.review', { pageHandle: page.current, routes }, acceptReview);
     }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
@@ -567,6 +588,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const ownerNames=rows(view?.ownerDisplayNames);
   const peerIds = [...new Set(options.map(option => option.targetDeviceId))];
   const noFirstRange = firstDirectedScope && !peerIds.length;
+  const manualConnection = open && !busy && !review && (!view || noManualRange) && originalManualConnection();
   const savedWorkspace = view?.directWorkspace;
   const workspaceTarget = directedWorkspace && !directed && !directedManual && view?.taskId === taskId &&
     !!page.current && view.pageHandle === page.current && view.executionAuthorized === false &&
@@ -647,6 +669,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
   const workspaceFileRun = !!workspaceWork && workspaceWork.raw.ownerWindowsWorkspaceRead === true &&
     uuid(workspaceWork.raw.runId) && workspaceWork.raw.coordinatorEpoch === 1;
   const devicesLabel = openWindowsConnection ? '核对原电脑连接记录' : directedId ? '查看这份工作的原设备连接' : '管理设备与连接';
+  const manualConnectionLabel = '查看这部原手机的连接记录';
   const scopeReadNote = directedId ? '点击可向原设备核对范围，只用已有的连接。' : '点击可向已有连接的候选设备核对范围。';
   return <section className="pw-task-capabilities" aria-label="本任务的远端设备范围">
     {showDispatch && <OriginalPhoneDispatchStatus key={`${taskId}:${directed.deviceId}:${directed.instanceId}:${directed.certificateFingerprint}`} source={{taskId, ...directed}} canRead={canReadDispatch === true} onOpen={onOpenOriginal} registerResultBack={registerResultBack} />}
@@ -667,7 +690,8 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
         {busy && <p role="status">正在读取原设备范围回执…</p>}
         {error && <p role="alert">{error}</p>}
         {!review && !view && !busy && <><p>{notice || '核对允许的范围可读取已有连接的能力说明，不会发送目标或启动模型。'}</p><div className="pw-form-actions">
-          <Button onClick={read}>重新核对设备范围</Button>
+          {manualConnection && <Button onClick={() => requestExit('devices')}>{manualConnectionLabel}</Button>}
+          <Button variant={manualConnection ? 'ghost' : undefined} onClick={read}>重新核对设备范围</Button>
           {openWindowsConnection && <Button variant="ghost" onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
         </div></>}
         {view && !review && <>
@@ -684,7 +708,7 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
           {options.some(option => workspaceReadFacts(option, workspaceTarget)) && <p className="pw-field-hint">{workspaceNotice}</p>}
           <dl className="pw-facts"><div><dt>当前可分配</dt><dd>工具 {view.toolsAvailable} 次 · 模型 {view.modelsAvailable} 次</dd></div><div><dt>原任务最晚截止</dt><dd>{time(view.deadlineMaximum)}</dd></div></dl>
           <p>{view.humanInputOnly ? '每次对端操作同时占用一次本机派发额度；对端份额至少 2 次，最多分配当前总额的一半。每次刷新也占用调用。' : '发起设备操作本身还至少占用 1 次本机工具调用；不要把全部剩余额度分给对端。'}已执行和未知结果的占用不会因改范围退回。</p>
-          {unavailable.length > 0 && <><p role="alert">有 {unavailable.length} 项已保存范围当前未能读取。可能是离线、授权到期或资源变化，未替换成其他设备。</p><CheckboxField isSelected={removeUnavailable} isDisabled={busy} onChange={setRemoveUnavailable}>这次保存明确移除当前不可读取的旧选择（不会撤回已发生的操作）</CheckboxField></>}
+          {unavailable.length > 0 && <><p role="alert">有 {unavailable.length} 项已保存范围当前未能读取。可能是离线、授权到期或资源变化，未替换成其他设备。</p>{!noManualRange && <CheckboxField isSelected={removeUnavailable} isDisabled={busy} onChange={setRemoveUnavailable}>这次保存明确移除当前不可读取的旧选择（不会撤回已发生的操作）</CheckboxField>}</>}
           {peerIds.map(id => <section key={id}><h3>{groupName(id)}</h3><Accordion>
             {rows(view.options).filter(option => option.targetDeviceId === id).map(option => {
               const draft = drafts[option.optionId]; if (!draft) return null;
@@ -736,10 +760,11 @@ export function DeviceTaskScopeWorkspace({ taskId, peers = [], run, onBackChange
           {!quickBrowse && firstDirectedScope && !noFirstRange && !chosenRange && <p>先选择一个已核对的原设备范围，再审阅。</p>}
           <div className="pw-form-actions">
             {quickBrowse && <Button variant="ghost" disabled={busy} onClick={() => setManualScope(true)}>手动设置范围</Button>}
-            {!quickBrowse && !noFirstRange && <Button disabled={busy || unavailable.length > 0 && !removeUnavailable || firstDirectedScope && !chosenRange} onClick={prepare}>{firstDirectedScope ? '核对所选范围' : '核对这次范围修改'}</Button>}
+            {!quickBrowse && !noFirstRange && !noManualRange && <Button disabled={busy || unavailable.length > 0 && !removeUnavailable || (firstDirectedScope || !!manualTarget) && !chosenRange} onClick={prepare}>{firstDirectedScope ? '核对所选范围' : '核对这次范围修改'}</Button>}
             {noFirstRange && onOpenDevices && <Button disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
-            <Button variant={noFirstRange && !onOpenDevices ? 'secondary' : 'ghost'} disabled={busy} onClick={read}>重新核对设备范围</Button>
-            {!noFirstRange && onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
+            {manualConnection && <Button onClick={() => requestExit('devices')}>{manualConnectionLabel}</Button>}
+            <Button variant={(noFirstRange && !onOpenDevices) || (noManualRange && !manualConnection) ? 'secondary' : 'ghost'} disabled={busy} onClick={read}>重新核对设备范围</Button>
+            {!noFirstRange && !noManualRange && onOpenDevices && <Button variant="ghost" disabled={busy} onClick={() => requestExit('devices')}>{devicesLabel}</Button>}
           </div>
           {rows(view.pendingProjectImports).map(item => <div key={item.operationId || item.receiveOperationId}><p>原项目包等待独立导入确认</p><Button variant="secondary" disabled={busy} onClick={() => { void invoke('deviceTaskScope.reviewImport', { pageHandle: page.current, operationId: item.receiveOperationId || item.operationId }, acceptReview); }}>核对这份原项目包</Button></div>)}
         </>}
